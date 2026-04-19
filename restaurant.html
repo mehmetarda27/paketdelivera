@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Restoran Paneli - Delivera Express</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="theme-restaurant">
+  <div class="role-shell">
+    <aside class="role-sidebar">
+      <div class="brand-mark">Delivera Express</div>
+      <p class="eyebrow accent-coral">Restoran Workspace</p>
+      <h1>Platformlardan gelen siparisler otomatik iceri aksin, sistem Mersin'de direkt kuriyeye dussun.</h1>
+      <p class="sidebar-copy">
+        Bu ekran restoranin entegrasyon merkezi. Amac manuel paket girmek degil; API key ve siparis webhook akisini yonetmek.
+      </p>
+      <div class="sidebar-metric">
+        <span>Entegrasyon Durumu</span>
+        <strong id="restaurantSummary">Veriler yukleniyor...</strong>
+      </div>
+      <div class="panel-badge">Restaurant Portal</div>
+    </aside>
+
+    <main class="role-main">
+      <section class="topbar glass-panel">
+        <div>
+          <p class="eyebrow accent-coral">Order Ingestion</p>
+          <h2>Trendyol Go, GetirYemek, Yemeksepeti ve Migros Yemek siparislerini API ile otomatik al.</h2>
+        </div>
+        <form id="restaurantAccessForm" class="login-form">
+          <label>
+            Kullanici Adi
+            <input name="username" type="text" placeholder="burgerstation101">
+          </label>
+          <label>
+            Sifre
+            <input name="password" type="password" placeholder="Rest1234!">
+          </label>
+          <label>
+            Restoran ID
+            <input name="restaurantId" type="text" placeholder="rst_xxxxxxxx">
+          </label>
+          <label>
+            API Key
+            <input name="apiKey" type="password" placeholder="delv_...">
+          </label>
+          <button class="ghost-btn" type="submit">Restoran Girisi</button>
+        </form>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Restoran Kaydi</p>
+              <h3>Restoran ve Kanal Tanimla</h3>
+            </div>
+          </div>
+          <form id="restaurantForm" class="form-grid">
+            <label>
+              Restoran Adi
+              <input name="name" type="text" placeholder="Burger Station" required>
+            </label>
+            <label>
+              Portal Kullanici
+              <input name="portalUsername" type="text" placeholder="burgerstation101">
+            </label>
+            <label>
+              Ana Bolge
+              <select name="zone" id="restaurantZone"></select>
+            </label>
+            <label>
+              Portal Sifre
+              <input name="portalPassword" type="password" placeholder="Rest1234!">
+            </label>
+            <label>
+              Enlem
+              <input name="latitude" type="number" step="0.000001" placeholder="36.800000" required>
+            </label>
+            <label>
+              Boylam
+              <input name="longitude" type="number" step="0.000001" placeholder="34.633333" required>
+            </label>
+            <label class="full-width">
+              Entegre Platformlar
+              <div class="chip-grid" id="platformChecks"></div>
+            </label>
+            <button class="primary-btn full-width" type="submit">Restorani ve API Anahtarini Olustur</button>
+          </form>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Webhook Bilgisi</p>
+              <h3>Gercek Siparis Akisi</h3>
+            </div>
+          </div>
+          <div class="integration-card">
+            <p>Platform veya restoran backend'i siparisi su endpoint'e gonderecek:</p>
+            <code id="integrationEndpoint">Restoran secilince endpoint gorunur</code>
+            <p>`x-api-key` header'i restoranin API anahtari olacak. Siparis geldigi anda otomatik atama calisir.</p>
+            <label>
+              Ornek Odeme Yontemi
+              <select id="samplePaymentMethod"></select>
+            </label>
+            <div class="stack-list">
+              <article class="stack-card">
+                <strong>Secili Restoran</strong>
+                <p id="integrationRestaurant">Henuz secili restoran yok.</p>
+              </article>
+              <article class="stack-card">
+                <strong>API Key</strong>
+                <code id="integrationApiKey">API key burada gorunur</code>
+              </article>
+              <article class="stack-card">
+                <strong>Portal Kullanici</strong>
+                <code id="integrationPortalUsername">Portal kullanici burada gorunur</code>
+              </article>
+              <article class="stack-card">
+                <strong>Webhook Secret</strong>
+                <code id="integrationWebhookSecret">Webhook secret burada gorunur</code>
+              </article>
+              <article class="stack-card">
+                <strong>Imza Header</strong>
+                <code>x-delivera-signature</code>
+              </article>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Platform Baglantisi</p>
+              <h3>Canli Platform Hesabi Tanimla</h3>
+            </div>
+          </div>
+          <form id="platformAccountForm" class="form-grid">
+            <label>
+              Platform
+              <select name="platform" id="platformSelect"></select>
+            </label>
+            <label>
+              Store veya Vendor ID
+              <input name="externalStoreId" type="text" placeholder="Platformdaki magaza kimligi" required>
+            </label>
+            <label>
+              Merchant veya Seller ID
+              <input name="externalMerchantId" type="text" placeholder="Opsiyonel merchant/seller kimligi">
+            </label>
+            <label>
+              Webhook Auth Tipi
+              <select name="webhookAuthType" id="platformWebhookAuthType">
+                <option value="api_key">API Key</option>
+                <option value="basic_auth">Basic Auth</option>
+                <option value="static_token">Static Token</option>
+              </select>
+            </label>
+            <label>
+              API Kullanici
+              <input name="apiUsername" type="text" placeholder="Opsiyonel platform API kullanicisi">
+            </label>
+            <label>
+              API Sifre
+              <input name="apiPassword" type="password" placeholder="Opsiyonel platform API sifresi">
+            </label>
+            <label>
+              API Key
+              <input name="apiKey" type="text" placeholder="Opsiyonel platform API key">
+            </label>
+            <label>
+              API Secret
+              <input name="apiSecret" type="password" placeholder="Opsiyonel platform API secret">
+            </label>
+            <label>
+              Store Front Code
+              <input name="storeFrontCode" type="text" placeholder="Trendyol storefront code">
+            </label>
+            <label>
+              Chain ID
+              <input name="chainId" type="text" placeholder="Yemeksepeti chain id">
+            </label>
+            <label>
+              Vendor ID
+              <input name="vendorId" type="text" placeholder="Yemeksepeti vendor id">
+            </label>
+            <label>
+              Static Token
+              <input name="staticToken" type="text" placeholder="Static token kullanan platformlar icin">
+            </label>
+            <button class="primary-btn full-width" type="submit">Platform Hesabini Kaydet</button>
+          </form>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Hazir Baglanti</p>
+              <h3>Webhook ve Yetkilendirme Bilgileri</h3>
+            </div>
+          </div>
+          <div class="integration-card">
+            <p>Platform paneline bu URL girilir; siparis olustugunda sistemimize otomatik dusus buradan olur:</p>
+            <code id="platformWebhookUrl">Platform hesabini kaydedince webhook URL gorunur</code>
+            <div class="stack-list">
+              <article class="stack-card">
+                <strong>Secili Platform</strong>
+                <p id="platformSetupName">Henuz kayitli platform yok.</p>
+              </article>
+              <article class="stack-card">
+                <strong>Webhook Auth</strong>
+                <code id="platformSetupAuth">Auth bilgisi burada gorunur</code>
+              </article>
+              <article class="stack-card">
+                <strong>Store veya Vendor</strong>
+                <code id="platformSetupStore">Store/vendor bilgisi burada gorunur</code>
+              </article>
+              <article class="stack-card">
+                <strong>Canli Not</strong>
+                <p id="platformSetupHint">Trendyol ve Yemeksepeti icin resmi webhook modeli desteklenecek sekilde hazirlandi.</p>
+              </article>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Manuel Paket</p>
+              <h3>Restoran Paketi Olustur</h3>
+            </div>
+          </div>
+          <form id="packageForm" class="form-grid">
+            <label>
+              Restoran ID
+              <input id="packageRestaurantId" name="restaurantId" type="text" placeholder="Restoran girisi ile dolar" required readonly>
+            </label>
+            <label class="full-width">
+              Teslimat Adresi
+              <textarea name="deliveryAddress" rows="4" placeholder="Mersin teslimat adresini detayli gir" required></textarea>
+            </label>
+            <label>
+              Paket Tipi
+              <input name="packageType" type="text" placeholder="Sicak Yemek" required>
+            </label>
+            <button class="primary-btn" type="submit">Paket Olustur</button>
+          </form>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Payload Ornegi</p>
+              <h3>Platformdan Gelecek JSON</h3>
+            </div>
+          </div>
+          <pre class="code-block" id="samplePayload">Restoran secilince ornek payload gorunecek.</pre>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Son Gelen Siparisler</p>
+              <h3>Otomatik Akan Siparisler</h3>
+            </div>
+          </div>
+          <div id="recentOrders" class="stack-list"></div>
+        </article>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Restoran Hesabi</p>
+            <h3>Bu Oturuma Ait Entegrasyon Durumu</h3>
+          </div>
+        </div>
+        <div id="restaurantList" class="stack-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Platform Hesaplari</p>
+            <h3>Restorana Bagli Canli Platformlar</h3>
+          </div>
+        </div>
+        <div id="platformAccountList" class="stack-list"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/shared.js"></script>
+  <script src="/restaurant.js"></script>
+</body>
+</html>

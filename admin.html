@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Paneli - Delivera Express</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="theme-admin">
+  <div class="role-shell">
+    <aside class="role-sidebar">
+      <div class="brand-mark">Delivera Express</div>
+      <p class="eyebrow accent-teal">Admin Console</p>
+      <h1>Mersin'deki tum restoran kanallarini, bolgeleri ve kuryeleri tek operasyon omurgasinda yonet.</h1>
+      <p class="sidebar-copy">
+        Paket hangi platformdan gelirse gelsin, admin panelinde ayni akista gorunur ve gerekirse saniyesinde yeniden atanir.
+      </p>
+      <div class="sidebar-metric">
+        <span>Operasyon Durumu</span>
+        <strong id="adminSummary">Veriler yukleniyor...</strong>
+      </div>
+      <div class="panel-badge admin-badge">Operations Center</div>
+    </aside>
+
+    <main class="role-main">
+      <section id="adminLoginPanel" class="topbar glass-panel">
+        <div>
+          <p class="eyebrow accent-teal">Admin Login</p>
+          <h2>Operasyon merkezine yetkili hesap ile giris yap.</h2>
+        </div>
+        <form id="adminLoginForm" class="login-form">
+          <label>
+            Kullanici Adi
+            <input name="username" type="text" placeholder="admin" required>
+          </label>
+          <label>
+            Sifre
+            <input name="password" type="password" placeholder="Delivera123!" required>
+          </label>
+          <button class="primary-btn" type="submit">Admin Girisi</button>
+        </form>
+      </section>
+
+      <section id="adminWorkspace" class="hidden">
+      <section class="topbar glass-panel">
+        <div>
+          <p class="eyebrow accent-teal">Command Center</p>
+          <h2>Atama motoru, Mersin bolge parcasi ve kurye havuzu.</h2>
+        </div>
+        <div class="login-form">
+          <label>
+            Restoran Secimi
+            <select id="restaurantFilter"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="kpi-grid">
+        <article class="metric-card">
+          <span>Aktif Kurye</span>
+          <strong id="activeCouriers">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Bekleyen Paket</span>
+          <strong id="waitingPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Sahada</span>
+          <strong id="inTransitPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Toplam Paket</span>
+          <strong id="totalPackages">0</strong>
+        </article>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Restoran Odaqi</p>
+            <h3 id="selectedRestaurantTitle">Tum Restoranlar</h3>
+          </div>
+        </div>
+        <div id="restaurantStatsBoard" class="zone-board"></div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Kurye Havuzu</p>
+              <h3>Kurye Ekle</h3>
+            </div>
+          </div>
+          <form id="courierForm" class="form-grid">
+            <label>
+              Kurye Adi
+              <input name="name" type="text" placeholder="Mert Kaya" required>
+            </label>
+            <label>
+              Kullanici Adi
+              <input name="username" type="text" placeholder="mert" required>
+            </label>
+            <label>
+              Bolge
+              <select name="zone" id="courierZone"></select>
+            </label>
+            <label>
+              Sifre
+              <input name="password" type="password" placeholder="mert123" required>
+            </label>
+            <label>
+              Enlem
+              <input name="latitude" type="number" step="0.000001" placeholder="36.800000" required>
+            </label>
+            <label>
+              Boylam
+              <input name="longitude" type="number" step="0.000001" placeholder="34.633333" required>
+            </label>
+            <label class="inline-check full-width">
+              <input name="available" type="checkbox" checked>
+              Kurye atamaya acik
+            </label>
+            <button class="primary-btn full-width" type="submit">Kurye Ekle</button>
+          </form>
+          <div id="courierList" class="stack-list"></div>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Bolge Haritasi</p>
+              <h3>Bolge Bazli Dagilim</h3>
+            </div>
+          </div>
+          <div id="zoneBoard" class="zone-board"></div>
+        </article>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Canli Akis</p>
+            <h3 id="packagePanelTitle">Platform Kaynakli Tum Paketler</h3>
+          </div>
+          <div class="card-actions">
+            <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alici, kurye ara...">
+          </div>
+        </div>
+        <div id="packageList" class="package-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Webhook Loglari</p>
+            <h3>Entegrasyon Dogrulama Kayitlari</h3>
+          </div>
+        </div>
+        <div id="webhookLogList" class="stack-list"></div>
+      </section>
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Audit Loglari</p>
+            <h3>Sistem Hareket Kayitlari</h3>
+          </div>
+        </div>
+        <div id="auditLogList" class="stack-list"></div>
+      </section>
+      </section>
+    </main>
+  </div>
+  <template id="adminPackageTemplate">
+    <article class="package-card">
+      <div class="package-top">
+        <div>
+          <p class="tracking-no"></p>
+          <h4 class="recipient-name"></h4>
+        </div>
+        <span class="status-badge"></span>
+      </div>
+      <div class="meta-grid">
+        <div>
+          <span>Platform</span>
+          <strong class="platform-name"></strong>
+        </div>
+        <div>
+          <span>Restoran</span>
+          <strong class="restaurant-name"></strong>
+        </div>
+        <div>
+          <span>Kurye</span>
+          <strong class="courier-name"></strong>
+        </div>
+        <div>
+          <span>Mesafe</span>
+          <strong class="distance-value"></strong>
+        </div>
+        <div>
+          <span>Odeme</span>
+          <strong class="payment-method"></strong>
+        </div>
+      </div>
+      <p class="assignment-note"></p>
+      <p class="note-text"></p>
+      <div class="card-actions">
+        <select class="status-select"></select>
+        <button class="ghost-btn reassign-btn" type="button">Yeniden Ata</button>
+      </div>
+    </article>
+  </template>
+  <script src="/shared.js"></script>
+  <script src="/admin.js"></script>
+</body>
+</html>

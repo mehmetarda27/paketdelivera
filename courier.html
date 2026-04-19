@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kurye Paneli - Delivera Express</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="theme-courier">
+  <div class="role-shell">
+    <aside class="role-sidebar dark courier-sidebar">
+      <div class="brand-mark light">Delivera Express</div>
+      <p class="eyebrow accent-gold">Courier Desk</p>
+      <h1>Sahadaki kurye icin hizli, net ve dikkat dagitmayan teslimat operasyon ekrani.</h1>
+      <p class="sidebar-copy">
+        Bu panel yalnizca kurye icindir. Baska role gecis yoktur; kurye kendi hesabi ile girer ve sadece kendi gorevlerini gorur.
+      </p>
+      <div class="sidebar-metric dark">
+        <span>Kurye Ozeti</span>
+        <strong id="courierSummary">Giris yapildiginda aktif isler burada gorunur.</strong>
+      </div>
+      <div class="panel-badge courier-badge">Courier Workspace</div>
+    </aside>
+
+    <main class="role-main courier-main">
+      <section id="loginPanel" class="topbar glass-panel dark-panel login-panel courier-login-panel">
+        <div>
+          <p class="eyebrow accent-gold">Login</p>
+          <h2>Kullanici adi ve sifre ile kurye girisi yap.</h2>
+          <p class="soft-copy">Kurye hesaplari admin paneli uzerinden tanimlanir. Her kurye yalnizca kendine atanmis isleri gorur.</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label>
+            Kullanici Adi
+            <input name="username" type="text" placeholder="mert" required>
+          </label>
+          <label>
+            Sifre
+            <input name="password" type="password" placeholder="********" required>
+          </label>
+          <button class="primary-btn" type="submit">Giris Yap</button>
+        </form>
+      </section>
+
+      <section id="workspacePanel" class="dashboard-grid courier-layout hidden">
+        <article class="glass-panel dark-panel courier-profile-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-gold">Kurye Hesabi</p>
+              <h3 id="courierName">Kurye</h3>
+            </div>
+            <button id="logoutButton" class="ghost-btn" type="button">Cikis Yap</button>
+          </div>
+          <div class="courier-live-bar">
+            <div>
+              <p class="eyebrow accent-gold">Canli Konum</p>
+              <strong id="locationStatus">Konum izni bekleniyor.</strong>
+            </div>
+            <div class="badge-row">
+              <button id="shareLocationButton" class="primary-btn" type="button">Konumu Ac</button>
+              <button id="availabilityButton" class="ghost-btn" type="button">Pasife Al</button>
+            </div>
+          </div>
+          <div id="courierStats" class="mini-stat-list"></div>
+        </article>
+
+        <article class="glass-panel dark-panel courier-mission-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-gold">Aktif Gorevler</p>
+              <h3>Atanan Paketler</h3>
+            </div>
+          </div>
+          <div id="courierPackages" class="package-list"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <template id="courierPackageTemplate">
+    <article class="package-card dark-card-shell courier-task-card">
+      <div class="package-top">
+        <div>
+          <p class="tracking-no"></p>
+          <h4 class="recipient-name"></h4>
+        </div>
+        <span class="status-badge"></span>
+      </div>
+      <div class="meta-grid">
+        <div>
+          <span>Platform</span>
+          <strong class="platform-name"></strong>
+        </div>
+        <div>
+          <span>Restoran</span>
+          <strong class="restaurant-name"></strong>
+        </div>
+        <div>
+          <span>Bolge</span>
+          <strong class="zone-name"></strong>
+        </div>
+        <div>
+          <span>ETA</span>
+          <strong class="eta-value"></strong>
+        </div>
+        <div>
+          <span>Odeme</span>
+          <strong class="payment-method"></strong>
+        </div>
+      </div>
+      <p class="note-text"></p>
+      <div class="card-actions">
+        <select class="status-select"></select>
+      </div>
+    </article>
+  </template>
+  <script src="/shared.js"></script>
+  <script src="/courier.js"></script>
+</body>
+</html>
