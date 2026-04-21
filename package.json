@@ -1,0 +1,16 @@
+{
+  "name": "delivera-express",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Delivera Express multi-restaurant courier dispatch platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "reset:data": "node reset-runtime-data.js",
+    "smoke": "node smoke-test.js",
+    "check": "node --check server.js && node --check shared.js && node --check landing.js && node --check restaurant.js && node --check admin.js && node --check courier.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

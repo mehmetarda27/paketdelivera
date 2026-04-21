@@ -2,30 +2,32 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#17232c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Kurye Paneli - Delivera Express</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="theme-courier">
-  <div class="role-shell">
-    <aside class="role-sidebar dark courier-sidebar">
-      <div class="brand-mark light">Delivera Express</div>
-      <p class="eyebrow accent-gold">Courier Desk</p>
-      <h1>Sahadaki kurye icin hizli, net ve dikkat dagitmayan teslimat operasyon ekrani.</h1>
-      <p class="sidebar-copy">
-        Bu panel yalnizca kurye icindir. Baska role gecis yoktur; kurye kendi hesabi ile girer ve sadece kendi gorevlerini gorur.
-      </p>
-      <div class="sidebar-metric dark">
-        <span>Kurye Ozeti</span>
-        <strong id="courierSummary">Giris yapildiginda aktif isler burada gorunur.</strong>
-      </div>
-      <div class="panel-badge courier-badge">Courier Workspace</div>
-    </aside>
-
-    <main class="role-main courier-main">
+  <div class="role-shell wide-shell">
+    <main class="role-main courier-main expanded-main">
+      <section class="topbar glass-panel dark-panel workspace-hero">
+        <div>
+          <div class="brand-mark light">Delivera Express</div>
+          <p class="eyebrow accent-gold">Kurye Paneli</p>
+          <h2>Sahadaki teslimatlari hizli ve net sekilde yonet.</h2>
+          <p class="soft-copy">Aktif gorevler, canli kurye durumu ve kapanan teslimat gecmisi tek panelde gorunur.</p>
+        </div>
+        <div class="hero-summary-card dark">
+          <span>Kurye Ozeti</span>
+          <strong id="courierSummary">Giris yapildiginda aktif isler burada gorunur.</strong>
+        </div>
+      </section>
       <section id="loginPanel" class="topbar glass-panel dark-panel login-panel courier-login-panel">
         <div>
           <p class="eyebrow accent-gold">Login</p>
@@ -35,11 +37,11 @@
         <form id="loginForm" class="login-form">
           <label>
             Kullanici Adi
-            <input name="username" type="text" placeholder="mert" required>
+            <input name="username" type="text" placeholder="mert" autocomplete="username" required>
           </label>
           <label>
             Sifre
-            <input name="password" type="password" placeholder="********" required>
+            <input name="password" type="password" placeholder="********" autocomplete="current-password" required>
           </label>
           <button class="primary-btn" type="submit">Giris Yap</button>
         </form>
@@ -64,6 +66,21 @@
               <button id="availabilityButton" class="ghost-btn" type="button">Pasife Al</button>
             </div>
           </div>
+          <div class="courier-focus-card">
+            <p class="eyebrow accent-gold">Siradaki Is</p>
+            <strong id="courierFocusTitle">Aktif gorev bekleniyor.</strong>
+            <p id="courierFocusText" class="soft-copy">Kurye aktif oldugunda en kritik teslimat burada ozetlenir.</p>
+          </div>
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow accent-gold">Gun Sonu</p>
+                <h3>Gunluk Ciro</h3>
+              </div>
+              <button id="courierDayCloseButton" class="primary-btn" type="button">Gunu Bitir</button>
+            </div>
+            <div id="courierDayMetrics" class="mini-stat-list"></div>
+          </div>
           <div id="courierStats" class="mini-stat-list"></div>
         </article>
 
@@ -74,7 +91,38 @@
               <h3>Atanan Paketler</h3>
             </div>
           </div>
+          <div class="courier-mission-strip">
+            <div class="mini-stat-card">
+              <span>Gorev Ozeti</span>
+              <strong id="courierMissionMeta">Henuz aktif paket yok.</strong>
+            </div>
+          </div>
           <div id="courierPackages" class="package-list"></div>
+        </article>
+
+        <article class="glass-panel dark-panel courier-mission-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-gold">Paket Gecmisi</p>
+              <h3>Gecmis Teslimatlar</h3>
+            </div>
+          </div>
+          <div class="history-shell">
+            <div class="history-toolbar">
+              <div class="badge-row" id="courierHistoryFilters">
+                <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gun</button>
+                <button class="ghost-btn" type="button" data-range="today">Bugun</button>
+                <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
+                <button class="ghost-btn" type="button" data-range="30d">Son 30 Gun</button>
+                <button class="ghost-btn" type="button" data-range="all">Tum Kayitlar</button>
+              </div>
+              <strong id="courierHistoryMeta" class="history-meta">Son 50 kapanan teslimat gorunuyor.</strong>
+            </div>
+            <div id="courierHistory" class="stack-list history-list"></div>
+            <div class="history-actions">
+              <button id="courierHistoryMore" class="ghost-btn" type="button">Daha Fazla Yukle</button>
+            </div>
+          </div>
         </article>
       </section>
     </main>
@@ -109,6 +157,15 @@
           <span>Odeme</span>
           <strong class="payment-method"></strong>
         </div>
+      </div>
+      <div class="courier-address-block">
+        <span>Teslimat Adresi</span>
+        <strong class="address-value"></strong>
+      </div>
+      <div class="badge-row courier-task-flags">
+        <span class="soft-badge assigned-at-badge"></span>
+        <span class="soft-badge eta-badge"></span>
+        <span class="soft-badge failure-badge hidden"></span>
       </div>
       <p class="note-text"></p>
       <div class="card-actions">

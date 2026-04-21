@@ -1,12 +1,63 @@
 const STORAGE_TOKEN_KEY = "kuryeTakipCourierToken";
-const LOCATION_PUSH_MS = 15_000;
+const STORAGE_REFRESH_TOKEN_KEY = "kuryeTakipCourierRefreshToken";
+const LOCATION_PUSH_MS = 2_000;
+const WORKSPACE_POLL_MS = 4_000;
 
 const courierState = {
   token: localStorage.getItem(STORAGE_TOKEN_KEY) || "",
+  refreshToken: localStorage.getItem(STORAGE_REFRESH_TOKEN_KEY) || "",
   data: null,
   watchId: null,
   lastCoords: null,
+  heartbeatId: null,
+  workspacePollId: null,
+  historyRange: "7d",
+  historyVisibleCount: 50,
+  lastPackageSnapshot: new Map(),
 };
+
+const COURIER_FAILURE_REASON_OPTIONS = [
+  { value: "musteri_yok", label: "Musteri yok" },
+  { value: "adres_bulunamadi", label: "Adres bulunamadi" },
+  { value: "restoran_hazir_degil", label: "Restoran hazir degil" },
+  { value: "teknik_sorun", label: "Teknik sorun" },
+  { value: "diger", label: "Diger" },
+];
+
+function courierFailureReasonLabel(reason) {
+  return COURIER_FAILURE_REASON_OPTIONS.find((item) => item.value === reason)?.label || reason || "Sorun yok";
+}
+
+function historyDateForPackage(pkg) {
+  return new Date(pkg.updatedAt || pkg.deliveredAt || pkg.failedAt || pkg.createdAt);
+}
+
+function packageMatchesHistoryRange(pkg, range) {
+  const targetDate = historyDateForPackage(pkg);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const sevenDayStart = new Date(todayStart);
+  sevenDayStart.setDate(sevenDayStart.getDate() - 6);
+  const thirtyDayStart = new Date(todayStart);
+  thirtyDayStart.setDate(thirtyDayStart.getDate() - 29);
+
+  if (range === "today") {
+    return targetDate >= todayStart;
+  }
+  if (range === "yesterday") {
+    return targetDate >= yesterdayStart && targetDate < todayStart;
+  }
+  if (range === "30d") {
+    return targetDate >= thirtyDayStart;
+  }
+  if (range === "all") {
+    return true;
+  }
+
+  return targetDate >= sevenDayStart;
+}
 
 const courierRefs = {
   summary: document.getElementById("courierSummary"),
@@ -18,10 +69,50 @@ const courierRefs = {
   availabilityButton: document.getElementById("availabilityButton"),
   locationStatus: document.getElementById("locationStatus"),
   name: document.getElementById("courierName"),
+  focusTitle: document.getElementById("courierFocusTitle"),
+  focusText: document.getElementById("courierFocusText"),
+  missionMeta: document.getElementById("courierMissionMeta"),
   stats: document.getElementById("courierStats"),
+  dayMetrics: document.getElementById("courierDayMetrics"),
+  dayCloseButton: document.getElementById("courierDayCloseButton"),
   packages: document.getElementById("courierPackages"),
+  history: document.getElementById("courierHistory"),
+  historyMeta: document.getElementById("courierHistoryMeta"),
+  historyMore: document.getElementById("courierHistoryMore"),
+  historyFilters: document.getElementById("courierHistoryFilters"),
   template: document.getElementById("courierPackageTemplate"),
 };
+
+function persistCourierAuth(auth) {
+  courierState.token = auth.token;
+  courierState.refreshToken = auth.refreshToken;
+  localStorage.setItem(STORAGE_TOKEN_KEY, auth.token);
+  localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, auth.refreshToken);
+}
+
+function clearCourierAuth() {
+  courierState.token = "";
+  courierState.refreshToken = "";
+  courierState.data = null;
+  courierState.lastCoords = null;
+  courierState.lastPackageSnapshot = new Map();
+  localStorage.removeItem(STORAGE_TOKEN_KEY);
+  localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY);
+}
+
+async function refreshCourierAccess() {
+  if (!courierState.refreshToken) {
+    throw new Error("Kurye refresh token bulunamadi.");
+  }
+
+  const auth = await api("/api/courier/refresh", {
+    method: "POST",
+    body: JSON.stringify({
+      refreshToken: courierState.refreshToken,
+    }),
+  });
+  persistCourierAuth(auth);
+}
 
 function setLoggedIn(isLoggedIn) {
   courierRefs.loginPanel.classList.toggle("hidden", isLoggedIn);
@@ -37,6 +128,79 @@ function stopLocationWatch() {
     navigator.geolocation.clearWatch(courierState.watchId);
     courierState.watchId = null;
   }
+
+  if (courierState.heartbeatId !== null) {
+    window.clearInterval(courierState.heartbeatId);
+    courierState.heartbeatId = null;
+  }
+}
+
+function stopWorkspacePolling() {
+  if (courierState.workspacePollId !== null) {
+    window.clearInterval(courierState.workspacePollId);
+    courierState.workspacePollId = null;
+  }
+}
+
+function startWorkspacePolling() {
+  if (courierState.workspacePollId !== null || !courierState.token) {
+    return;
+  }
+
+  courierState.workspacePollId = window.setInterval(() => {
+    loadCourierWorkspace({ silent: true });
+  }, WORKSPACE_POLL_MS);
+}
+
+function requestNotificationPermission() {
+  if (typeof Notification === "undefined") {
+    return;
+  }
+
+  if (Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {
+      // Ignore permission request errors.
+    });
+  }
+}
+
+function notifyNewAssignment(pkg) {
+  showToast(`${pkg.restaurantName} tarafindan yeni paket dustu: ${pkg.recipient}`, "success");
+
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+    return;
+  }
+
+  try {
+    new Notification("Delivera Express - Yeni Paket", {
+      body: `${pkg.restaurantName} - ${pkg.deliveryAddress || pkg.address}`,
+      tag: `delivera-package-${pkg.id}`,
+    });
+  } catch {
+    // Ignore browser notification errors.
+  }
+}
+
+function processIncomingPackageNotifications(packages) {
+  const nextSnapshot = new Map();
+  const activePackages = packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+
+  activePackages.forEach((pkg) => {
+    const signature = `${pkg.status}|${pkg.assignedAt || ""}`;
+    nextSnapshot.set(pkg.id, signature);
+    const previous = courierState.lastPackageSnapshot.get(pkg.id);
+
+    if (!previous && pkg.status === "assigned") {
+      notifyNewAssignment(pkg);
+      return;
+    }
+
+    if (previous && previous !== signature && pkg.status === "assigned") {
+      notifyNewAssignment(pkg);
+    }
+  });
+
+  courierState.lastPackageSnapshot = nextSnapshot;
 }
 
 function locationLabel(courier) {
@@ -49,7 +213,7 @@ function renderCourierStats(courier, packages) {
   courierRefs.stats.innerHTML = "";
 
   const delivered = packages.filter((pkg) => pkg.status === "delivered").length;
-  const inTransit = packages.filter((pkg) => pkg.status === "picked_up").length;
+  const inTransit = packages.filter((pkg) => pkg.status === "accepted_by_courier" || pkg.status === "on_route").length;
 
   courierRefs.stats.innerHTML = `
     <article class="mini-stat-card">
@@ -74,7 +238,7 @@ function renderCourierStats(courier, packages) {
     </article>
     <article class="mini-stat-card">
       <span>Durum</span>
-      <strong>${courier.available ? "Aktif" : "Pasif"}</strong>
+      <strong>${courierStatusLabel(courier.status)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Canli GPS</span>
@@ -83,43 +247,148 @@ function renderCourierStats(courier, packages) {
   `;
 }
 
+function renderCourierDayMetrics(dayMetrics) {
+  courierRefs.dayMetrics.innerHTML = "";
+  const metrics = dayMetrics || {
+    deliveredCount: 0,
+    totalAmount: 0,
+    paidOnlineAmount: 0,
+    cashCollectedAmount: 0,
+    hasClosedDay: false,
+    closedAt: null,
+  };
+
+  courierRefs.dayMetrics.innerHTML = `
+    <article class="mini-stat-card">
+      <span>Bugun Teslim</span>
+      <strong>${metrics.deliveredCount}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Gunluk Ciro</span>
+      <strong>${formatCurrency(metrics.totalAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Online</span>
+      <strong>${formatCurrency(metrics.paidOnlineAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Nakit</span>
+      <strong>${formatCurrency(metrics.cashCollectedAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Rapor</span>
+      <strong>${metrics.hasClosedDay ? `Kapandi ${formatTimeAgo(metrics.closedAt)}` : "Henuz kapanmadi"}</strong>
+    </article>
+  `;
+}
+
 function renderPackages(packages) {
   courierRefs.packages.innerHTML = "";
+  const activePackages = packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
 
-  if (packages.length === 0) {
+  if (activePackages.length === 0) {
     courierRefs.packages.innerHTML = '<div class="empty-state">Bu kuryeye atanmis paket yok.</div>';
     return;
   }
 
   const fragment = document.createDocumentFragment();
 
-  packages.forEach((pkg) => {
+  activePackages.forEach((pkg) => {
     const node = courierRefs.template.content.cloneNode(true);
     const badge = node.querySelector(".status-badge");
-    const select = node.querySelector(".status-select");
+    const actions = node.querySelector(".card-actions");
+    const assignedAtBadge = node.querySelector(".assigned-at-badge");
+    const etaBadge = node.querySelector(".eta-badge");
+    const failureBadge = node.querySelector(".failure-badge");
 
     node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo}`;
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
-    node.querySelector(".platform-name").textContent = pkg.sourcePlatform;
+    node.querySelector(".platform-name").textContent = pkg.source === "external_manual" || pkg.source === "manual"
+      ? "Manuel Paket"
+      : pkg.sourcePlatform;
     node.querySelector(".restaurant-name").textContent = pkg.restaurantName;
     node.querySelector(".zone-name").textContent = `${pkg.zone} - ${pkg.address}`;
     node.querySelector(".eta-value").textContent = pkg.eta;
-    node.querySelector(".payment-method").textContent = pkg.paymentMethod;
-    node.querySelector(".note-text").textContent = `${pkg.note || "Ek not yok."} - ${formatDate(pkg.createdAt)}`;
+    node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
+    node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
+    node.querySelector(".note-text").textContent =
+      `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
+    assignedAtBadge.textContent = `Atama ${pkg.assignedAt ? formatTimeAgo(pkg.assignedAt) : "bekliyor"}`;
+    etaBadge.textContent = `Teslim hedefi ${pkg.eta || "-"}`;
+
+    if (pkg.failureReason) {
+      failureBadge.textContent = `Sorun: ${courierFailureReasonLabel(pkg.failureReason)}`;
+      failureBadge.classList.remove("hidden");
+    } else {
+      failureBadge.classList.add("hidden");
+    }
 
     badge.textContent = statusLabel(pkg.status);
     badge.className = `status-badge ${statusClassName(pkg.status)}`;
-    select.innerHTML = createStatusOptions(pkg.status, ["assigned", "picked_up", "delivered"]);
-    select.value = pkg.status === "waiting" ? "assigned" : pkg.status;
 
-    select.addEventListener("change", async (event) => {
+    const submitStatus = async (status, failureReason = "") => {
       const data = await api(`/api/courier/packages/${pkg.id}/status`, {
         method: "PATCH",
         headers: authHeaders(courierState.token),
-        body: JSON.stringify({ status: event.target.value }),
+        body: JSON.stringify({ status, failureReason }),
+        retryWithRefresh: refreshCourierAccess,
       });
       hydrateCourierWorkspace(data);
-    });
+    };
+
+    actions.innerHTML = "";
+
+    if (pkg.status === "assigned") {
+      const acceptButton = document.createElement("button");
+      acceptButton.type = "button";
+      acceptButton.className = "primary-btn";
+      acceptButton.textContent = "Paketi Kabul Et";
+      acceptButton.addEventListener("click", async () => {
+        await submitStatus("accepted_by_courier");
+      });
+      actions.appendChild(acceptButton);
+    }
+
+    if (pkg.status === "accepted_by_courier") {
+      const routeButton = document.createElement("button");
+      routeButton.type = "button";
+      routeButton.className = "primary-btn";
+      routeButton.textContent = "Yola Ciktim";
+      routeButton.addEventListener("click", async () => {
+        await submitStatus("on_route");
+      });
+      actions.appendChild(routeButton);
+    }
+
+    if (pkg.status === "on_route") {
+      const deliveredButton = document.createElement("button");
+      deliveredButton.type = "button";
+      deliveredButton.className = "primary-btn";
+      deliveredButton.textContent = "Teslim Edildi";
+      deliveredButton.addEventListener("click", async () => {
+        await submitStatus("delivered");
+      });
+      actions.appendChild(deliveredButton);
+    }
+
+    if (["assigned", "accepted_by_courier", "on_route"].includes(pkg.status)) {
+      const failureSelect = document.createElement("select");
+      failureSelect.className = "status-select";
+      failureSelect.innerHTML = ['<option value="">Sorun nedeni sec</option>']
+        .concat(COURIER_FAILURE_REASON_OPTIONS.map((item) => `<option value="${item.value}">${item.label}</option>`))
+        .join("");
+
+      const failureButton = document.createElement("button");
+      failureButton.type = "button";
+      failureButton.className = "ghost-btn";
+      failureButton.textContent = "Reddet / Sorun Bildir";
+      failureButton.addEventListener("click", async () => {
+        await submitStatus("failed", failureSelect.value);
+      });
+
+      actions.appendChild(failureSelect);
+      actions.appendChild(failureButton);
+    }
 
     fragment.appendChild(node);
   });
@@ -127,30 +396,140 @@ function renderPackages(packages) {
   courierRefs.packages.appendChild(fragment);
 }
 
+function renderCourierHistory(packages) {
+  courierRefs.history.innerHTML = "";
+  const filteredHistory = [...packages]
+    .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
+    .filter((pkg) => packageMatchesHistoryRange(pkg, courierState.historyRange))
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
+  const historyPackages = filteredHistory.slice(0, courierState.historyVisibleCount);
+
+  courierRefs.historyMeta.textContent = `${filteredHistory.length} kapanan teslimattan ${historyPackages.length} kayit gorunuyor.`;
+  courierRefs.historyMore.classList.toggle("hidden", historyPackages.length >= filteredHistory.length);
+  [...courierRefs.historyFilters.querySelectorAll("[data-range]")].forEach((button) => {
+    button.classList.toggle("active", button.dataset.range === courierState.historyRange);
+  });
+
+  if (historyPackages.length === 0) {
+    courierRefs.history.innerHTML = '<div class="empty-state">Dun ve onceki gunlerden kapanan teslimat kaydi yok.</div>';
+    return;
+  }
+
+  historyPackages.forEach((pkg) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${pkg.trackingNo} - ${pkg.recipient}</strong>
+          <p>${pkg.restaurantName} - ${pkg.deliveryAddress || pkg.address}</p>
+          <p>Kapanis: ${formatDate(pkg.updatedAt || pkg.deliveredAt || pkg.failedAt || pkg.createdAt)}</p>
+        </div>
+        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Odeme</span>
+          <strong>${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+        </div>
+        <div>
+          <span>Sorun</span>
+          <strong>${pkg.failureReason || "-"}</strong>
+        </div>
+      </div>
+    `;
+    courierRefs.history.appendChild(card);
+  });
+}
+
+function renderCourierFocus(courier, packages) {
+  const priority = packages.find((pkg) => pkg.status === "on_route") || packages.find((pkg) => pkg.status === "accepted_by_courier") || packages[0] || null;
+
+  if (!priority) {
+    courierRefs.focusTitle.textContent = courier.available ? "Yeni gorev bekleniyor." : "Kurye pasif durumda.";
+    courierRefs.focusText.textContent = courier.available
+      ? "Konum acik ve atamaya hazirsin. Yeni paket geldiginde burada ilk durak gorunecek."
+      : "Pasif modda oldugun icin yeni paket dusmez. Hazir oldugunda tekrar aktif yap.";
+    courierRefs.missionMeta.textContent = "Henuz aktif paket yok.";
+    return;
+  }
+
+  courierRefs.focusTitle.textContent = `${priority.recipient} - ${statusLabel(priority.status)}`;
+  courierRefs.focusText.textContent = `${priority.restaurantName} cikisli teslimat. ${priority.zone} bolgesi, odeme ${priority.paymentMethod}.`;
+  courierRefs.missionMeta.textContent = `${packages.length} aktif paket, ${packages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
+}
+
 function syncAvailabilityButton(courier) {
   courierRefs.availabilityButton.textContent = courier.available ? "Pasife Al" : "Aktife Al";
 }
 
 function hydrateCourierWorkspace(data) {
+  processIncomingPackageNotifications(data.packages);
   courierState.data = data;
   setLoggedIn(true);
+  requestNotificationPermission();
+  startWorkspacePolling();
   courierRefs.name.textContent = data.courier.name;
   courierRefs.summary.textContent =
-    `${data.courier.name} hesabi ile giris yapildi. ${data.packages.length} paket bulundu.`;
+    `${data.courier.name} hesabinda ${data.packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length} aktif paket var.`;
   setLocationStatus(data.courier.lastLocationAt ? `Canli konum aktif. Son guncelleme ${formatTimeAgo(data.courier.lastLocationAt)}.` : "Konum izni verilirse admin paneli seni canli gorur.");
   syncAvailabilityButton(data.courier);
   renderCourierStats(data.courier, data.packages);
+  renderCourierDayMetrics(data.dayMetrics);
+  renderCourierFocus(data.courier, data.packages);
   renderPackages(data.packages);
+  renderCourierHistory(data.packages);
 }
+
+courierRefs.historyFilters?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-range]");
+  if (!button) {
+    return;
+  }
+  courierState.historyRange = button.dataset.range;
+  courierState.historyVisibleCount = 50;
+  if (courierState.data) {
+    renderCourierHistory(courierState.data.packages || []);
+  }
+});
+
+courierRefs.historyMore?.addEventListener("click", () => {
+  courierState.historyVisibleCount += 50;
+  if (courierState.data) {
+    renderCourierHistory(courierState.data.packages || []);
+  }
+});
 
 async function pushCourierLocation(payload) {
   const data = await api("/api/courier/location", {
     method: "PATCH",
     headers: authHeaders(courierState.token),
     body: JSON.stringify(payload),
+    retryWithRefresh: refreshCourierAccess,
   });
   hydrateCourierWorkspace(data);
   return data;
+}
+
+async function heartbeatCourierLocation() {
+  if (!courierState.token || !courierState.data?.courier) {
+    return;
+  }
+
+  const coords = courierState.lastCoords || {
+    latitude: courierState.data.courier.latitude,
+    longitude: courierState.data.courier.longitude,
+  };
+
+  try {
+    await pushCourierLocation({
+      ...coords,
+      available: courierState.data.courier.available,
+    });
+    setLocationStatus(`Canli konum 2 saniyede bir guncelleniyor. Son sinyal ${formatTimeAgo(new Date().toISOString())}.`);
+  } catch (error) {
+    setLocationStatus(error.message);
+  }
 }
 
 function handleLocationError(error) {
@@ -177,6 +556,10 @@ function startLocationWatch() {
 
   setLocationStatus("Konum izni isteniyor...");
 
+  courierState.heartbeatId = window.setInterval(() => {
+    heartbeatCourierLocation();
+  }, LOCATION_PUSH_MS);
+
   courierState.watchId = navigator.geolocation.watchPosition(
     async (position) => {
       const coords = {
@@ -189,13 +572,8 @@ function startLocationWatch() {
         Math.abs(last.latitude - coords.latitude) > 0.00005 ||
         Math.abs(last.longitude - coords.longitude) > 0.00005;
 
-      if (!moved) {
-        setLocationStatus("Canli konum acik. Konum sabit, yeni veri bekleniyor.");
-        return;
-      }
-
       courierState.lastCoords = coords;
-      setLocationStatus("Canli konum admine gonderiliyor...");
+      setLocationStatus(moved ? "Canli konum admine gonderiliyor..." : "Konum sabit, heartbeat gonderiliyor...");
       try {
         await pushCourierLocation({
           ...coords,
@@ -208,13 +586,13 @@ function startLocationWatch() {
     handleLocationError,
     {
       enableHighAccuracy: true,
-      maximumAge: LOCATION_PUSH_MS,
+      maximumAge: 1_000,
       timeout: 12_000,
     }
   );
 }
 
-async function loadCourierWorkspace() {
+async function loadCourierWorkspace(options = {}) {
   if (!courierState.token) {
     setLoggedIn(false);
     return;
@@ -223,13 +601,16 @@ async function loadCourierWorkspace() {
   try {
     const data = await api("/api/courier/me", {
       headers: authHeaders(courierState.token),
+      retryWithRefresh: refreshCourierAccess,
     });
     hydrateCourierWorkspace(data);
   } catch (error) {
-    localStorage.removeItem(STORAGE_TOKEN_KEY);
-    courierState.token = "";
+    clearCourierAuth();
+    stopWorkspacePolling();
     setLoggedIn(false);
-    courierRefs.summary.textContent = error.message;
+    if (!options.silent) {
+      courierRefs.summary.textContent = error.message;
+    }
   }
 }
 
@@ -243,10 +624,10 @@ courierRefs.loginForm.addEventListener("submit", async (event) => {
       password: formData.get("password"),
     }),
   });
-  courierState.token = data.token;
-  localStorage.setItem(STORAGE_TOKEN_KEY, data.token);
+  persistCourierAuth(data);
   const workspace = await api("/api/courier/me", {
     headers: authHeaders(courierState.token),
+    retryWithRefresh: refreshCourierAccess,
   });
   courierRefs.loginForm.reset();
   hydrateCourierWorkspace(workspace);
@@ -271,6 +652,20 @@ courierRefs.availabilityButton?.addEventListener("click", async () => {
   hydrateCourierWorkspace(data);
 });
 
+courierRefs.dayCloseButton?.addEventListener("click", async () => {
+  if (!courierState.token) {
+    return;
+  }
+  const data = await api("/api/courier/day-close", {
+    method: "POST",
+    headers: authHeaders(courierState.token),
+    body: "{}",
+    retryWithRefresh: refreshCourierAccess,
+  });
+  hydrateCourierWorkspace(data);
+  showToast(`Gun sonu raporu olustu. Toplam ciro ${formatCurrency(data.dayCloseReport?.totalAmount)}.`, "success");
+});
+
 courierRefs.logoutButton?.addEventListener("click", async () => {
   try {
     if (courierState.token) {
@@ -285,15 +680,23 @@ courierRefs.logoutButton?.addEventListener("click", async () => {
   }
 
   stopLocationWatch();
-  courierState.token = "";
-  courierState.data = null;
-  courierState.lastCoords = null;
-  localStorage.removeItem(STORAGE_TOKEN_KEY);
+  stopWorkspacePolling();
+  if (courierState.refreshToken) {
+    api("/api/courier/logout", {
+      method: "POST",
+      headers: authHeaders(courierState.token),
+      body: JSON.stringify({ refreshToken: courierState.refreshToken }),
+    }).catch(() => {
+      // Local cleanup should still continue.
+    });
+  }
+  clearCourierAuth();
   setLoggedIn(false);
   setLocationStatus("Konum kapatildi.");
   courierRefs.summary.textContent = "Cikis yapildi.";
 });
 
 window.addEventListener("beforeunload", stopLocationWatch);
+window.addEventListener("beforeunload", stopWorkspacePolling);
 
 loadCourierWorkspace();

@@ -2,30 +2,32 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1e6b69">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Admin Paneli - Delivera Express</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="theme-admin">
-  <div class="role-shell">
-    <aside class="role-sidebar">
-      <div class="brand-mark">Delivera Express</div>
-      <p class="eyebrow accent-teal">Admin Console</p>
-      <h1>Mersin'deki tum restoran kanallarini, bolgeleri ve kuryeleri tek operasyon omurgasinda yonet.</h1>
-      <p class="sidebar-copy">
-        Paket hangi platformdan gelirse gelsin, admin panelinde ayni akista gorunur ve gerekirse saniyesinde yeniden atanir.
-      </p>
-      <div class="sidebar-metric">
-        <span>Operasyon Durumu</span>
-        <strong id="adminSummary">Veriler yukleniyor...</strong>
-      </div>
-      <div class="panel-badge admin-badge">Operations Center</div>
-    </aside>
-
-    <main class="role-main">
+  <div class="role-shell wide-shell">
+    <main class="role-main expanded-main">
+      <section class="topbar glass-panel workspace-hero">
+        <div>
+          <div class="brand-mark">Delivera Express</div>
+          <p class="eyebrow accent-teal">Admin Paneli</p>
+          <h2>Mersin operasyonunu tek merkezden yonet.</h2>
+          <p class="sidebar-copy">Restoranlar, aktif siparisler, atama bekleyen paketler ve sahadaki kuryeler ayni akista burada gorunur.</p>
+        </div>
+        <div class="hero-summary-card">
+          <span>Operasyon Ozeti</span>
+          <strong id="adminSummary">Veriler yukleniyor...</strong>
+        </div>
+      </section>
       <section id="adminLoginPanel" class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-teal">Admin Login</p>
@@ -34,11 +36,11 @@
         <form id="adminLoginForm" class="login-form">
           <label>
             Kullanici Adi
-            <input name="username" type="text" placeholder="admin" required>
+            <input name="username" type="text" placeholder="admin" autocomplete="username" required>
           </label>
           <label>
             Sifre
-            <input name="password" type="password" placeholder="Delivera123!" required>
+            <input name="password" type="password" placeholder="Delivera123!" autocomplete="current-password" required>
           </label>
           <button class="primary-btn" type="submit">Admin Girisi</button>
         </form>
@@ -55,25 +57,38 @@
             Restoran Secimi
             <select id="restaurantFilter"></select>
           </label>
+          <button id="adminLogoutButton" class="ghost-btn" type="button">Cikis Yap</button>
         </div>
       </section>
 
       <section class="kpi-grid">
         <article class="metric-card">
-          <span>Aktif Kurye</span>
+          <span>Aktif Siparis</span>
           <strong id="activeCouriers">0</strong>
         </article>
         <article class="metric-card">
-          <span>Bekleyen Paket</span>
+          <span>Atama Bekleyen</span>
           <strong id="waitingPackages">0</strong>
         </article>
         <article class="metric-card">
-          <span>Sahada</span>
+          <span>Yoldaki</span>
           <strong id="inTransitPackages">0</strong>
         </article>
         <article class="metric-card">
-          <span>Toplam Paket</span>
+          <span>Atanmis</span>
           <strong id="totalPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Musait Kurye</span>
+          <strong id="availableCourierCount">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Busy Kurye</span>
+          <strong id="busyCourierCount">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Offline Kurye</span>
+          <strong id="offlineCourierCount">0</strong>
         </article>
       </section>
 
@@ -88,6 +103,46 @@
       </section>
 
       <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Restoran Havuzu</p>
+              <h3>Restoran Ekle</h3>
+            </div>
+          </div>
+          <form id="restaurantForm" class="form-grid">
+            <label>
+              Restoran Adi
+              <input name="name" type="text" placeholder="Burger Station" required>
+            </label>
+            <label>
+              Portal Kullanici
+              <input name="portalUsername" type="text" placeholder="burgerstation101">
+            </label>
+            <label>
+              Bolge
+              <select name="zone" id="restaurantZone"></select>
+            </label>
+            <label>
+              Portal Sifre
+              <input name="portalPassword" type="password" placeholder="Rest1234!">
+            </label>
+            <label>
+              Enlem
+              <input name="latitude" type="number" step="0.000001" placeholder="36.800000" required>
+            </label>
+            <label>
+              Boylam
+              <input name="longitude" type="number" step="0.000001" placeholder="34.633333" required>
+            </label>
+            <label class="full-width">
+              Entegre Platformlar
+              <div class="chip-grid" id="platformChecks"></div>
+            </label>
+            <button class="primary-btn full-width" type="submit">Restoran Ekle</button>
+          </form>
+        </article>
+
         <article class="glass-panel">
           <div class="panel-head">
             <div>
@@ -143,14 +198,36 @@
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Canli Akis</p>
-            <h3 id="packagePanelTitle">Platform Kaynakli Tum Paketler</h3>
+            <p class="eyebrow accent-teal">Aktif Siparisler</p>
+            <h3 id="packagePanelTitle">Canli Operasyon Siparisleri</h3>
           </div>
           <div class="card-actions">
             <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alici, kurye ara...">
           </div>
         </div>
         <div id="packageList" class="package-list"></div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Atama Bekleyenler</p>
+              <h3>Havuzda Bekleyen Siparisler</h3>
+            </div>
+          </div>
+          <div id="awaitingPackageList" class="stack-list"></div>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Aktif Kuryeler</p>
+              <h3>Sahadaki Kurye Durumu</h3>
+            </div>
+          </div>
+          <div id="activeCourierOpsList" class="stack-list"></div>
+        </article>
       </section>
 
       <section class="glass-panel">
@@ -170,6 +247,16 @@
           </div>
         </div>
         <div id="auditLogList" class="stack-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Kurye Gun Sonu</p>
+            <h3>Gun Sonu Ciro ve Teslimat Raporlari</h3>
+          </div>
+        </div>
+        <div id="courierDailyReportList" class="stack-list"></div>
       </section>
       </section>
     </main>
@@ -204,6 +291,10 @@
           <span>Odeme</span>
           <strong class="payment-method"></strong>
         </div>
+      </div>
+      <div class="admin-address-block">
+        <span>Adres</span>
+        <strong class="address-value"></strong>
       </div>
       <p class="assignment-note"></p>
       <p class="note-text"></p>

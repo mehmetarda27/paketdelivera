@@ -1,9 +1,11 @@
 const ADMIN_TOKEN_KEY = "deliveraAdminToken";
+const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
 const ADMIN_REFRESH_MS = 15_000;
 
 const adminState = {
   data: null,
   token: localStorage.getItem(ADMIN_TOKEN_KEY) || "",
+  refreshToken: localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "",
   selectedRestaurantId: "",
 };
 
@@ -12,20 +14,30 @@ const adminRefs = {
   loginPanel: document.getElementById("adminLoginPanel"),
   workspace: document.getElementById("adminWorkspace"),
   loginForm: document.getElementById("adminLoginForm"),
+  logoutButton: document.getElementById("adminLogoutButton"),
   activeCouriers: document.getElementById("activeCouriers"),
   waitingPackages: document.getElementById("waitingPackages"),
   inTransitPackages: document.getElementById("inTransitPackages"),
   totalPackages: document.getElementById("totalPackages"),
+  availableCourierCount: document.getElementById("availableCourierCount"),
+  busyCourierCount: document.getElementById("busyCourierCount"),
+  offlineCourierCount: document.getElementById("offlineCourierCount"),
   selectedRestaurantTitle: document.getElementById("selectedRestaurantTitle"),
   packagePanelTitle: document.getElementById("packagePanelTitle"),
   restaurantStatsBoard: document.getElementById("restaurantStatsBoard"),
+  restaurantForm: document.getElementById("restaurantForm"),
+  restaurantZone: document.getElementById("restaurantZone"),
+  platformChecks: document.getElementById("platformChecks"),
   courierForm: document.getElementById("courierForm"),
   courierZone: document.getElementById("courierZone"),
   courierList: document.getElementById("courierList"),
   zoneBoard: document.getElementById("zoneBoard"),
   packageList: document.getElementById("packageList"),
+  awaitingPackageList: document.getElementById("awaitingPackageList"),
+  activeCourierOpsList: document.getElementById("activeCourierOpsList"),
   webhookLogList: document.getElementById("webhookLogList"),
   auditLogList: document.getElementById("auditLogList"),
+  courierDailyReportList: document.getElementById("courierDailyReportList"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
   template: document.getElementById("adminPackageTemplate"),
@@ -33,6 +45,45 @@ const adminRefs = {
 
 function adminHeaders() {
   return authHeaders(adminState.token);
+}
+
+function persistAdminAuth(auth) {
+  adminState.token = auth.token;
+  adminState.refreshToken = auth.refreshToken;
+  localStorage.setItem(ADMIN_TOKEN_KEY, auth.token);
+  localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, auth.refreshToken);
+}
+
+function clearAdminAuth() {
+  adminState.token = "";
+  adminState.refreshToken = "";
+  adminState.data = null;
+  adminState.selectedRestaurantId = "";
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
+  localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+}
+
+async function refreshAdminAccess() {
+  if (!adminState.refreshToken) {
+    throw new Error("Admin refresh token bulunamadi.");
+  }
+
+  const auth = await api("/api/admin/refresh", {
+    method: "POST",
+    body: JSON.stringify({
+      refreshToken: adminState.refreshToken,
+    }),
+  });
+  persistAdminAuth(auth);
+}
+
+function renderPlatformChecks() {
+  adminRefs.platformChecks.innerHTML = PLATFORM_OPTIONS.map((platform) => `
+    <label class="chip-option">
+      <input type="checkbox" name="platforms" value="${platform}">
+      <span>${platform}</span>
+    </label>
+  `).join("");
 }
 
 function setAdminLoggedIn(isLoggedIn) {
@@ -57,18 +108,23 @@ async function loadAdminState() {
 
   const data = await api(bootstrapPath(), {
     headers: adminHeaders(),
+    retryWithRefresh: refreshAdminAccess,
   });
   hydrateAdmin(data);
 }
 
 function renderAdminStats(stats) {
-  adminRefs.activeCouriers.textContent = stats.activeCouriers;
+  const couriers = adminState.data?.couriers || [];
+  adminRefs.activeCouriers.textContent = adminState.data?.packages?.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length || 0;
   adminRefs.waitingPackages.textContent = stats.waitingPackages;
   adminRefs.inTransitPackages.textContent = stats.inTransitPackages;
-  adminRefs.totalPackages.textContent = stats.totalPackages;
+  adminRefs.totalPackages.textContent = stats.assignedPackages;
+  adminRefs.availableCourierCount.textContent = couriers.filter((courier) => courier.status === "online").length;
+  adminRefs.busyCourierCount.textContent = couriers.filter((courier) => courier.status === "busy").length;
+  adminRefs.offlineCourierCount.textContent = couriers.filter((courier) => courier.status === "offline").length;
   const focusLabel = adminState.selectedRestaurantId ? "Secili restoran filtresi aktif." : "Tum restoranlar gorunuyor.";
   adminRefs.summary.textContent =
-    `${stats.assignedPackages} paket otomatik atandi. ${stats.waitingPackages} paket hala uygun kurye bekliyor. ${focusLabel}`;
+    `${stats.totalPackages} siparis, ${stats.assignedPackages} aktif atama, ${stats.waitingPackages} bekleyen. ${focusLabel}`;
 }
 
 function renderRestaurantFilter(restaurants) {
@@ -88,7 +144,7 @@ function renderRestaurantStats(restaurants, stats, packages) {
   adminRefs.packagePanelTitle.textContent = panelTitle;
 
   const deliveredCount = packages.filter((pkg) => pkg.status === "delivered").length;
-  const assignedCount = packages.filter((pkg) => pkg.status === "assigned").length;
+  const assignedCount = packages.filter((pkg) => pkg.status === "assigned" || pkg.status === "accepted_by_courier" || pkg.status === "on_route").length;
   const cards = [
     {
       label: "Restoran",
@@ -153,7 +209,7 @@ function renderAdminCouriers(couriers) {
           <p>${courier.activeLoad} aktif paket - ${courier.available ? "Atamaya acik" : "Pasif"}</p>
           <p>${motionLabel} - Son sinyal ${liveLabel}</p>
         </div>
-        <span class="soft-badge">${courier.available ? "Aktif Kurye" : "Pasif Kurye"}</span>
+        <span class="soft-badge">${courierStatusLabel(courier.status)}</span>
       </div>
     `;
 
@@ -169,6 +225,7 @@ function renderAdminCouriers(couriers) {
         method: "PATCH",
         headers: adminHeaders(),
         body: JSON.stringify({ available: !courier.available }),
+        retryWithRefresh: refreshAdminAccess,
       });
       hydrateAdmin(data);
     });
@@ -227,9 +284,10 @@ function buildPackageCard(pkg) {
   node.querySelector(".restaurant-name").textContent = pkg.restaurantName;
   node.querySelector(".courier-name").textContent = pkg.assignedCourierName || "Kurye bekleniyor";
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
-  node.querySelector(".payment-method").textContent = pkg.paymentMethod;
-  node.querySelector(".assignment-note").textContent = pkg.assignmentReason;
-  node.querySelector(".note-text").textContent = `${pkg.zone} - ${pkg.address}${pkg.note ? ` - ${pkg.note}` : ""}`;
+  node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
+  node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
+  node.querySelector(".assignment-note").textContent = `${pkg.assignmentReason}${pkg.lastAssignmentError ? ` - Son Hata: ${pkg.lastAssignmentError}` : ""}`;
+  node.querySelector(".note-text").textContent = `${pkg.zone} - ${pkg.address}${pkg.note ? ` - ${pkg.note}` : ""}${pkg.assignedAt ? ` - Atama ${formatDate(pkg.assignedAt)}` : ""}`;
 
   badge.textContent = statusLabel(pkg.status);
   badge.className = `status-badge ${statusClassName(pkg.status)}`;
@@ -241,6 +299,7 @@ function buildPackageCard(pkg) {
       method: "PATCH",
       headers: adminHeaders(),
       body: JSON.stringify({ status: event.target.value }),
+      retryWithRefresh: refreshAdminAccess,
     });
     hydrateAdmin(data);
   });
@@ -250,9 +309,59 @@ function buildPackageCard(pkg) {
       method: "POST",
       headers: adminHeaders(),
       body: "{}",
+      retryWithRefresh: refreshAdminAccess,
     });
     hydrateAdmin(data);
   });
+
+  const actions = node.querySelector(".card-actions");
+  const courierSelect = document.createElement("select");
+  courierSelect.className = "status-select";
+  courierSelect.innerHTML = ['<option value="">Kurye sec</option>']
+    .concat((adminState.data?.couriers || [])
+      .filter((courier) =>
+        courier.zone === pkg.zone &&
+        courier.status === "online" &&
+        courier.available &&
+        Number(courier.activeLoad || 0) < 1
+      )
+      .map((courier) => `<option value="${courier.id}">${courier.name} - ${courierStatusLabel(courier.status)}</option>`))
+    .join("");
+
+  const overrideButton = document.createElement("button");
+  overrideButton.type = "button";
+  overrideButton.className = "ghost-btn";
+  overrideButton.textContent = "Kuriyeye Ata";
+  overrideButton.addEventListener("click", async () => {
+    if (!courierSelect.value) {
+      return;
+    }
+    const data = await api(`/api/admin/packages/${pkg.id}/override`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ courierId: courierSelect.value }),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    hydrateAdmin(data);
+  });
+
+  const unassignButton = document.createElement("button");
+  unassignButton.type = "button";
+  unassignButton.className = "ghost-btn";
+  unassignButton.textContent = "Atamayi Kaldir";
+  unassignButton.addEventListener("click", async () => {
+    const data = await api(`/api/admin/packages/${pkg.id}/unassign`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: "{}",
+      retryWithRefresh: refreshAdminAccess,
+    });
+    hydrateAdmin(data);
+  });
+
+  actions.appendChild(courierSelect);
+  actions.appendChild(overrideButton);
+  actions.appendChild(unassignButton);
 
   return node;
 }
@@ -269,6 +378,59 @@ function renderAdminPackages(packages) {
   const fragment = document.createDocumentFragment();
   visible.forEach((pkg) => fragment.appendChild(buildPackageCard(pkg)));
   adminRefs.packageList.appendChild(fragment);
+}
+
+function renderAwaitingPackages(packages) {
+  adminRefs.awaitingPackageList.innerHTML = "";
+  const waiting = packages.filter((pkg) => pkg.status === "pending" || pkg.status === "awaiting_assignment");
+
+  if (waiting.length === 0) {
+    adminRefs.awaitingPackageList.innerHTML = '<div class="empty-state">Atama bekleyen siparis yok.</div>';
+    return;
+  }
+
+  waiting.forEach((pkg) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${pkg.trackingNo} - ${pkg.restaurantName}</strong>
+          <p>${pkg.recipient} - ${pkg.deliveryAddress || pkg.address}</p>
+          <p>Son deneme: ${pkg.lastAssignmentAttemptAt ? formatDate(pkg.lastAssignmentAttemptAt) : "-"}</p>
+          <p>Hata: ${pkg.lastAssignmentError || "-"}</p>
+        </div>
+        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+      </div>
+    `;
+    adminRefs.awaitingPackageList.appendChild(card);
+  });
+}
+
+function renderActiveCourierOps(couriers) {
+  adminRefs.activeCourierOpsList.innerHTML = "";
+  const list = couriers.filter((courier) => courier.status === "online" || courier.status === "busy");
+
+  if (list.length === 0) {
+    adminRefs.activeCourierOpsList.innerHTML = '<div class="empty-state">Aktif veya musait kurye yok.</div>';
+    return;
+  }
+
+  list.forEach((courier) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${courier.name}</strong>
+          <p>@${courier.username} - ${courier.zone}</p>
+          <p>${courier.activeLoad} aktif is - Son sinyal ${courier.lastLocationAt ? formatTimeAgo(courier.lastLocationAt) : "yok"}</p>
+        </div>
+        <span class="soft-badge">${courierStatusLabel(courier.status)}</span>
+      </div>
+    `;
+    adminRefs.activeCourierOpsList.appendChild(card);
+  });
 }
 
 function renderWebhookLogs(logs) {
@@ -321,18 +483,61 @@ function renderAuditLogs(logs) {
   });
 }
 
+function renderCourierDailyReports(reports) {
+  adminRefs.courierDailyReportList.innerHTML = "";
+
+  if (!reports || reports.length === 0) {
+    adminRefs.courierDailyReportList.innerHTML = '<div class="empty-state">Henuz kurye gun sonu raporu yok.</div>';
+    return;
+  }
+
+  reports.slice(0, 20).forEach((report) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${report.courierName} - ${report.reportDate}</strong>
+          <p>${report.zone} bolgesi - ${report.deliveredCount} teslimat</p>
+          <p>Toplam Ciro: ${formatCurrency(report.totalAmount)}</p>
+        </div>
+        <span class="soft-badge">${formatDate(report.updatedAt)}</span>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Online Odeme</span>
+          <strong>${formatCurrency(report.paidOnlineAmount)}</strong>
+        </div>
+        <div>
+          <span>Nakit</span>
+          <strong>${formatCurrency(report.cashCollectedAmount)}</strong>
+        </div>
+        <div>
+          <span>Paket</span>
+          <strong>${report.packageIds.length} kayit</strong>
+        </div>
+      </div>
+    `;
+    adminRefs.courierDailyReportList.appendChild(card);
+  });
+}
+
 function hydrateAdmin(data) {
   adminState.data = data;
   setAdminLoggedIn(true);
   renderAdminStats(data.stats);
   setZoneOptions(adminRefs.courierZone, data.zones);
+  setZoneOptions(adminRefs.restaurantZone, data.zones);
   renderRestaurantFilter(data.restaurants);
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
   renderZoneBoard(data.zones);
   renderAdminPackages(data.packages);
+  renderAwaitingPackages(data.packages);
+  renderActiveCourierOps(data.couriers);
   renderWebhookLogs(data.webhookLogs);
   renderAuditLogs(data.auditLogs || []);
+  renderCourierDailyReports(data.courierDailyReports || []);
 }
 
 adminRefs.loginForm.addEventListener("submit", async (event) => {
@@ -345,8 +550,7 @@ adminRefs.loginForm.addEventListener("submit", async (event) => {
       password: formData.get("password"),
     }),
   });
-  adminState.token = login.token;
-  localStorage.setItem(ADMIN_TOKEN_KEY, login.token);
+  persistAdminAuth(login);
   adminRefs.loginForm.reset();
   await loadAdminState();
 });
@@ -363,13 +567,39 @@ adminRefs.courierForm.addEventListener("submit", async (event) => {
     longitude: formData.get("longitude"),
     available: formData.get("available") === "on",
   };
-  const data = await api("/api/admin/couriers", {
+  await api("/api/admin/couriers", {
     method: "POST",
     headers: adminHeaders(),
     body: JSON.stringify(payload),
+    retryWithRefresh: refreshAdminAccess,
   });
   adminRefs.courierForm.reset();
+  await loadAdminState();
+  showToast(`${payload.name} isimli kurye basariyla kaydedildi.`);
+});
+
+adminRefs.restaurantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.restaurantForm);
+  const payload = {
+    name: formData.get("name"),
+    portalUsername: formData.get("portalUsername"),
+    portalPassword: formData.get("portalPassword"),
+    zone: formData.get("zone"),
+    latitude: formData.get("latitude"),
+    longitude: formData.get("longitude"),
+    platforms: formData.getAll("platforms"),
+  };
+  const data = await api("/api/admin/restaurants", {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify(payload),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  adminRefs.restaurantForm.reset();
+  renderPlatformChecks();
   hydrateAdmin(data);
+  showToast(`${payload.name} restorani basariyla kaydedildi.`);
 });
 
 adminRefs.searchInput.addEventListener("input", () => {
@@ -383,7 +613,24 @@ adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   await loadAdminState();
 });
 
+adminRefs.logoutButton?.addEventListener("click", () => {
+  if (adminState.refreshToken) {
+    api("/api/admin/logout", {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({ refreshToken: adminState.refreshToken }),
+    }).catch(() => {
+      // Local cleanup should still continue.
+    });
+  }
+
+  clearAdminAuth();
+  adminRefs.summary.textContent = "Admin oturumu kapatildi.";
+  setAdminLoggedIn(false);
+});
+
 loadAdminState().catch((error) => {
+  clearAdminAuth();
   adminRefs.summary.textContent = error.message;
   setAdminLoggedIn(false);
 });
@@ -393,3 +640,5 @@ setInterval(() => {
     // Keep current screen if a refresh request fails.
   });
 }, ADMIN_REFRESH_MS);
+
+renderPlatformChecks();

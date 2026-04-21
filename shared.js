@@ -13,35 +13,62 @@ const PAYMENT_OPTIONS = [
   "Yemek Karti",
 ];
 const STATUS_LABELS = {
-  waiting: "Havuzda Bekliyor",
+  pending: "Hazirlaniyor",
+  awaiting_assignment: "Atama Bekliyor",
   assigned: "Kuryeye Atandi",
-  picked_up: "Kurye Aldi",
+  accepted_by_courier: "Kurye Kabul Etti",
+  on_route: "Yolda",
   delivered: "Teslim Edildi",
+  failed: "Basarisiz",
   cancelled: "Iptal Edildi",
 };
-const STATUS_OPTIONS = ["waiting", "assigned", "picked_up", "delivered", "cancelled"];
+const STATUS_OPTIONS = ["pending", "awaiting_assignment", "assigned", "accepted_by_courier", "on_route", "delivered", "failed", "cancelled"];
+const PAYMENT_STATUS_LABELS = {
+  unpaid: "Odeme Bekliyor",
+  paid_online: "Online Odendi",
+  cash_expected: "Nakit Bekleniyor",
+  cash_collected: "Nakit Alindi",
+  payment_issue: "Odeme Sorunu",
+};
+const COURIER_STATUS_LABELS = {
+  offline: "Offline",
+  online: "Online",
+  busy: "Mesgul",
+};
+let toastHost = null;
 
 async function api(path, options = {}) {
-  const mergedHeaders = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
+  async function runRequest() {
+    const mergedHeaders = {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    };
 
-  const response = await fetch(path, {
-    ...options,
-    headers: mergedHeaders,
-  });
+    const response = await fetch(path, {
+      ...options,
+      headers: mergedHeaders,
+    });
 
-  const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : { error: await response.text() };
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json()
+      : { error: await response.text() };
 
-  if (!response.ok) {
-    throw new Error(data.error || "Bir hata olustu.");
+    return { response, data };
   }
 
-  return data;
+  let result = await runRequest();
+
+  if (result.response.status === 401 && typeof options.retryWithRefresh === "function") {
+    await options.retryWithRefresh();
+    result = await runRequest();
+  }
+
+  if (!result.response.ok) {
+    throw new Error(result.data.error || "Bir hata olustu.");
+  }
+
+  return result.data;
 }
 
 function formatDate(value) {
@@ -51,6 +78,14 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("tr-TR", {
+    style: "currency",
+    currency: "TRY",
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 function formatTimeAgo(value) {
@@ -90,6 +125,14 @@ function statusLabel(status) {
   return STATUS_LABELS[status] || status;
 }
 
+function paymentStatusLabel(status) {
+  return PAYMENT_STATUS_LABELS[status] || status || "-";
+}
+
+function courierStatusLabel(status) {
+  return COURIER_STATUS_LABELS[status] || status || "-";
+}
+
 function createStatusOptions(selected = "", allowedOptions = STATUS_OPTIONS) {
   return allowedOptions.map((status) =>
     `<option value="${status}"${status === selected ? " selected" : ""}>${statusLabel(status)}</option>`
@@ -118,4 +161,38 @@ function authHeaders(token) {
   return {
     Authorization: `Bearer ${token}`,
   };
+}
+
+function ensureToastHost() {
+  if (toastHost && document.body.contains(toastHost)) {
+    return toastHost;
+  }
+
+  toastHost = document.createElement("div");
+  toastHost.className = "toast-host";
+  document.body.appendChild(toastHost);
+  return toastHost;
+}
+
+function showToast(message, tone = "success") {
+  if (!message) {
+    return;
+  }
+
+  const host = ensureToastHost();
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${tone}`;
+  toast.textContent = message;
+  host.appendChild(toast);
+
+  window.setTimeout(() => {
+    toast.classList.add("toast-visible");
+  }, 10);
+
+  window.setTimeout(() => {
+    toast.classList.remove("toast-visible");
+    window.setTimeout(() => {
+      toast.remove();
+    }, 220);
+  }, 2600);
 }

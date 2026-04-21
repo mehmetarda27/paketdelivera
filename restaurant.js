@@ -1,24 +1,28 @@
 const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
+const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
 
 const restaurantState = {
   data: null,
   token: localStorage.getItem(RESTAURANT_TOKEN_KEY) || "",
+  refreshToken: localStorage.getItem(RESTAURANT_REFRESH_TOKEN_KEY) || "",
   selectedRestaurantId: "",
+  historyRange: "7d",
+  historyVisibleCount: 50,
 };
 
 const restaurantRefs = {
   summary: document.getElementById("restaurantSummary"),
   accessForm: document.getElementById("restaurantAccessForm"),
-  restaurantForm: document.getElementById("restaurantForm"),
+  logoutButton: document.getElementById("restaurantLogoutButton"),
+  createSection: document.getElementById("restaurantCreateSection"),
+  workspace: document.getElementById("restaurantWorkspace"),
   platformAccountForm: document.getElementById("platformAccountForm"),
   packageForm: document.getElementById("packageForm"),
   packageRestaurantId: document.getElementById("packageRestaurantId"),
-  restaurantZone: document.getElementById("restaurantZone"),
   platformSelect: document.getElementById("platformSelect"),
   restaurantList: document.getElementById("restaurantList"),
   platformAccountList: document.getElementById("platformAccountList"),
   recentOrders: document.getElementById("recentOrders"),
-  platformChecks: document.getElementById("platformChecks"),
   integrationEndpoint: document.getElementById("integrationEndpoint"),
   integrationRestaurant: document.getElementById("integrationRestaurant"),
   integrationApiKey: document.getElementById("integrationApiKey"),
@@ -29,6 +33,15 @@ const restaurantRefs = {
   platformSetupAuth: document.getElementById("platformSetupAuth"),
   platformSetupStore: document.getElementById("platformSetupStore"),
   platformSetupHint: document.getElementById("platformSetupHint"),
+  totalPackages: document.getElementById("restaurantTotalPackages"),
+  waitingPackages: document.getElementById("restaurantWaitingPackages"),
+  inTransitPackages: document.getElementById("restaurantInTransitPackages"),
+  activeCouriers: document.getElementById("restaurantActiveCouriers"),
+  activeOrders: document.getElementById("activeOrders"),
+  orderHistory: document.getElementById("orderHistory"),
+  historyMeta: document.getElementById("restaurantHistoryMeta"),
+  historyMore: document.getElementById("restaurantHistoryMore"),
+  historyFilters: document.getElementById("restaurantHistoryFilters"),
   samplePayload: document.getElementById("samplePayload"),
   samplePaymentMethod: document.getElementById("samplePaymentMethod"),
 };
@@ -37,7 +50,46 @@ function restaurantAuthHeaders() {
   return authHeaders(restaurantState.token);
 }
 
+function persistRestaurantAuth(auth) {
+  restaurantState.token = auth.token;
+  restaurantState.refreshToken = auth.refreshToken;
+  localStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
+  localStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
+}
+
+function clearRestaurantAuth() {
+  restaurantState.token = "";
+  restaurantState.refreshToken = "";
+  restaurantState.data = null;
+  restaurantState.selectedRestaurantId = "";
+  localStorage.removeItem(RESTAURANT_TOKEN_KEY);
+  localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
+}
+
+async function refreshRestaurantAccess() {
+  if (!restaurantState.refreshToken) {
+    throw new Error("Restoran refresh token bulunamadi.");
+  }
+
+  const auth = await api("/api/restaurant/refresh", {
+    method: "POST",
+    body: JSON.stringify({
+      refreshToken: restaurantState.refreshToken,
+    }),
+  });
+  persistRestaurantAuth(auth);
+}
+
+function setRestaurantWorkspaceVisible(isVisible) {
+  restaurantRefs.createSection.classList.toggle("hidden", isVisible);
+  restaurantRefs.workspace.classList.toggle("hidden", !isVisible);
+  restaurantRefs.logoutButton.classList.toggle("hidden", !isVisible);
+}
+
 function renderPlatformChecks() {
+  if (!restaurantRefs.platformChecks) {
+    return;
+  }
   restaurantRefs.platformChecks.innerHTML = PLATFORM_OPTIONS.map((platform) => `
     <label class="chip-option">
       <input type="checkbox" name="platforms" value="${platform}">
@@ -52,6 +104,45 @@ function getCurrentRestaurant(data) {
 
 function getCurrentPlatformAccount(data) {
   return data.platformAccounts?.[0] || null;
+}
+
+function activeOrderPackages(packages) {
+  return packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+}
+
+function courierMap(data) {
+  return new Map((data.couriers || []).map((courier) => [courier.id, courier]));
+}
+
+function historyDateForPackage(pkg) {
+  return new Date(pkg.updatedAt || pkg.deliveredAt || pkg.failedAt || pkg.createdAt);
+}
+
+function packageMatchesHistoryRange(pkg, range) {
+  const targetDate = historyDateForPackage(pkg);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const sevenDayStart = new Date(todayStart);
+  sevenDayStart.setDate(sevenDayStart.getDate() - 6);
+  const thirtyDayStart = new Date(todayStart);
+  thirtyDayStart.setDate(thirtyDayStart.getDate() - 29);
+
+  if (range === "today") {
+    return targetDate >= todayStart;
+  }
+  if (range === "yesterday") {
+    return targetDate >= yesterdayStart && targetDate < todayStart;
+  }
+  if (range === "30d") {
+    return targetDate >= thirtyDayStart;
+  }
+  if (range === "all") {
+    return true;
+  }
+
+  return targetDate >= sevenDayStart;
 }
 
 function setIntegrationInfo(data, explicitIntegration = null) {
@@ -131,11 +222,7 @@ function setPlatformSetup(data) {
   }
 
   restaurantRefs.platformSetupHint.textContent =
-    account.platform === "Trendyol Go"
-      ? "Trendyol panelinde webhook URL ve auth bilgisini gir. Resmi dokumana uygun API key veya basic auth kullanabilirsin."
-      : account.platform === "Yemeksepeti"
-        ? "Yemeksepeti Partner Portal tarafinda webhook URL ve secret/basic auth tanimi yapilabilir."
-        : "Platform panelinde bu webhook URL ve auth bilgisi tanimlandiginda siparisler otomatik akar.";
+    `${account.verificationStatus === "verified" ? "Merchant dogrulamasi tamamlandi." : account.verificationStatus === "failed" ? "Merchant credential kontrolu basarisiz." : "Merchant credential kontrolu beklemede."} ${account.verificationNote || ""}`;
 }
 
 function renderRestaurantList(restaurants) {
@@ -179,6 +266,11 @@ function renderPlatformAccounts(accounts) {
       : account.webhookAuthType === "static_token"
         ? "Static Token"
         : "API Key";
+    const verificationText = account.verificationStatus === "verified"
+      ? "Merchant verified"
+      : account.verificationStatus === "failed"
+        ? "Merchant verify failed"
+        : "Merchant verify pending";
     card.innerHTML = `
       <div class="stack-top">
         <div>
@@ -186,6 +278,7 @@ function renderPlatformAccounts(accounts) {
           <p>Store/Vendor: ${account.externalStoreId}</p>
           <p>Webhook: /api/platforms/${account.platformSlug}/webhook</p>
           <p>Yetki: ${authText}</p>
+          <p>${verificationText}${account.verificationNote ? ` - ${account.verificationNote}` : ""}</p>
         </div>
         <span class="soft-badge">${account.active ? "Canli" : "Pasif"}</span>
       </div>
@@ -199,47 +292,216 @@ function renderRecentOrders(packages) {
   const list = packages.slice(0, 8);
 
   if (list.length === 0) {
-    restaurantRefs.recentOrders.innerHTML = '<div class="empty-state">Bu restorana ait otomatik gelen siparis yok.</div>';
+    restaurantRefs.recentOrders.innerHTML = '<div class="empty-state">Bu restorana ait aktif siparis veya manuel paket yok.</div>';
     return;
   }
 
   list.forEach((pkg) => {
     const card = document.createElement("article");
-    card.className = "stack-card";
+    card.className = "stack-card order-summary-card";
     card.innerHTML = `
       <div class="stack-top">
         <div>
           <strong>${pkg.packageType || "Standart Paket"} - ${pkg.externalOrderNo}</strong>
           <p>${pkg.restaurantName} - ${pkg.recipient}</p>
-          <p>${pkg.deliveryAddress || pkg.address}</p>
-          <p>${pkg.assignedCourierName || "Kurye bekleniyor"} - ${statusLabel(pkg.status)}</p>
+          <p>Kaynak: ${pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform}</p>
         </div>
-        <span class="soft-badge">${formatDate(pkg.createdAt)}</span>
+        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Adres</span>
+          <strong>${pkg.deliveryAddress || pkg.address}</strong>
+        </div>
+        <div>
+          <span>Kurye</span>
+          <strong>${pkg.assignedCourierName || "Kurye bekleniyor"}</strong>
+        </div>
+        <div>
+          <span>Odeme</span>
+          <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+        </div>
+        <div>
+          <span>Zaman</span>
+          <strong>${formatDate(pkg.createdAt)}</strong>
+        </div>
       </div>
     `;
     restaurantRefs.recentOrders.appendChild(card);
   });
 }
 
+function renderActiveOrders(data) {
+  restaurantRefs.activeOrders.innerHTML = "";
+  const packageList = [...data.packages].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+  const courierById = courierMap(data);
+
+  if (packageList.length === 0) {
+    restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya webhook siparisi geldiginde burada gorunecek.</div>';
+    return;
+  }
+
+  packageList.forEach((pkg) => {
+    const courier = pkg.assignedCourierId ? courierById.get(pkg.assignedCourierId) : null;
+    const sourceLabel = pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform;
+    const assignmentBadge = pkg.assignedCourierId ? "Kurye Atandi" : "Atama Bekliyor";
+    const assignmentTone = pkg.assignedCourierId ? "soft-badge" : "soft-badge status-awaiting-assignment";
+
+    const card = document.createElement("article");
+    card.className = "stack-card order-summary-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
+          <p>Kaynak: ${sourceLabel} - Musteri: ${pkg.recipient}</p>
+          <p>Olusturulma: ${formatDate(pkg.createdAt)}</p>
+        </div>
+        <div class="badge-row">
+          <span class="${assignmentTone}">${assignmentBadge}</span>
+          <span class="soft-badge">${statusLabel(pkg.status)}</span>
+          <span class="soft-badge">${paymentStatusLabel(pkg.paymentStatus)}</span>
+        </div>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Paket ID</span>
+          <strong>${pkg.id}</strong>
+        </div>
+        <div>
+          <span>Adres</span>
+          <strong>${pkg.deliveryAddress || pkg.address}</strong>
+        </div>
+        <div>
+          <span>Not</span>
+          <strong>${pkg.note || "-"}</strong>
+        </div>
+        <div>
+          <span>Odeme</span>
+          <strong>${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+        </div>
+        <div>
+          <span>Kurye</span>
+          <strong>${pkg.assignedCourierName || "Henuz atanmadı"}</strong>
+        </div>
+        <div>
+          <span>Kurye Durumu</span>
+          <strong>${courier ? courierStatusLabel(courier.status) : "-"}</strong>
+        </div>
+        <div>
+          <span>Kurye Telefon</span>
+          <strong>-</strong>
+        </div>
+        <div>
+          <span>Atama Zamani</span>
+          <strong>${pkg.assignedAt ? formatDate(pkg.assignedAt) : "-"}</strong>
+        </div>
+      </div>
+      ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
+    `;
+    restaurantRefs.activeOrders.appendChild(card);
+  });
+}
+
+function renderOrderHistory(packages) {
+  restaurantRefs.orderHistory.innerHTML = "";
+  const filteredHistory = [...packages]
+    .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
+    .filter((pkg) => packageMatchesHistoryRange(pkg, restaurantState.historyRange))
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
+  const list = filteredHistory.slice(0, restaurantState.historyVisibleCount);
+
+  restaurantRefs.historyMeta.textContent = `${filteredHistory.length} kapanan siparis icinden ${list.length} kayit gorunuyor.`;
+  restaurantRefs.historyMore.classList.toggle("hidden", list.length >= filteredHistory.length);
+  [...restaurantRefs.historyFilters.querySelectorAll("[data-range]")].forEach((button) => {
+    button.classList.toggle("active", button.dataset.range === restaurantState.historyRange);
+  });
+
+  if (list.length === 0) {
+    restaurantRefs.orderHistory.innerHTML = '<div class="empty-state">Dun veya onceki gunlerden kapanan siparis kaydi henuz yok.</div>';
+    return;
+  }
+
+  list.forEach((pkg) => {
+    const card = document.createElement("article");
+    card.className = "stack-card order-summary-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
+          <p>${pkg.packageType || "Standart Paket"} - ${pkg.deliveryAddress || pkg.address}</p>
+          <p>Guncelleme: ${formatDate(pkg.updatedAt || pkg.createdAt)}</p>
+        </div>
+        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Kaynak</span>
+          <strong>${pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform}</strong>
+        </div>
+        <div>
+          <span>Kurye</span>
+          <strong>${pkg.assignedCourierName || "Atama yok"}</strong>
+        </div>
+        <div>
+          <span>Odeme</span>
+          <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+        </div>
+      </div>
+    `;
+    restaurantRefs.orderHistory.appendChild(card);
+  });
+}
+
 function hydrateRestaurant(data, explicitIntegration = null) {
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
+  const activePackages = activeOrderPackages(data.packages || []);
+  const awaitingPackages = activePackages.filter((pkg) => pkg.status === "pending" || pkg.status === "awaiting_assignment");
+  const inTransitPackages = activePackages.filter((pkg) => pkg.status === "accepted_by_courier" || pkg.status === "on_route");
+  const activeCourierIds = [...new Set(activePackages.filter((pkg) => pkg.assignedCourierId).map((pkg) => pkg.assignedCourierId))];
 
   if (data.restaurants.length === 0) {
+    setRestaurantWorkspaceVisible(false);
     restaurantRefs.summary.textContent = "Restoran oturumu acik degil. Yeni restoran olusturabilir veya mevcut restoranla giris yapabilirsin.";
     restaurantRefs.packageRestaurantId.value = "";
   } else {
+    setRestaurantWorkspaceVisible(true);
     restaurantRefs.summary.textContent =
-      `${data.restaurants[0].name} icin ${data.stats.totalPackages} siparis gorunuyor. Bu panel yalnizca bu restoranin verilerini gosterir.`;
+      `${data.restaurants[0].name} icin ${data.packages.length} siparis gorunuyor. Bu panel yalnizca bu restoranin verilerini gosterir.`;
   }
 
-  setZoneOptions(restaurantRefs.restaurantZone, data.zones);
+  restaurantRefs.totalPackages.textContent = activePackages.length;
+  restaurantRefs.waitingPackages.textContent = awaitingPackages.length;
+  restaurantRefs.inTransitPackages.textContent = inTransitPackages.length;
+  restaurantRefs.activeCouriers.textContent = activeCourierIds.length;
+
   renderRestaurantList(data.restaurants);
   renderPlatformAccounts(data.platformAccounts || []);
   renderRecentOrders(data.packages);
+  renderActiveOrders(data);
+  renderOrderHistory(data.packages);
   setIntegrationInfo(data, explicitIntegration);
   setPlatformSetup(data);
 }
+
+restaurantRefs.historyFilters?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-range]");
+  if (!button) {
+    return;
+  }
+  restaurantState.historyRange = button.dataset.range;
+  restaurantState.historyVisibleCount = 50;
+  if (restaurantState.data) {
+    renderOrderHistory(restaurantState.data.packages || []);
+  }
+});
+
+restaurantRefs.historyMore?.addEventListener("click", () => {
+  restaurantState.historyVisibleCount += 50;
+  if (restaurantState.data) {
+    renderOrderHistory(restaurantState.data.packages || []);
+  }
+});
 
 async function loadRestaurantWorkspace() {
   if (!restaurantState.token) {
@@ -266,11 +528,11 @@ async function loadRestaurantWorkspace() {
   try {
     const data = await api("/api/restaurant/bootstrap", {
       headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
     });
     hydrateRestaurant(data);
   } catch (error) {
-    localStorage.removeItem(RESTAURANT_TOKEN_KEY);
-    restaurantState.token = "";
+    clearRestaurantAuth();
     restaurantRefs.summary.textContent = error.message;
   }
 }
@@ -283,48 +545,12 @@ restaurantRefs.accessForm.addEventListener("submit", async (event) => {
     body: JSON.stringify({
       username: formData.get("username"),
       password: formData.get("password"),
-      restaurantId: formData.get("restaurantId"),
-      apiKey: formData.get("apiKey"),
     }),
   });
 
-  restaurantState.token = data.token;
-  localStorage.setItem(RESTAURANT_TOKEN_KEY, data.token);
+  persistRestaurantAuth(data);
   restaurantRefs.accessForm.reset();
   hydrateRestaurant(data.state);
-});
-
-restaurantRefs.restaurantForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const formData = new FormData(restaurantRefs.restaurantForm);
-  const payload = {
-    name: formData.get("name"),
-    portalUsername: formData.get("portalUsername"),
-    portalPassword: formData.get("portalPassword"),
-    zone: formData.get("zone"),
-    latitude: formData.get("latitude"),
-    longitude: formData.get("longitude"),
-    platforms: formData.getAll("platforms"),
-  };
-  const data = await api("/api/restaurants", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-  restaurantRefs.restaurantForm.reset();
-  renderPlatformChecks();
-
-  const session = await api("/api/restaurant/session", {
-    method: "POST",
-    body: JSON.stringify({
-      username: data.integration.portalUsername,
-      password: data.integration.portalPassword,
-    }),
-  });
-
-  restaurantState.token = session.token;
-  localStorage.setItem(RESTAURANT_TOKEN_KEY, session.token);
-  hydrateRestaurant(session.state, data.integration || null);
 });
 
 restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
@@ -340,6 +566,7 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
   const data = await api("/api/restaurant/platform-accounts", {
     method: "POST",
     headers: restaurantAuthHeaders(),
+    retryWithRefresh: refreshRestaurantAccess,
     body: JSON.stringify({
       restaurantId: restaurant.id,
       platform: formData.get("platform"),
@@ -360,6 +587,39 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
   restaurantRefs.platformAccountForm.reset();
   restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
   hydrateRestaurant(data);
+  showToast(`${restaurant.name} icin platform entegrasyonu kaydedildi.`);
+});
+
+restaurantRefs.logoutButton?.addEventListener("click", () => {
+  if (restaurantState.refreshToken) {
+    api("/api/restaurant/logout", {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      body: JSON.stringify({ refreshToken: restaurantState.refreshToken }),
+    }).catch(() => {
+      // Local cleanup should still continue.
+    });
+  }
+  clearRestaurantAuth();
+  restaurantRefs.summary.textContent = "Restoran oturumu kapatildi.";
+  hydrateRestaurant({
+    zones: [],
+    restaurants: [],
+    couriers: [],
+    packages: [],
+    webhookLogs: [],
+    platformAccounts: [],
+    stats: {
+      totalRestaurants: 0,
+      totalCouriers: 0,
+      activeCouriers: 0,
+      totalPackages: 0,
+      waitingPackages: 0,
+      assignedPackages: 0,
+      inTransitPackages: 0,
+      deliveredPackages: 0,
+    },
+  });
 });
 
 restaurantRefs.packageForm.addEventListener("submit", async (event) => {
@@ -370,22 +630,31 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  const currentRestaurant = restaurantState.data?.restaurants?.[0];
+  if (!currentRestaurant) {
+    restaurantRefs.summary.textContent = "Aktif restoran oturumu bulunamadi. Once tekrar giris yap.";
+    return;
+  }
+
   const formData = new FormData(restaurantRefs.packageForm);
   const data = await api("/api/restaurant/packages", {
     method: "POST",
     headers: restaurantAuthHeaders(),
+    retryWithRefresh: refreshRestaurantAccess,
     body: JSON.stringify({
-      restaurantId: formData.get("restaurantId"),
+      restaurantId: currentRestaurant.id,
       deliveryAddress: formData.get("deliveryAddress"),
       packageType: formData.get("packageType"),
+      orderAmount: formData.get("orderAmount"),
     }),
   });
 
   restaurantRefs.packageForm.reset();
   hydrateRestaurant(data);
+  restaurantRefs.summary.textContent = `${currentRestaurant.name} icin manuel paket kaydedildi ve operasyon akisina alindi.`;
+  showToast("Manuel paket basariyla kaydedildi ve operasyon akisina alindi.");
 });
 
-renderPlatformChecks();
 restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
 restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
 restaurantRefs.samplePaymentMethod.addEventListener("change", () => {
@@ -396,7 +665,6 @@ restaurantRefs.samplePaymentMethod.addEventListener("change", () => {
 
 api("/api/bootstrap")
   .then((data) => {
-    setZoneOptions(restaurantRefs.restaurantZone, data.zones);
     return loadRestaurantWorkspace();
   })
   .catch((error) => {

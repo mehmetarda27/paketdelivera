@@ -2,136 +2,194 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#c85b2d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Restoran Paneli - Delivera Express</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="theme-restaurant">
-  <div class="role-shell">
-    <aside class="role-sidebar">
-      <div class="brand-mark">Delivera Express</div>
-      <p class="eyebrow accent-coral">Restoran Workspace</p>
-      <h1>Platformlardan gelen siparisler otomatik iceri aksin, sistem Mersin'de direkt kuriyeye dussun.</h1>
-      <p class="sidebar-copy">
-        Bu ekran restoranin entegrasyon merkezi. Amac manuel paket girmek degil; API key ve siparis webhook akisini yonetmek.
-      </p>
-      <div class="sidebar-metric">
-        <span>Entegrasyon Durumu</span>
-        <strong id="restaurantSummary">Veriler yukleniyor...</strong>
-      </div>
-      <div class="panel-badge">Restaurant Portal</div>
-    </aside>
-
-    <main class="role-main">
+  <div class="role-shell wide-shell">
+    <main class="role-main expanded-main">
+      <section class="topbar glass-panel workspace-hero">
+        <div>
+          <div class="brand-mark">Delivera Express</div>
+          <p class="eyebrow accent-coral">Restoran Paneli</p>
+          <h2>Siparisleri, aktif paketleri ve entegrasyonlari tek ekranda yonet.</h2>
+          <p class="sidebar-copy">Manuel paket, platform siparisi, aktif dagitim ve gecmis siparis kayitlari ayni panelde restoran bazli gorunur.</p>
+        </div>
+        <div class="hero-summary-card">
+          <span>Restoran Ozeti</span>
+          <strong id="restaurantSummary">Veriler yukleniyor...</strong>
+        </div>
+      </section>
       <section class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-coral">Order Ingestion</p>
           <h2>Trendyol Go, GetirYemek, Yemeksepeti ve Migros Yemek siparislerini API ile otomatik al.</h2>
+          <p class="sidebar-copy">Restoran paneline portal kullanici adi ve sifre ile girilir. API key ve webhook bilgileri insan girisi icin degil, platform entegrasyonu icindir.</p>
         </div>
         <form id="restaurantAccessForm" class="login-form">
           <label>
             Kullanici Adi
-            <input name="username" type="text" placeholder="burgerstation101">
+            <input name="username" type="text" placeholder="burgerstation101" autocomplete="username" required>
           </label>
           <label>
             Sifre
-            <input name="password" type="password" placeholder="Rest1234!">
-          </label>
-          <label>
-            Restoran ID
-            <input name="restaurantId" type="text" placeholder="rst_xxxxxxxx">
-          </label>
-          <label>
-            API Key
-            <input name="apiKey" type="password" placeholder="delv_...">
+            <input name="password" type="password" placeholder="Rest1234!" autocomplete="current-password" required>
           </label>
           <button class="ghost-btn" type="submit">Restoran Girisi</button>
+          <button id="restaurantLogoutButton" class="ghost-btn hidden" type="button">Cikis Yap</button>
         </form>
       </section>
 
-      <section class="dashboard-grid">
+      <section id="restaurantCreateSection" class="dashboard-grid hidden">
         <article class="glass-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-coral">Restoran Kaydi</p>
-              <h3>Restoran ve Kanal Tanimla</h3>
+              <p class="eyebrow accent-coral">Yetki Bilgisi</p>
+              <h3>Restoran Hesabi Admin Tarafindan Acilir</h3>
             </div>
           </div>
-          <form id="restaurantForm" class="form-grid">
+          <div class="stack-list">
+            <article class="stack-card">
+              <strong>Bu panel sadece login sonrasi kullanilir.</strong>
+              <p>Yeni restoran hesabi acma, portal sifresi verme ve ilk entegrasyon kurulumu admin panelinden yapilir.</p>
+            </article>
+          </div>
+        </article>
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Baslangic Rehberi</p>
+              <h3>Temiz Kurulum Akisi</h3>
+            </div>
+          </div>
+          <div class="stack-list">
+            <article class="stack-card">
+              <strong>1. Admin Hesabi Restorani Acar</strong>
+              <p>Restoran adi, bolge, portal kullanici ve sifre admin panelinden tanimlanir.</p>
+            </article>
+            <article class="stack-card">
+              <strong>2. Restoran Buradan Giris Yapar</strong>
+              <p>Restoran kendi portal kullanici adi ve sifresi ile oturum acar.</p>
+            </article>
+            <article class="stack-card">
+              <strong>3. Sonrasi Sadece Operasyon</strong>
+              <p>Platform baglanti, webhook bilgi goruntuleme ve paket takibi bu panelden devam eder.</p>
+            </article>
+          </div>
+        </article>
+      </section>
+
+      <section id="restaurantWorkspace" class="hidden">
+      <section class="kpi-grid restaurant-kpi-grid">
+        <article class="metric-card">
+          <span>Toplam Aktif Siparis</span>
+          <strong id="restaurantTotalPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Atama Bekleyen</span>
+          <strong id="restaurantWaitingPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Teslimattaki</span>
+          <strong id="restaurantInTransitPackages">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Aktif Kurye</span>
+          <strong id="restaurantActiveCouriers">0</strong>
+        </article>
+      </section>
+
+      <section class="dashboard-grid priority-workspace-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Manuel Paket</p>
+              <h3>Restoran Paketi Olustur</h3>
+            </div>
+          </div>
+          <form id="packageForm" class="form-grid">
             <label>
-              Restoran Adi
-              <input name="name" type="text" placeholder="Burger Station" required>
-            </label>
-            <label>
-              Portal Kullanici
-              <input name="portalUsername" type="text" placeholder="burgerstation101">
-            </label>
-            <label>
-              Ana Bolge
-              <select name="zone" id="restaurantZone"></select>
-            </label>
-            <label>
-              Portal Sifre
-              <input name="portalPassword" type="password" placeholder="Rest1234!">
-            </label>
-            <label>
-              Enlem
-              <input name="latitude" type="number" step="0.000001" placeholder="36.800000" required>
-            </label>
-            <label>
-              Boylam
-              <input name="longitude" type="number" step="0.000001" placeholder="34.633333" required>
+              Restoran ID
+              <input id="packageRestaurantId" name="restaurantId" type="text" placeholder="Restoran girisi ile dolar" required readonly>
             </label>
             <label class="full-width">
-              Entegre Platformlar
-              <div class="chip-grid" id="platformChecks"></div>
+              Teslimat Adresi
+              <textarea name="deliveryAddress" rows="4" placeholder="Mersin teslimat adresini detayli gir" required></textarea>
             </label>
-            <button class="primary-btn full-width" type="submit">Restorani ve API Anahtarini Olustur</button>
+            <label>
+              Paket Tipi
+              <input name="packageType" type="text" placeholder="Sicak Yemek" required>
+            </label>
+            <label>
+              Paket Tutari
+              <input name="orderAmount" type="number" step="0.01" min="0.01" placeholder="250.00" required>
+            </label>
+            <button class="primary-btn" type="submit">Paket Olustur</button>
           </form>
         </article>
 
         <article class="glass-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-coral">Webhook Bilgisi</p>
-              <h3>Gercek Siparis Akisi</h3>
+              <p class="eyebrow accent-coral">Aktif Akis</p>
+              <h3>Otomatik ve Manuel Gelen Tum Siparisler</h3>
             </div>
           </div>
-          <div class="integration-card">
-            <p>Platform veya restoran backend'i siparisi su endpoint'e gonderecek:</p>
-            <code id="integrationEndpoint">Restoran secilince endpoint gorunur</code>
-            <p>`x-api-key` header'i restoranin API anahtari olacak. Siparis geldigi anda otomatik atama calisir.</p>
-            <label>
-              Ornek Odeme Yontemi
-              <select id="samplePaymentMethod"></select>
-            </label>
-            <div class="stack-list">
-              <article class="stack-card">
-                <strong>Secili Restoran</strong>
-                <p id="integrationRestaurant">Henuz secili restoran yok.</p>
-              </article>
-              <article class="stack-card">
-                <strong>API Key</strong>
-                <code id="integrationApiKey">API key burada gorunur</code>
-              </article>
-              <article class="stack-card">
-                <strong>Portal Kullanici</strong>
-                <code id="integrationPortalUsername">Portal kullanici burada gorunur</code>
-              </article>
-              <article class="stack-card">
-                <strong>Webhook Secret</strong>
-                <code id="integrationWebhookSecret">Webhook secret burada gorunur</code>
-              </article>
-              <article class="stack-card">
-                <strong>Imza Header</strong>
-                <code>x-delivera-signature</code>
-              </article>
-            </div>
-          </div>
+          <div id="recentOrders" class="stack-list"></div>
         </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Payload Ornegi</p>
+              <h3>Platformdan Gelecek JSON</h3>
+            </div>
+          </div>
+          <pre class="code-block" id="samplePayload">Restoran secilince ornek payload gorunecek.</pre>
+        </article>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Aktif Siparisler</p>
+            <h3>Operasyonel Siparis Gorunumu</h3>
+          </div>
+        </div>
+        <div id="activeOrders" class="stack-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Paket Gecmisi</p>
+            <h3>Teslim Edilen ve Kapanan Siparisler</h3>
+          </div>
+        </div>
+        <div class="history-shell">
+          <div class="history-toolbar">
+            <div class="badge-row" id="restaurantHistoryFilters">
+              <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gun</button>
+              <button class="ghost-btn" type="button" data-range="today">Bugun</button>
+              <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
+              <button class="ghost-btn" type="button" data-range="30d">Son 30 Gun</button>
+              <button class="ghost-btn" type="button" data-range="all">Tum Kayitlar</button>
+            </div>
+            <strong id="restaurantHistoryMeta" class="history-meta">Son 50 kapanan siparis gorunuyor.</strong>
+          </div>
+          <div id="orderHistory" class="stack-list history-list"></div>
+          <div class="history-actions">
+            <button id="restaurantHistoryMore" class="ghost-btn" type="button">Daha Fazla Yukle</button>
+          </div>
+        </div>
       </section>
 
       <section class="dashboard-grid">
@@ -231,52 +289,6 @@
         </article>
       </section>
 
-      <section class="dashboard-grid">
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-coral">Manuel Paket</p>
-              <h3>Restoran Paketi Olustur</h3>
-            </div>
-          </div>
-          <form id="packageForm" class="form-grid">
-            <label>
-              Restoran ID
-              <input id="packageRestaurantId" name="restaurantId" type="text" placeholder="Restoran girisi ile dolar" required readonly>
-            </label>
-            <label class="full-width">
-              Teslimat Adresi
-              <textarea name="deliveryAddress" rows="4" placeholder="Mersin teslimat adresini detayli gir" required></textarea>
-            </label>
-            <label>
-              Paket Tipi
-              <input name="packageType" type="text" placeholder="Sicak Yemek" required>
-            </label>
-            <button class="primary-btn" type="submit">Paket Olustur</button>
-          </form>
-        </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-coral">Payload Ornegi</p>
-              <h3>Platformdan Gelecek JSON</h3>
-            </div>
-          </div>
-          <pre class="code-block" id="samplePayload">Restoran secilince ornek payload gorunecek.</pre>
-        </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-coral">Son Gelen Siparisler</p>
-              <h3>Otomatik Akan Siparisler</h3>
-            </div>
-          </div>
-          <div id="recentOrders" class="stack-list"></div>
-        </article>
-      </section>
-
       <section class="glass-panel">
         <div class="panel-head">
           <div>
@@ -295,6 +307,7 @@
           </div>
         </div>
         <div id="platformAccountList" class="stack-list"></div>
+      </section>
       </section>
     </main>
   </div>

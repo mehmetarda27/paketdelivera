@@ -1,0 +1,10 @@
+{
+  "name": "Delivera Express",
+  "short_name": "Delivera",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3eb",
+  "theme_color": "#c85b2d",
+  "lang": "tr-TR",
+  "description": "Restoran, admin ve kurye operasyonlarini tek akista yoneten paket ve dagitim sistemi."
+}
