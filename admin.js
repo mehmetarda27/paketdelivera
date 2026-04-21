@@ -272,6 +272,43 @@ function packageVisible(pkg) {
   ].join(" ").toLowerCase().includes(query);
 }
 
+function normalizeZoneValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildCourierOverrideOptions(pkg) {
+  const packageZone = normalizeZoneValue(pkg.zone);
+  const allCouriers = adminState.data?.couriers || [];
+  const sameZoneCouriers = allCouriers.filter((courier) => normalizeZoneValue(courier.zone) === packageZone);
+
+  return sameZoneCouriers
+    .sort((left, right) => {
+      const leftEligible = left.status === "online" && Number(left.activeLoad || 0) < 1;
+      const rightEligible = right.status === "online" && Number(right.activeLoad || 0) < 1;
+      if (leftEligible !== rightEligible) {
+        return Number(rightEligible) - Number(leftEligible);
+      }
+      return left.name.localeCompare(right.name, "tr");
+    })
+    .map((courier) => {
+      const activeLoad = Number(courier.activeLoad || 0);
+      const isEligible = courier.status === "online" && activeLoad < 1;
+      const reason = !isEligible
+        ? courier.status !== "online"
+          ? courier.status === "busy"
+            ? "Mesgul"
+            : "Offline"
+          : "Aktif paketi var"
+        : "Musait";
+
+      return {
+        value: courier.id,
+        label: `${courier.name} - ${courierStatusLabel(courier.status)} - ${reason}`,
+        disabled: !isEligible,
+      };
+    });
+}
+
 function buildPackageCard(pkg) {
   const node = adminRefs.template.content.cloneNode(true);
   const badge = node.querySelector(".status-badge");
@@ -317,23 +354,20 @@ function buildPackageCard(pkg) {
   const actions = node.querySelector(".card-actions");
   const courierSelect = document.createElement("select");
   courierSelect.className = "status-select";
+  const courierOptions = buildCourierOverrideOptions(pkg);
+  const hasAssignableCourier = courierOptions.some((option) => !option.disabled);
   courierSelect.innerHTML = ['<option value="">Kurye sec</option>']
-    .concat((adminState.data?.couriers || [])
-      .filter((courier) =>
-        courier.zone === pkg.zone &&
-        courier.status === "online" &&
-        courier.available &&
-        Number(courier.activeLoad || 0) < 1
-      )
-      .map((courier) => `<option value="${courier.id}">${courier.name} - ${courierStatusLabel(courier.status)}</option>`))
+    .concat(courierOptions.map((option) => `<option value="${option.value}" ${option.disabled ? "disabled" : ""}>${option.label}</option>`))
     .join("");
 
   const overrideButton = document.createElement("button");
   overrideButton.type = "button";
   overrideButton.className = "ghost-btn";
   overrideButton.textContent = "Kuriyeye Ata";
+  overrideButton.disabled = !hasAssignableCourier;
   overrideButton.addEventListener("click", async () => {
     if (!courierSelect.value) {
+      showToast("Bu paket icin uygun online kurye bulunamadi.", "warning");
       return;
     }
     const data = await api(`/api/admin/packages/${pkg.id}/override`, {
@@ -362,6 +396,13 @@ function buildPackageCard(pkg) {
   actions.appendChild(courierSelect);
   actions.appendChild(overrideButton);
   actions.appendChild(unassignButton);
+
+  if (!courierOptions.length) {
+    const helper = document.createElement("p");
+    helper.className = "subtle-text";
+    helper.textContent = `${pkg.zone || "Bolge"} icin eslesen kurye bulunamadi. Kurye bolgesiyle paket bolgesini kontrol et.`;
+    actions.appendChild(helper);
+  }
 
   return node;
 }

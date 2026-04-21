@@ -1,5 +1,6 @@
 const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
+const RESTAURANT_WORKSPACE_REFRESH_MS = 6_000;
 
 const restaurantState = {
   data: null,
@@ -8,6 +9,7 @@ const restaurantState = {
   selectedRestaurantId: "",
   historyRange: "7d",
   historyVisibleCount: 50,
+  workspacePollId: null,
 };
 
 const restaurantRefs = {
@@ -62,6 +64,7 @@ function clearRestaurantAuth() {
   restaurantState.refreshToken = "";
   restaurantState.data = null;
   restaurantState.selectedRestaurantId = "";
+  stopRestaurantWorkspacePolling();
   localStorage.removeItem(RESTAURANT_TOKEN_KEY);
   localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
 }
@@ -84,6 +87,23 @@ function setRestaurantWorkspaceVisible(isVisible) {
   restaurantRefs.createSection.classList.toggle("hidden", isVisible);
   restaurantRefs.workspace.classList.toggle("hidden", !isVisible);
   restaurantRefs.logoutButton.classList.toggle("hidden", !isVisible);
+}
+
+function stopRestaurantWorkspacePolling() {
+  if (restaurantState.workspacePollId !== null) {
+    window.clearInterval(restaurantState.workspacePollId);
+    restaurantState.workspacePollId = null;
+  }
+}
+
+function startRestaurantWorkspacePolling() {
+  if (restaurantState.workspacePollId !== null || !restaurantState.token) {
+    return;
+  }
+
+  restaurantState.workspacePollId = window.setInterval(() => {
+    loadRestaurantWorkspace({ silent: true });
+  }, RESTAURANT_WORKSPACE_REFRESH_MS);
 }
 
 function renderPlatformChecks() {
@@ -503,8 +523,9 @@ restaurantRefs.historyMore?.addEventListener("click", () => {
   }
 });
 
-async function loadRestaurantWorkspace() {
+async function loadRestaurantWorkspace(options = {}) {
   if (!restaurantState.token) {
+    stopRestaurantWorkspacePolling();
     hydrateRestaurant({
       zones: [],
       restaurants: [],
@@ -531,9 +552,12 @@ async function loadRestaurantWorkspace() {
       retryWithRefresh: refreshRestaurantAccess,
     });
     hydrateRestaurant(data);
+    startRestaurantWorkspacePolling();
   } catch (error) {
-    clearRestaurantAuth();
-    restaurantRefs.summary.textContent = error.message;
+    if (!options.silent) {
+      clearRestaurantAuth();
+      restaurantRefs.summary.textContent = error.message;
+    }
   }
 }
 
@@ -670,3 +694,5 @@ api("/api/bootstrap")
   .catch((error) => {
     restaurantRefs.summary.textContent = error.message;
   });
+
+window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);

@@ -1,0 +1,3 @@
+Delivera Express admin giris bilgisi
+Kullanici adi: admin
+Sifre: Delivera123!

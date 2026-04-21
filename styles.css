@@ -292,6 +292,30 @@ a {
   box-shadow: 0 20px 40px rgba(4, 10, 16, 0.28);
 }
 
+.theme-courier .stack-card,
+.theme-courier .zone-card {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 247, 0.97), rgba(245, 237, 227, 0.94));
+  color: var(--ink);
+  box-shadow: 0 20px 40px rgba(4, 10, 16, 0.24);
+}
+
+.theme-courier .stack-card strong,
+.theme-courier .stack-card h4,
+.theme-courier .zone-card strong {
+  color: #201914;
+}
+
+.theme-courier .stack-card p,
+.theme-courier .stack-card .history-meta,
+.theme-courier .stack-card .tracking-no,
+.theme-courier .stack-card .note-text,
+.theme-courier .stack-card .assignment-note,
+.theme-courier .stack-card span:not(.soft-badge):not(.status-badge),
+.theme-courier .zone-card p {
+  color: #67594c;
+}
+
 .theme-restaurant .topbar {
   background:
     radial-gradient(circle at top right, rgba(240, 133, 74, 0.18), transparent 24%),
