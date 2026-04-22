@@ -72,6 +72,7 @@ const COURIER_FAILURE_REASONS = new Set([
   "diger",
 ]);
 const MAX_ASSIGNMENT_DISTANCE_KM = 5;
+const LIVE_STREAM_HEARTBEAT_MS = 20_000;
 const STATUS_TRANSITIONS = {
   [PENDING_STATUS]: [AWAITING_ASSIGNMENT_STATUS, CANCELED_STATUS],
   [AWAITING_ASSIGNMENT_STATUS]: [ASSIGNED_STATUS, FAILED_STATUS, CANCELED_STATUS],
@@ -121,6 +122,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_FILE);
 const rateBuckets = new Map();
+const liveStreams = new Map();
 let assignmentSweepRunning = false;
 let assignmentSweepQueued = false;
 db.exec(`
@@ -319,6 +321,16 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS courier_shifts (
+    id TEXT PRIMARY KEY,
+    courier_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (courier_id) REFERENCES couriers(id)
+  );
 `);
 
 const courierColumns = db.prepare("PRAGMA table_info(couriers)").all().map((row) => row.name);
@@ -405,6 +417,21 @@ if (courierReportColumns.length === 0) {
       package_ids_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )
+  `);
+}
+
+const courierShiftColumns = db.prepare("PRAGMA table_info(courier_shifts)").all().map((column) => column.name);
+if (courierShiftColumns.length === 0) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS courier_shifts (
+      id TEXT PRIMARY KEY,
+      courier_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (courier_id) REFERENCES couriers(id)
     )
   `);
 }
@@ -876,7 +903,7 @@ function requestProtocol(req) {
     }
   }
 
-  return req.socket.encrypted ? "https" : "http";
+  return req?.socket?.encrypted ? "https" : "http";
 }
 
 function isSecureRequest(req) {
@@ -888,7 +915,8 @@ function requestBaseUrl(req) {
     return PUBLIC_BASE_URL;
   }
 
-  return `${requestProtocol(req)}://${req.headers.host}`;
+  const host = req?.headers?.host || `localhost:${PORT}`;
+  return `${requestProtocol(req)}://${host}`;
 }
 
 function applyRateLimit(req, scope, rule) {
@@ -1069,6 +1097,16 @@ function getSessionByToken(tableName, tokenColumn, token, maxAgeMs) {
 
 function getAdminSession(req) {
   return getSessionByToken("admin_sessions", "token", getBearerToken(req), ADMIN_SESSION_MAX_AGE_MS);
+}
+
+function getSessionFromQueryToken(req, role) {
+  const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+  const token = trimmed(requestUrl.searchParams.get("token"));
+  if (!token) {
+    return null;
+  }
+  const config = sessionConfigByRole(role);
+  return getSessionByToken(config.tableName, "token", token, config.maxAgeMs);
 }
 
 function adminActorId(session) {
@@ -1375,6 +1413,84 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function createLiveStream(audience) {
+  const id = uid("stream");
+  const stream = {
+    id,
+    audience,
+    res: null,
+    heartbeatId: null,
+  };
+  liveStreams.set(id, stream);
+  return stream;
+}
+
+function closeLiveStream(streamId) {
+  const stream = liveStreams.get(streamId);
+  if (!stream) {
+    return;
+  }
+  if (stream.heartbeatId) {
+    clearInterval(stream.heartbeatId);
+  }
+  liveStreams.delete(streamId);
+}
+
+function streamMatchesAudience(stream, event) {
+  if (stream.audience.role === "admin") {
+    return true;
+  }
+  if (stream.audience.role === "restaurant") {
+    return !event.restaurantId || event.restaurantId === stream.audience.restaurantId;
+  }
+  if (stream.audience.role === "courier") {
+    return !event.courierId || event.courierId === stream.audience.courierId;
+  }
+  return false;
+}
+
+function broadcastLiveEvent(event) {
+  const payload = `event: ${event.type || "workspace-update"}\ndata: ${JSON.stringify({
+    type: event.type || "workspace-update",
+    restaurantId: event.restaurantId || null,
+    courierId: event.courierId || null,
+    message: event.message || "",
+    createdAt: nowIso(),
+  })}\n\n`;
+
+  liveStreams.forEach((stream) => {
+    if (!stream.res || !streamMatchesAudience(stream, event)) {
+      return;
+    }
+    try {
+      stream.res.write(payload);
+    } catch {
+      closeLiveStream(stream.id);
+    }
+  });
+}
+
+function openLiveStream(req, res, audience) {
+  const stream = createLiveStream(audience);
+  writeSecurityHeaders(res);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  stream.res = res;
+  res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, createdAt: nowIso() })}\n\n`);
+  stream.heartbeatId = setInterval(() => {
+    try {
+      res.write(`event: ping\ndata: ${JSON.stringify({ createdAt: nowIso() })}\n\n`);
+    } catch {
+      closeLiveStream(stream.id);
+    }
+  }, LIVE_STREAM_HEARTBEAT_MS);
+  req.on("close", () => closeLiveStream(stream.id));
+}
+
 function sendFile(res, fileName) {
   const filePath = path.join(__dirname, fileName);
   if (!fs.existsSync(filePath)) {
@@ -1562,6 +1678,210 @@ function getCourierPackages(courierId) {
   return rows.map((row) => mapPackageRow(row, restaurantMap));
 }
 
+function rangeStart(daysBack = 0) {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack).toISOString();
+}
+
+function rangeEnd(daysForward = 0) {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysForward + 1).toISOString();
+}
+
+function isWithinRange(value, start, end) {
+  if (!value) {
+    return false;
+  }
+  const stamp = new Date(value).getTime();
+  return !Number.isNaN(stamp) && stamp >= new Date(start).getTime() && stamp < new Date(end).getTime();
+}
+
+function diffMinutes(startValue, endValue) {
+  if (!startValue || !endValue) {
+    return null;
+  }
+  const diff = new Date(endValue).getTime() - new Date(startValue).getTime();
+  if (Number.isNaN(diff) || diff < 0) {
+    return null;
+  }
+  return diff / 60000;
+}
+
+function averageOf(values) {
+  const valid = values.filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (valid.length === 0) {
+    return 0;
+  }
+  return Number((valid.reduce((sum, value) => sum + value, 0) / valid.length).toFixed(1));
+}
+
+function getCourierShifts(courierId, limit = 20) {
+  return db.prepare(`
+    SELECT * FROM courier_shifts
+    WHERE courier_id = ?
+    ORDER BY datetime(started_at) DESC
+    LIMIT ?
+  `).all(courierId, limit).map((row) => ({
+    id: row.id,
+    courierId: row.courier_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function getOpenCourierShift(courierId) {
+  const row = db.prepare(`
+    SELECT * FROM courier_shifts
+    WHERE courier_id = ? AND ended_at IS NULL
+    ORDER BY datetime(started_at) DESC
+    LIMIT 1
+  `).get(courierId);
+
+  return row ? {
+    id: row.id,
+    courierId: row.courier_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null;
+}
+
+function ensureCourierShiftOpen(courierId, startedAt = nowIso()) {
+  if (!courierId || getOpenCourierShift(courierId)) {
+    return;
+  }
+
+  db.prepare(`
+    INSERT INTO courier_shifts (id, courier_id, started_at, ended_at, created_at, updated_at)
+    VALUES (?, ?, ?, NULL, ?, ?)
+  `).run(uid("shift"), courierId, startedAt, startedAt, startedAt);
+}
+
+function closeCourierShift(courierId, endedAt = nowIso()) {
+  const openShift = getOpenCourierShift(courierId);
+  if (!openShift) {
+    return;
+  }
+
+  db.prepare(`
+    UPDATE courier_shifts
+    SET ended_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(endedAt, endedAt, openShift.id);
+}
+
+function summarizeCourierPackagesForRange(packages, start, end) {
+  return packages
+    .filter((pkg) => pkg.status === DELIVERED_STATUS)
+    .filter((pkg) => isWithinRange(pkg.deliveredAt || pkg.updatedAt || pkg.createdAt, start, end))
+    .reduce((summary, pkg) => {
+      const amount = normalizeMoney(pkg.orderAmount);
+      summary.deliveredCount += 1;
+      summary.totalAmount += amount;
+      if (pkg.paymentStatus === PAID_ONLINE_PAYMENT_STATUS) {
+        summary.paidOnlineAmount += amount;
+      }
+      if ([CASH_EXPECTED_PAYMENT_STATUS, CASH_COLLECTED_PAYMENT_STATUS].includes(pkg.paymentStatus)) {
+        summary.cashAmount += amount;
+      }
+      return summary;
+    }, {
+      deliveredCount: 0,
+      totalAmount: 0,
+      paidOnlineAmount: 0,
+      cashAmount: 0,
+    });
+}
+
+function buildCourierEarningsSummary(packages) {
+  const todayStart = rangeStart(0);
+  const yesterdayStart = rangeStart(1);
+  const sevenDaysStart = rangeStart(6);
+  const tomorrowStart = rangeEnd(0);
+  return {
+    today: summarizeCourierPackagesForRange(packages, todayStart, tomorrowStart),
+    yesterday: summarizeCourierPackagesForRange(packages, yesterdayStart, todayStart),
+    last7Days: summarizeCourierPackagesForRange(packages, sevenDaysStart, tomorrowStart),
+    total: summarizeCourierPackagesForRange(packages, "1970-01-01T00:00:00.000Z", "2999-12-31T23:59:59.999Z"),
+  };
+}
+
+function buildCourierShiftSummary(courierId) {
+  const shifts = getCourierShifts(courierId, 12);
+  return {
+    currentShift: shifts.find((shift) => !shift.endedAt) || null,
+    recentShifts: shifts,
+  };
+}
+
+function buildRestaurantPerformance(packages) {
+  const todayStart = rangeStart(0);
+  const tomorrowStart = rangeEnd(0);
+  const todayPackages = packages.filter((pkg) => isWithinRange(pkg.createdAt, todayStart, tomorrowStart));
+  const deliveredToday = packages.filter((pkg) => pkg.status === DELIVERED_STATUS && isWithinRange(pkg.deliveredAt || pkg.updatedAt, todayStart, tomorrowStart));
+  const failedToday = packages.filter((pkg) => pkg.status === FAILED_STATUS && isWithinRange(pkg.failedAt || pkg.updatedAt, todayStart, tomorrowStart));
+
+  return {
+    todayOrderCount: todayPackages.length,
+    deliveredTodayCount: deliveredToday.length,
+    averageAssignmentMinutes: averageOf(todayPackages.map((pkg) => diffMinutes(pkg.createdAt, pkg.assignedAt))),
+    averageDeliveryMinutes: averageOf(deliveredToday.map((pkg) => diffMinutes(pkg.createdAt, pkg.deliveredAt || pkg.updatedAt))),
+    failedDeliveryRate: todayPackages.length > 0 ? Number(((failedToday.length / todayPackages.length) * 100).toFixed(1)) : 0,
+  };
+}
+
+function buildZoneAlerts(zones, packages) {
+  return zones.map((zone) => {
+    const waiting = packages
+      .filter((pkg) => pkg.zone === zone.name && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(pkg.status))
+      .sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
+    const oldestWaitingMinutes = waiting[0]
+      ? Math.max(0, Math.round((Date.now() - new Date(waiting[0].createdAt).getTime()) / 60000))
+      : 0;
+    const severity = waiting.length >= 4 || oldestWaitingMinutes >= 15
+      ? "critical"
+      : waiting.length >= 2 || oldestWaitingMinutes >= 8
+        ? "warning"
+        : "stable";
+    return {
+      zone: zone.name,
+      waitingCount: waiting.length,
+      oldestWaitingMinutes,
+      severity,
+      message: severity === "critical"
+        ? `${zone.name} bolgesinde yogunluk kritik seviyede.`
+        : severity === "warning"
+          ? `${zone.name} bolgesinde yogunluk artiyor.`
+          : `${zone.name} bolgesi dengeli calisiyor.`,
+    };
+  }).filter((alert) => alert.severity !== "stable");
+}
+
+function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
+  const current = accounts[0] || null;
+  return {
+    currentAccountId: current?.id || "",
+    currentPlatform: current?.platform || "",
+    verificationStatus: current?.verificationStatus || PLATFORM_VERIFICATION_STATUS.PENDING,
+    webhookUrl: current
+      ? `${requestBaseUrl(req)}/api/platforms/${current.platformSlug}/webhook`
+      : "Platform hesabini kaydedince webhook URL hazir olur.",
+    steps: [
+      { id: "select_platform", title: "Adim 1", label: "Platform sec", done: Boolean(current?.platform) },
+      { id: "credentials", title: "Adim 2", label: "Gerekli bilgileri gir", done: Boolean(current?.externalStoreId) },
+      { id: "copy_webhook", title: "Adim 3", label: "Webhook kopyala", done: Boolean(current?.id) },
+      { id: "test", title: "Adim 4", label: "Baglantiyi test et", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
+      { id: "success", title: "Adim 5", label: "Baglanti basarili", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
+    ],
+    helpText: restaurant
+      ? `${restaurant.name} icin platform sec, kimlik bilgilerini kaydet, webhook adresini platform paneline gir ve test et.`
+      : "Restoran oturumu acildiginda entegrasyon sihirbazi aktif olur.",
+  };
+}
+
 function buildCourierWorkspace(courierId) {
   const courier = getCourierById(courierId);
   if (!courier) {
@@ -1587,6 +1907,8 @@ function buildCourierWorkspace(courierId) {
       hasClosedDay: Boolean(dayReport),
       closedAt: dayReport?.updated_at || null,
     },
+    earningsSummary: buildCourierEarningsSummary(packages),
+    shiftSummary: buildCourierShiftSummary(courierId),
   };
 }
 
@@ -2062,12 +2384,23 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
           status: COURIER_BUSY_STATUS,
         };
       }
+      broadcastLiveEvent({
+        type: "package-assigned",
+        restaurantId: pkg.restaurantId,
+        courierId: candidate.courier.id,
+        message: `${pkg.trackingNo || pkg.id} paketi ${candidate.courier.name} kuryesine atandi.`,
+      });
       return true;
     }
   }
 
   const failure = evaluateAssignmentFailure(currentState(), pkg);
   persistPackageAssignment(buildAssignmentFailure(pkg, failure.reason, failure.note));
+  broadcastLiveEvent({
+    type: "assignment-waiting",
+    restaurantId: pkg.restaurantId,
+    message: `${pkg.trackingNo || pkg.id} paketi hala uygun kurye bekliyor.`,
+  });
   return false;
 }
 
@@ -2245,16 +2578,20 @@ function decorateState(filter = {}) {
     packageCount: packages.filter((item) => item.zone === zone).length,
     waitingCount: packages.filter((item) => item.zone === zone && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
   }));
+  const sanitizedPlatformAccounts = state.platformAccounts.map((account) => sanitizePlatformAccount(account, Boolean(filter.includePlatformSecrets || filter.includeRestaurantSecrets)));
 
   return {
     zones,
+    zoneAlerts: buildZoneAlerts(zones, packages),
     restaurants: state.restaurants.map((restaurant) => sanitizeRestaurant(restaurant, Boolean(filter.includeRestaurantSecrets))),
-    platformAccounts: state.platformAccounts.map((account) => sanitizePlatformAccount(account, Boolean(filter.includePlatformSecrets || filter.includeRestaurantSecrets))),
+    platformAccounts: sanitizedPlatformAccounts,
     couriers,
     packages,
     courierDailyReports: getCourierDailyReports(50),
     webhookLogs: state.webhookLogs,
     stats: stats(state),
+    restaurantPerformance: filter.restaurantId ? buildRestaurantPerformance(packages) : null,
+    integrationWizard: filter.restaurantId ? buildRestaurantIntegrationWizard(filter.req || { headers: {}, url: "/" }, state.restaurants[0] || null, sanitizedPlatformAccounts) : null,
   };
 }
 
@@ -2918,7 +3255,7 @@ async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/bootstrap") {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const restaurantId = String(requestUrl.searchParams.get("restaurantId") || "").trim();
-    const payload = decorateState({ restaurantId: restaurantId || undefined });
+    const payload = decorateState({ restaurantId: restaurantId || undefined, req });
     payload.restaurants = getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant));
     sendJson(res, 200, payload);
     return;
@@ -2964,10 +3301,20 @@ async function handleApi(req, res, pathname) {
 
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const restaurantId = trimmed(requestUrl.searchParams.get("restaurantId"));
-    const payload = decorateState({ restaurantId: restaurantId || undefined });
+    const payload = decorateState({ restaurantId: restaurantId || undefined, req });
     payload.restaurants = getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant));
     payload.auditLogs = getAuditLogs(20, { restaurantId: restaurantId || undefined });
     sendJson(res, 200, payload);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/stream") {
+    const adminSession = getSessionFromQueryToken(req, "admin");
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    openLiveStream(req, res, { role: "admin", adminId: adminSession.admin_id });
     return;
   }
 
@@ -3011,6 +3358,15 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/courier/logout") {
+    const session = getCourierSession(req);
+    if (session) {
+      closeCourierShift(session.courier_id);
+      broadcastLiveEvent({
+        type: "courier-shift-ended",
+        courierId: session.courier_id,
+        message: "Kurye vardiyasi kapatildi.",
+      });
+    }
     const { json: body } = await readRequestBody(req);
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("courier_sessions", getBearerToken(req));
@@ -3156,6 +3512,7 @@ async function handleApi(req, res, pathname) {
       state: decorateState({
         restaurantId: restaurant.id,
         includeRestaurantSecrets: true,
+        req,
       }),
     });
     return;
@@ -3171,7 +3528,18 @@ async function handleApi(req, res, pathname) {
     sendJson(res, 200, decorateState({
       restaurantId: session.restaurant_id,
       includeRestaurantSecrets: true,
+      req,
     }));
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/restaurant/stream") {
+    const session = getSessionFromQueryToken(req, "restaurant");
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    openLiveStream(req, res, { role: "restaurant", restaurantId: session.restaurant_id });
     return;
   }
 
@@ -3305,12 +3673,71 @@ async function handleApi(req, res, pathname) {
         verificationStatus: verification.status,
       },
     });
+    broadcastLiveEvent({
+      type: "platform-account-saved",
+      restaurantId: session.restaurant_id,
+      message: `${draft.platform} platform hesabi kaydedildi.`,
+    });
 
     sendJson(res, 200, decorateState({
       restaurantId: session.restaurant_id,
       includeRestaurantSecrets: true,
       includePlatformSecrets: true,
+      req,
     }));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts/test") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const accountId = trimmed(body.accountId || body.account_id);
+    if (!accountId) {
+      sendJson(res, 400, { error: "accountId zorunludur." });
+      return;
+    }
+
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === accountId);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+
+    const verification = await verifyPlatformMerchantCredentials(account);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE platform_accounts
+      SET verification_status = ?, verification_note = ?, last_verification_at = ?, verified_at = ?, last_validation_mode = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      verification.status,
+      verification.note,
+      now,
+      verification.status === PLATFORM_VERIFICATION_STATUS.VERIFIED ? now : null,
+      verification.mode,
+      now,
+      accountId
+    );
+
+    broadcastLiveEvent({
+      type: "platform-test",
+      restaurantId: session.restaurant_id,
+      message: `${account.platform} baglanti testi tamamlandi.`,
+    });
+    sendJson(res, 200, {
+      verification,
+      state: decorateState({
+        restaurantId: session.restaurant_id,
+        includeRestaurantSecrets: true,
+        includePlatformSecrets: true,
+        req,
+      }),
+    });
     return;
   }
 
@@ -3408,9 +3835,15 @@ async function handleApi(req, res, pathname) {
         orderAmount: pkg.orderAmount,
       },
     });
+    broadcastLiveEvent({
+      type: "package-created",
+      restaurantId: session.restaurant_id,
+      message: "Manuel paket operasyon havuzuna alindi.",
+    });
     sendJson(res, 201, decorateState({
       restaurantId: session.restaurant_id,
       includeRestaurantSecrets: true,
+      req,
     }));
     return;
   }
@@ -3441,6 +3874,11 @@ async function handleApi(req, res, pathname) {
         name: restaurant.name,
         username: restaurant.username,
       },
+    });
+    broadcastLiveEvent({
+      type: "restaurant-created",
+      restaurantId: restaurant.id,
+      message: `${restaurant.name} restorani eklendi.`,
     });
 
     sendJson(res, 201, {
@@ -3504,6 +3942,10 @@ async function handleApi(req, res, pathname) {
         username,
         zone,
       },
+    });
+    broadcastLiveEvent({
+      type: "courier-created",
+      message: `${name} isimli kurye eklendi.`,
     });
     sendJson(res, 201, {
       ...decorateState(),
@@ -3638,6 +4080,12 @@ async function handleApi(req, res, pathname) {
       responseStatus: 201,
       requestBody: raw,
     });
+    broadcastLiveEvent({
+      type: "integration-order",
+      restaurantId: restaurant.id,
+      courierId: created?.assignedCourierId || null,
+      message: `${pkg.sourcePlatform} siparisi otomatik akisa alindi.`,
+    });
 
     sendJson(res, 201, {
       message: "Siparis alindi ve otomatik atama calisti.",
@@ -3721,6 +4169,12 @@ async function handleApi(req, res, pathname) {
       responseStatus: 201,
       requestBody: raw,
     });
+    broadcastLiveEvent({
+      type: "platform-order",
+      restaurantId: account.restaurantId,
+      courierId: created?.assignedCourierId || null,
+      message: `${normalizedPlatform} siparisi sisteme dustu.`,
+    });
 
     sendJson(res, 201, {
       message: `${normalizedPlatform} siparisi alindi.`,
@@ -3749,6 +4203,7 @@ async function handleApi(req, res, pathname) {
     const auth = issueSessionPair("courier", courier.id, req);
 
     const loginLocationAt = new Date().toISOString();
+    ensureCourierShiftOpen(courier.id, loginLocationAt);
     db.prepare("UPDATE couriers SET available = 1, status = ?, last_location_at = COALESCE(last_location_at, ?) WHERE id = ?").run(
       COURIER_ONLINE_STATUS,
       loginLocationAt,
@@ -3780,6 +4235,11 @@ async function handleApi(req, res, pathname) {
         passwordSalt: courier.password_salt,
       }),
     });
+    broadcastLiveEvent({
+      type: "courier-online",
+      courierId: courier.id,
+      message: `${courier.name} online oldu.`,
+    });
     return;
   }
 
@@ -3797,6 +4257,16 @@ async function handleApi(req, res, pathname) {
     }
 
     sendJson(res, 200, workspace);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/courier/stream") {
+    const session = getSessionFromQueryToken(req, "courier");
+    if (!session) {
+      sendJson(res, 401, { error: "Kurye oturumu bulunamadi." });
+      return;
+    }
+    openLiveStream(req, res, { role: "courier", courierId: session.courier_id });
     return;
   }
 
@@ -3822,6 +4292,15 @@ async function handleApi(req, res, pathname) {
     if (!existing) {
       sendJson(res, 404, { error: "Kurye bulunamadi." });
       return;
+    }
+    const availabilityChanged = typeof body.available === "boolean" && Boolean(existing.available) !== Boolean(body.available);
+
+    if (typeof body.available === "boolean") {
+      if (body.available) {
+        ensureCourierShiftOpen(session.courier_id, locationStamp);
+      } else {
+        closeCourierShift(session.courier_id, locationStamp);
+      }
     }
 
     db.prepare(`
@@ -3851,6 +4330,13 @@ async function handleApi(req, res, pathname) {
         latitude: hasCoordinates ? latitude : existing.x,
         longitude: hasCoordinates ? longitude : existing.y,
       },
+    });
+    broadcastLiveEvent({
+      type: availabilityChanged ? "courier-availability" : "courier-location",
+      courierId: session.courier_id,
+      message: availabilityChanged
+        ? (body.available ? "Kurye tekrar atamaya acildi." : "Kurye pasife alindi.")
+        : "",
     });
     sendJson(res, 200, workspace || { courier: null, packages: [] });
     return;
@@ -3927,6 +4413,12 @@ async function handleApi(req, res, pathname) {
         to: nextStatus,
       },
     });
+    broadcastLiveEvent({
+      type: "package-status",
+      courierId: session.courier_id,
+      restaurantId: target.restaurant_id,
+      message: `Paket durumu ${nextStatus} oldu.`,
+    });
     sendJson(res, 200, workspace || { courier: null, packages: [] });
     return;
   }
@@ -3939,6 +4431,7 @@ async function handleApi(req, res, pathname) {
     }
 
     const summary = upsertCourierDailyReport(session.courier_id, dayKey());
+    closeCourierShift(session.courier_id);
     const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
       actorRole: "courier",
@@ -3949,6 +4442,11 @@ async function handleApi(req, res, pathname) {
         deliveredCount: summary.deliveredCount,
         totalAmount: summary.totalAmount,
       },
+    });
+    broadcastLiveEvent({
+      type: "courier-day-close",
+      courierId: session.courier_id,
+      message: "Kurye gun sonu raporu olustu.",
     });
     sendJson(res, 200, {
       ...(workspace || { courier: null, packages: [], dayMetrics: null }),
@@ -3974,6 +4472,11 @@ async function handleApi(req, res, pathname) {
     }
 
     const { json: body } = await readRequestBody(req);
+    if (body.available) {
+      ensureCourierShiftOpen(availabilityMatch[1]);
+    } else {
+      closeCourierShift(availabilityMatch[1]);
+    }
     db.prepare("UPDATE couriers SET available = ?, status = ? WHERE id = ?").run(
       body.available ? 1 : 0,
       body.available ? COURIER_ONLINE_STATUS : COURIER_OFFLINE_STATUS,
@@ -3988,6 +4491,11 @@ async function handleApi(req, res, pathname) {
         courierId: availabilityMatch[1],
         available: Boolean(body.available),
       },
+    });
+    broadcastLiveEvent({
+      type: "courier-availability",
+      courierId: availabilityMatch[1],
+      message: body.available ? "Kurye admin tarafindan aktif edildi." : "Kurye admin tarafindan pasife alindi.",
     });
     sendJson(res, 200, {
       ...decorateState(),
@@ -4056,6 +4564,12 @@ async function handleApi(req, res, pathname) {
         to: nextStatus,
       },
     });
+    broadcastLiveEvent({
+      type: "package-status",
+      restaurantId: target.restaurant_id,
+      courierId: target.assigned_courier_id || null,
+      message: `Paket durumu ${nextStatus} olarak guncellendi.`,
+    });
     sendJson(res, 200, {
       ...decorateState(),
       auditLogs: getAuditLogs(20),
@@ -4101,6 +4615,12 @@ async function handleApi(req, res, pathname) {
         status: target.status,
       },
     });
+    broadcastLiveEvent({
+      type: "package-reassign",
+      restaurantId: target.restaurantId,
+      courierId: target.assignedCourierId || null,
+      message: "Paket yeniden otomatik atama havuzuna alindi.",
+    });
     sendJson(res, 200, {
       ...decorateState(),
       auditLogs: getAuditLogs(20),
@@ -4132,6 +4652,11 @@ async function handleApi(req, res, pathname) {
       packageId: overrideMatch[1],
       details: result,
     });
+    broadcastLiveEvent({
+      type: "package-override",
+      courierId: result.courierId,
+      message: "Admin belirli paketi kuriyeye atadi.",
+    });
     sendJson(res, 200, {
       ...decorateState(),
       auditLogs: getAuditLogs(20),
@@ -4155,6 +4680,10 @@ async function handleApi(req, res, pathname) {
       action: "package_unassigned",
       packageId: unassignMatch[1],
       details: result,
+    });
+    broadcastLiveEvent({
+      type: "package-unassign",
+      message: "Paketin kurye atamasi kaldirildi.",
     });
     sendJson(res, 200, {
       ...decorateState(),

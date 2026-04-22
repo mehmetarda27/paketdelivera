@@ -20,30 +20,30 @@
         <div>
           <div class="brand-mark light">Delivera Express</div>
           <p class="eyebrow accent-gold">Kurye Paneli</p>
-          <h2>Sahadaki teslimatlari hizli ve net sekilde yonet.</h2>
-          <p class="soft-copy">Aktif gorevler, canli kurye durumu ve kapanan teslimat gecmisi tek panelde gorunur.</p>
+          <h2>Sahadaki teslimatları hızlı ve net şekilde yönet.</h2>
+          <p class="soft-copy">Aktif görevler, canlı kurye durumu ve kapanan teslimat geçmişi tek panelde görünür.</p>
         </div>
         <div class="hero-summary-card dark">
-          <span>Kurye Ozeti</span>
-          <strong id="courierSummary">Giris yapildiginda aktif isler burada gorunur.</strong>
+          <span>Kurye Özeti</span>
+          <strong id="courierSummary">Giriş yapıldığında aktif işler burada görünür.</strong>
         </div>
       </section>
       <section id="loginPanel" class="topbar glass-panel dark-panel login-panel courier-login-panel">
         <div>
           <p class="eyebrow accent-gold">Login</p>
-          <h2>Kullanici adi ve sifre ile kurye girisi yap.</h2>
-          <p class="soft-copy">Kurye hesaplari admin paneli uzerinden tanimlanir. Her kurye yalnizca kendine atanmis isleri gorur.</p>
+          <h2>Kullanıcı adı ve şifre ile kurye girişi yap.</h2>
+          <p class="soft-copy">Kurye hesapları admin paneli üzerinden tanımlanır. Her kurye yalnızca kendine atanmış işleri görür.</p>
         </div>
         <form id="loginForm" class="login-form">
           <label>
-            Kullanici Adi
+            Kullanıcı Adı
             <input name="username" type="text" placeholder="mert" autocomplete="username" required>
           </label>
           <label>
-            Sifre
+            Şifre
             <input name="password" type="password" placeholder="********" autocomplete="current-password" required>
           </label>
-          <button class="primary-btn" type="submit">Giris Yap</button>
+          <button class="primary-btn" type="submit">Giriş Yap</button>
         </form>
       </section>
 
@@ -51,35 +51,46 @@
         <article class="glass-panel dark-panel courier-profile-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-gold">Kurye Hesabi</p>
+              <p class="eyebrow accent-gold">Kurye Hesabı</p>
               <h3 id="courierName">Kurye</h3>
             </div>
-            <button id="logoutButton" class="ghost-btn" type="button">Cikis Yap</button>
+            <button id="logoutButton" class="ghost-btn" type="button">Çıkış Yap</button>
           </div>
           <div class="courier-live-bar">
             <div>
-              <p class="eyebrow accent-gold">Canli Konum</p>
+              <p class="eyebrow accent-gold">Canlı Konum</p>
               <strong id="locationStatus">Konum izni bekleniyor.</strong>
             </div>
             <div class="badge-row">
-              <button id="shareLocationButton" class="primary-btn" type="button">Konumu Ac</button>
+              <button id="shareLocationButton" class="primary-btn" type="button">Konumu Aç</button>
               <button id="availabilityButton" class="ghost-btn" type="button">Pasife Al</button>
             </div>
           </div>
           <div class="courier-focus-card">
-            <p class="eyebrow accent-gold">Siradaki Is</p>
-            <strong id="courierFocusTitle">Aktif gorev bekleniyor.</strong>
-            <p id="courierFocusText" class="soft-copy">Kurye aktif oldugunda en kritik teslimat burada ozetlenir.</p>
+            <p class="eyebrow accent-gold">Sıradaki İş</p>
+            <strong id="courierFocusTitle">Aktif görev bekleniyor.</strong>
+            <p id="courierFocusText" class="soft-copy">Kurye aktif olduğunda en kritik teslimat burada özetlenir.</p>
           </div>
           <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow accent-gold">Gun Sonu</p>
-                <h3>Gunluk Ciro</h3>
+                <p class="eyebrow accent-gold">Gün Sonu</p>
+                <h3>Günlük Ciro</h3>
               </div>
-              <button id="courierDayCloseButton" class="primary-btn" type="button">Gunu Bitir</button>
+              <button id="courierDayCloseButton" class="primary-btn" type="button">Günü Bitir</button>
             </div>
             <div id="courierDayMetrics" class="mini-stat-list"></div>
+          </div>
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow accent-gold">Kazanç ve Vardiya</p>
+                <h3>Kurye Kazanç Özeti</h3>
+              </div>
+              <span id="courierLiveBadge" class="soft-badge">Canlı akış bekleniyor</span>
+            </div>
+            <div id="courierEarningsMetrics" class="mini-stat-list"></div>
+            <div id="courierShiftMetrics" class="stack-list compact-stack-list"></div>
           </div>
           <div id="courierStats" class="mini-stat-list"></div>
         </article>
@@ -87,14 +98,14 @@
         <article class="glass-panel dark-panel courier-mission-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-gold">Aktif Gorevler</p>
+              <p class="eyebrow accent-gold">Aktif Görevler</p>
               <h3>Atanan Paketler</h3>
             </div>
           </div>
           <div class="courier-mission-strip">
             <div class="mini-stat-card">
-              <span>Gorev Ozeti</span>
-              <strong id="courierMissionMeta">Henuz aktif paket yok.</strong>
+              <span>Görev Özeti</span>
+              <strong id="courierMissionMeta">Henüz aktif paket yok.</strong>
             </div>
           </div>
           <div id="courierPackages" class="package-list"></div>
@@ -103,24 +114,24 @@
         <article class="glass-panel dark-panel courier-mission-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-gold">Paket Gecmisi</p>
-              <h3>Gecmis Teslimatlar</h3>
+              <p class="eyebrow accent-gold">Paket Geçmişi</p>
+              <h3>Geçmiş Teslimatlar</h3>
             </div>
           </div>
           <div class="history-shell">
             <div class="history-toolbar">
               <div class="badge-row" id="courierHistoryFilters">
-                <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gun</button>
+                <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gün</button>
                 <button class="ghost-btn" type="button" data-range="today">Bugun</button>
                 <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
-                <button class="ghost-btn" type="button" data-range="30d">Son 30 Gun</button>
-                <button class="ghost-btn" type="button" data-range="all">Tum Kayitlar</button>
+                <button class="ghost-btn" type="button" data-range="30d">Son 30 Gün</button>
+                <button class="ghost-btn" type="button" data-range="all">Tüm Kayıtlar</button>
               </div>
-              <strong id="courierHistoryMeta" class="history-meta">Son 50 kapanan teslimat gorunuyor.</strong>
+              <strong id="courierHistoryMeta" class="history-meta">Son 50 kapanan teslimat görünüyor.</strong>
             </div>
             <div id="courierHistory" class="stack-list history-list"></div>
             <div class="history-actions">
-              <button id="courierHistoryMore" class="ghost-btn" type="button">Daha Fazla Yukle</button>
+              <button id="courierHistoryMore" class="ghost-btn" type="button">Daha Fazla Yükle</button>
             </div>
           </div>
         </article>
@@ -146,7 +157,7 @@
           <strong class="restaurant-name"></strong>
         </div>
         <div>
-          <span>Bolge</span>
+          <span>Bölge</span>
           <strong class="zone-name"></strong>
         </div>
         <div>
@@ -154,7 +165,7 @@
           <strong class="eta-value"></strong>
         </div>
         <div>
-          <span>Odeme</span>
+          <span>Ödeme</span>
           <strong class="payment-method"></strong>
         </div>
       </div>

@@ -6,35 +6,40 @@ const PLATFORM_OPTIONS = [
 ];
 
 const PAYMENT_OPTIONS = [
-  "Online Odeme",
+  "Online \u00d6deme",
   "Nakit",
   "POS",
   "Sodexo",
-  "Yemek Karti",
+  "Yemek Kart\u0131",
 ];
+
 const STATUS_LABELS = {
-  pending: "Hazirlaniyor",
+  pending: "Haz\u0131rlan\u0131yor",
   awaiting_assignment: "Atama Bekliyor",
-  assigned: "Kuryeye Atandi",
+  assigned: "Kuryeye Atand\u0131",
   accepted_by_courier: "Kurye Kabul Etti",
   on_route: "Yolda",
   delivered: "Teslim Edildi",
-  failed: "Basarisiz",
-  cancelled: "Iptal Edildi",
+  failed: "Ba\u015far\u0131s\u0131z",
+  cancelled: "\u0130ptal Edildi",
 };
+
 const STATUS_OPTIONS = ["pending", "awaiting_assignment", "assigned", "accepted_by_courier", "on_route", "delivered", "failed", "cancelled"];
+
 const PAYMENT_STATUS_LABELS = {
-  unpaid: "Odeme Bekliyor",
-  paid_online: "Online Odendi",
+  unpaid: "\u00d6deme Bekliyor",
+  paid_online: "Online \u00d6dendi",
   cash_expected: "Nakit Bekleniyor",
-  cash_collected: "Nakit Alindi",
-  payment_issue: "Odeme Sorunu",
+  cash_collected: "Nakit Al\u0131nd\u0131",
+  payment_issue: "\u00d6deme Sorunu",
 };
+
 const COURIER_STATUS_LABELS = {
   offline: "Offline",
   online: "Online",
-  busy: "Mesgul",
+  busy: "Me\u015fgul",
 };
+
 let toastHost = null;
 
 async function api(path, options = {}) {
@@ -65,7 +70,7 @@ async function api(path, options = {}) {
   }
 
   if (!result.response.ok) {
-    throw new Error(result.data.error || "Bir hata olustu.");
+    throw new Error(result.data.error || "Bir hata olu\u015ftu.");
   }
 
   return result.data;
@@ -90,31 +95,31 @@ function formatCurrency(value) {
 
 function formatTimeAgo(value) {
   if (!value) {
-    return "Henuz yok";
+    return "Hen\u00fcz yok";
   }
 
   const diffMs = Date.now() - new Date(value).getTime();
   const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
 
   if (diffSeconds < 10) {
-    return "simdi";
+    return "\u015fimdi";
   }
   if (diffSeconds < 60) {
-    return `${diffSeconds} sn once`;
+    return `${diffSeconds} sn \u00f6nce`;
   }
 
   const diffMinutes = Math.floor(diffSeconds / 60);
   if (diffMinutes < 60) {
-    return `${diffMinutes} dk once`;
+    return `${diffMinutes} dk \u00f6nce`;
   }
 
   const diffHours = Math.floor(diffMinutes / 60);
   if (diffHours < 24) {
-    return `${diffHours} sa once`;
+    return `${diffHours} sa \u00f6nce`;
   }
 
   const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays} gun once`;
+  return `${diffDays} g\u00fcn \u00f6nce`;
 }
 
 function statusClassName(status) {
@@ -141,7 +146,7 @@ function createStatusOptions(selected = "", allowedOptions = STATUS_OPTIONS) {
 
 function createPlatformBadges(platforms) {
   if (!platforms || platforms.length === 0) {
-    return '<span class="soft-badge">Platform tanimli degil</span>';
+    return '<span class="soft-badge">Platform tan\u0131ml\u0131 de\u011fil</span>';
   }
 
   return platforms.map((platform) => `<span class="soft-badge">${platform}</span>`).join("");
@@ -195,4 +200,55 @@ function showToast(message, tone = "success") {
       toast.remove();
     }, 220);
   }, 2600);
+}
+
+function connectLiveStream(path, token, handlers = {}) {
+  if (!token || typeof EventSource === "undefined") {
+    return { close() {} };
+  }
+
+  const stream = new EventSource(`${path}?token=${encodeURIComponent(token)}`);
+  if (typeof handlers.onOpen === "function") {
+    stream.addEventListener("ready", (event) => handlers.onOpen(event));
+  }
+  if (typeof handlers.onMessage === "function") {
+    [
+      "workspace-update",
+      "package-created",
+      "package-assigned",
+      "assignment-waiting",
+      "package-status",
+      "package-reassign",
+      "package-override",
+      "package-unassign",
+      "integration-order",
+      "platform-order",
+      "courier-online",
+      "courier-location",
+      "courier-day-close",
+      "courier-shift-ended",
+      "courier-availability",
+      "platform-account-saved",
+      "platform-test",
+      "restaurant-created",
+      "courier-created",
+    ].forEach((type) => {
+      stream.addEventListener(type, (event) => {
+        try {
+          handlers.onMessage(JSON.parse(event.data || "{}"));
+        } catch {
+          handlers.onMessage({});
+        }
+      });
+    });
+  }
+  if (typeof handlers.onError === "function") {
+    stream.addEventListener("error", handlers.onError);
+  }
+
+  return {
+    close() {
+      stream.close();
+    },
+  };
 }

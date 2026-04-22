@@ -20,29 +20,29 @@
         <div>
           <div class="brand-mark">Delivera Express</div>
           <p class="eyebrow accent-teal">Admin Paneli</p>
-          <h2>Mersin operasyonunu tek merkezden yonet.</h2>
-          <p class="sidebar-copy">Restoranlar, aktif siparisler, atama bekleyen paketler ve sahadaki kuryeler ayni akista burada gorunur.</p>
+          <h2>Mersin operasyonunu tek merkezden yönet.</h2>
+          <p class="sidebar-copy">Restoranlar, aktif siparişler, atama bekleyen paketler ve sahadaki kuryeler aynı akışta burada görünür.</p>
         </div>
         <div class="hero-summary-card">
-          <span>Operasyon Ozeti</span>
-          <strong id="adminSummary">Veriler yukleniyor...</strong>
+          <span>Operasyon Özeti</span>
+          <strong id="adminSummary">Veriler yükleniyor...</strong>
         </div>
       </section>
       <section id="adminLoginPanel" class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-teal">Admin Login</p>
-          <h2>Operasyon merkezine yetkili hesap ile giris yap.</h2>
+          <h2>Operasyon merkezine yetkili hesap ile giriş yap.</h2>
         </div>
         <form id="adminLoginForm" class="login-form">
           <label>
-            Kullanici Adi
+            Kullanıcı Adı
             <input name="username" type="text" placeholder="admin" autocomplete="username" required>
           </label>
           <label>
-            Sifre
+            Şifre
             <input name="password" type="password" placeholder="Delivera123!" autocomplete="current-password" required>
           </label>
-          <button class="primary-btn" type="submit">Admin Girisi</button>
+          <button class="primary-btn" type="submit">Admin Girişi</button>
         </form>
       </section>
 
@@ -50,20 +50,20 @@
       <section class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-teal">Command Center</p>
-          <h2>Atama motoru, Mersin bolge parcasi ve kurye havuzu.</h2>
+          <h2>Atama motoru, Mersin bölge yapısı ve kurye havuzu.</h2>
         </div>
         <div class="login-form">
           <label>
-            Restoran Secimi
+            Restoran Seçimi
             <select id="restaurantFilter"></select>
           </label>
-          <button id="adminLogoutButton" class="ghost-btn" type="button">Cikis Yap</button>
+          <button id="adminLogoutButton" class="ghost-btn" type="button">Çıkış Yap</button>
         </div>
       </section>
 
       <section class="kpi-grid">
         <article class="metric-card">
-          <span>Aktif Siparis</span>
+          <span>Aktif Sipariş</span>
           <strong id="activeCouriers">0</strong>
         </article>
         <article class="metric-card">
@@ -75,11 +75,11 @@
           <strong id="inTransitPackages">0</strong>
         </article>
         <article class="metric-card">
-          <span>Atanmis</span>
+          <span>Atanmış</span>
           <strong id="totalPackages">0</strong>
         </article>
         <article class="metric-card">
-          <span>Musait Kurye</span>
+          <span>Müsait Kurye</span>
           <strong id="availableCourierCount">0</strong>
         </article>
         <article class="metric-card">
@@ -95,9 +95,10 @@
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Restoran Odaqi</p>
-            <h3 id="selectedRestaurantTitle">Tum Restoranlar</h3>
+            <p class="eyebrow accent-teal">Restoran Odağı</p>
+            <h3 id="selectedRestaurantTitle">Tüm Restoranlar</h3>
           </div>
+          <span id="adminLiveBadge" class="soft-badge">Canlı akış bekleniyor</span>
         </div>
         <div id="restaurantStatsBoard" class="zone-board"></div>
       </section>
@@ -112,19 +113,19 @@
           </div>
           <form id="restaurantForm" class="form-grid">
             <label>
-              Restoran Adi
+              Restoran Adı
               <input name="name" type="text" placeholder="Burger Station" required>
             </label>
             <label>
-              Portal Kullanici
+              Portal Kullanıcı
               <input name="portalUsername" type="text" placeholder="burgerstation101">
             </label>
             <label>
-              Bolge
+              Bölge
               <select name="zone" id="restaurantZone"></select>
             </label>
             <label>
-              Portal Sifre
+              Portal Şifre
               <input name="portalPassword" type="password" placeholder="Rest1234!">
             </label>
             <label>
@@ -152,19 +153,19 @@
           </div>
           <form id="courierForm" class="form-grid">
             <label>
-              Kurye Adi
+              Kurye Adı
               <input name="name" type="text" placeholder="Mert Kaya" required>
             </label>
             <label>
-              Kullanici Adi
+              Kullanıcı Adı
               <input name="username" type="text" placeholder="mert" required>
             </label>
             <label>
-              Bolge
+              Bölge
               <select name="zone" id="courierZone"></select>
             </label>
             <label>
-              Sifre
+              Şifre
               <input name="password" type="password" placeholder="mert123" required>
             </label>
             <label>
@@ -177,7 +178,7 @@
             </label>
             <label class="inline-check full-width">
               <input name="available" type="checkbox" checked>
-              Kurye atamaya acik
+              Kurye atamaya açık
             </label>
             <button class="primary-btn full-width" type="submit">Kurye Ekle</button>
           </form>
@@ -187,22 +188,31 @@
         <article class="glass-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-teal">Bolge Haritasi</p>
-              <h3>Bolge Bazli Dagilim</h3>
+              <p class="eyebrow accent-teal">Bölge Haritası</p>
+              <h3>Bölge Bazlı Dağılım</h3>
             </div>
           </div>
           <div id="zoneBoard" class="zone-board"></div>
+        </article>
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Yoğunluk Uyarıları</p>
+              <h3>Bölge Bazlı Operasyon Alarmı</h3>
+            </div>
+          </div>
+          <div id="zoneAlertList" class="stack-list"></div>
         </article>
       </section>
 
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Aktif Siparisler</p>
-            <h3 id="packagePanelTitle">Canli Operasyon Siparisleri</h3>
+            <p class="eyebrow accent-teal">Aktif Siparişler</p>
+            <h3 id="packagePanelTitle">Canlı Operasyon Siparişleri</h3>
           </div>
           <div class="card-actions">
-            <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alici, kurye ara...">
+            <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alıcı, kurye ara...">
           </div>
         </div>
         <div id="packageList" class="package-list"></div>
@@ -213,7 +223,7 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-teal">Atama Bekleyenler</p>
-              <h3>Havuzda Bekleyen Siparisler</h3>
+              <h3>Havuzda Bekleyen Siparişler</h3>
             </div>
           </div>
           <div id="awaitingPackageList" class="stack-list"></div>
@@ -233,8 +243,8 @@
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Webhook Loglari</p>
-            <h3>Entegrasyon Dogrulama Kayitlari</h3>
+            <p class="eyebrow accent-teal">Webhook Logları</p>
+            <h3>Entegrasyon Doğrulama Kayıtları</h3>
           </div>
         </div>
         <div id="webhookLogList" class="stack-list"></div>
@@ -242,8 +252,8 @@
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Audit Loglari</p>
-            <h3>Sistem Hareket Kayitlari</h3>
+            <p class="eyebrow accent-teal">Audit Logları</p>
+            <h3>Sistem Hareket Kayıtları</h3>
           </div>
         </div>
         <div id="auditLogList" class="stack-list"></div>
@@ -252,8 +262,8 @@
       <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Kurye Gun Sonu</p>
-            <h3>Gun Sonu Ciro ve Teslimat Raporlari</h3>
+            <p class="eyebrow accent-teal">Kurye Gün Sonu</p>
+            <h3>Gün Sonu Ciro ve Teslimat Raporları</h3>
           </div>
         </div>
         <div id="courierDailyReportList" class="stack-list"></div>
@@ -288,7 +298,7 @@
           <strong class="distance-value"></strong>
         </div>
         <div>
-          <span>Odeme</span>
+          <span>Ödeme</span>
           <strong class="payment-method"></strong>
         </div>
       </div>

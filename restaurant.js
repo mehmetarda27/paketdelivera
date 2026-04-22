@@ -10,6 +10,7 @@ const restaurantState = {
   historyRange: "7d",
   historyVisibleCount: 50,
   workspacePollId: null,
+  liveStream: null,
 };
 
 const restaurantRefs = {
@@ -39,6 +40,8 @@ const restaurantRefs = {
   waitingPackages: document.getElementById("restaurantWaitingPackages"),
   inTransitPackages: document.getElementById("restaurantInTransitPackages"),
   activeCouriers: document.getElementById("restaurantActiveCouriers"),
+  performanceBoard: document.getElementById("restaurantPerformanceBoard"),
+  liveBadge: document.getElementById("restaurantLiveBadge"),
   activeOrders: document.getElementById("activeOrders"),
   orderHistory: document.getElementById("orderHistory"),
   historyMeta: document.getElementById("restaurantHistoryMeta"),
@@ -46,6 +49,11 @@ const restaurantRefs = {
   historyFilters: document.getElementById("restaurantHistoryFilters"),
   samplePayload: document.getElementById("samplePayload"),
   samplePaymentMethod: document.getElementById("samplePaymentMethod"),
+  integrationWizardSteps: document.getElementById("integrationWizardSteps"),
+  integrationWizardWebhook: document.getElementById("integrationWizardWebhook"),
+  integrationWizardStatus: document.getElementById("integrationWizardStatus"),
+  copyWebhookButton: document.getElementById("copyWebhookButton"),
+  testIntegrationButton: document.getElementById("testIntegrationButton"),
 };
 
 function restaurantAuthHeaders() {
@@ -65,6 +73,8 @@ function clearRestaurantAuth() {
   restaurantState.data = null;
   restaurantState.selectedRestaurantId = "";
   stopRestaurantWorkspacePolling();
+  restaurantState.liveStream?.close?.();
+  restaurantState.liveStream = null;
   localStorage.removeItem(RESTAURANT_TOKEN_KEY);
   localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
 }
@@ -104,6 +114,29 @@ function startRestaurantWorkspacePolling() {
   restaurantState.workspacePollId = window.setInterval(() => {
     loadRestaurantWorkspace({ silent: true });
   }, RESTAURANT_WORKSPACE_REFRESH_MS);
+}
+
+function startRestaurantLiveStream() {
+  if (restaurantState.liveStream || !restaurantState.token) {
+    return;
+  }
+
+  restaurantState.liveStream = connectLiveStream("/api/restaurant/stream", restaurantState.token, {
+    onMessage(event) {
+      if (event?.message) {
+        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+      }
+      loadRestaurantWorkspace({ silent: true });
+    },
+    onError() {
+      if (restaurantRefs.liveBadge) {
+        restaurantRefs.liveBadge.textContent = "Canli akis tekrar baglaniyor";
+      }
+      restaurantState.liveStream?.close?.();
+      restaurantState.liveStream = null;
+      window.setTimeout(() => startRestaurantLiveStream(), 2000);
+    },
+  });
 }
 
 function renderPlatformChecks() {
@@ -307,6 +340,71 @@ function renderPlatformAccounts(accounts) {
   });
 }
 
+function renderRestaurantPerformance(performance) {
+  if (!restaurantRefs.performanceBoard) {
+    return;
+  }
+
+  const data = performance || {
+    todayOrderCount: 0,
+    deliveredTodayCount: 0,
+    averageAssignmentMinutes: 0,
+    averageDeliveryMinutes: 0,
+    failedDeliveryRate: 0,
+  };
+
+  restaurantRefs.performanceBoard.innerHTML = `
+    <article class="mini-stat-card">
+      <span>Bugun Siparis</span>
+      <strong>${data.todayOrderCount}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Teslim Edilen</span>
+      <strong>${data.deliveredTodayCount}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Ort. Atama</span>
+      <strong>${data.averageAssignmentMinutes} dk</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Ort. Teslim</span>
+      <strong>${data.averageDeliveryMinutes} dk</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Basarisiz Oran</span>
+      <strong>%${data.failedDeliveryRate}</strong>
+    </article>
+  `;
+}
+
+function renderIntegrationWizard(wizard) {
+  if (!restaurantRefs.integrationWizardSteps) {
+    return;
+  }
+
+  const safeWizard = wizard || {
+    webhookUrl: "Platform hesabi kaydedince webhook burada gorunur.",
+    verificationStatus: "pending",
+    helpText: "Platform entegrasyonu icin once hesap bilgilerini kaydet.",
+    steps: [],
+  };
+
+  restaurantRefs.integrationWizardSteps.innerHTML = safeWizard.steps.map((step) => `
+    <article class="stack-card wizard-step-card ${step.done ? "wizard-step-done" : ""}">
+      <div class="stack-top">
+        <div>
+          <strong>${step.title} - ${step.label}</strong>
+          <p>${step.done ? "Hazir" : "Siradaki adim bekliyor"}</p>
+        </div>
+        <span class="soft-badge">${step.done ? "Tamam" : "Bekliyor"}</span>
+      </div>
+    </article>
+  `).join("") || '<div class="empty-state">Entegrasyon sihirbazi icin once restoran oturumu ac.</div>';
+
+  restaurantRefs.integrationWizardWebhook.textContent = safeWizard.webhookUrl;
+  restaurantRefs.integrationWizardStatus.textContent = `${safeWizard.helpText} Durum: ${safeWizard.verificationStatus}.`;
+}
+
 function renderRecentOrders(packages) {
   restaurantRefs.recentOrders.innerHTML = "";
   const list = packages.slice(0, 8);
@@ -318,7 +416,7 @@ function renderRecentOrders(packages) {
 
   list.forEach((pkg) => {
     const card = document.createElement("article");
-    card.className = "stack-card order-summary-card";
+    card.className = `stack-card order-summary-card ${!pkg.assignedCourierId ? "priority-alert-card" : ""}`;
     card.innerHTML = `
       <div class="stack-top">
         <div>
@@ -484,10 +582,16 @@ function hydrateRestaurant(data, explicitIntegration = null) {
     setRestaurantWorkspaceVisible(false);
     restaurantRefs.summary.textContent = "Restoran oturumu acik degil. Yeni restoran olusturabilir veya mevcut restoranla giris yapabilirsin.";
     restaurantRefs.packageRestaurantId.value = "";
+    if (restaurantRefs.liveBadge) {
+      restaurantRefs.liveBadge.textContent = "Canli akis kapali";
+    }
   } else {
     setRestaurantWorkspaceVisible(true);
     restaurantRefs.summary.textContent =
       `${data.restaurants[0].name} icin ${data.packages.length} siparis gorunuyor. Bu panel yalnizca bu restoranin verilerini gosterir.`;
+    if (restaurantRefs.liveBadge) {
+      restaurantRefs.liveBadge.textContent = "Canli akis acik";
+    }
   }
 
   restaurantRefs.totalPackages.textContent = activePackages.length;
@@ -497,6 +601,8 @@ function hydrateRestaurant(data, explicitIntegration = null) {
 
   renderRestaurantList(data.restaurants);
   renderPlatformAccounts(data.platformAccounts || []);
+  renderRestaurantPerformance(data.restaurantPerformance);
+  renderIntegrationWizard(data.integrationWizard);
   renderRecentOrders(data.packages);
   renderActiveOrders(data);
   renderOrderHistory(data.packages);
@@ -532,6 +638,8 @@ async function loadRestaurantWorkspace(options = {}) {
       couriers: [],
       packages: [],
       webhookLogs: [],
+      restaurantPerformance: null,
+      integrationWizard: null,
       stats: {
         totalRestaurants: 0,
         totalCouriers: 0,
@@ -553,6 +661,7 @@ async function loadRestaurantWorkspace(options = {}) {
     });
     hydrateRestaurant(data);
     startRestaurantWorkspacePolling();
+    startRestaurantLiveStream();
   } catch (error) {
     if (!options.silent) {
       clearRestaurantAuth();
@@ -575,6 +684,7 @@ restaurantRefs.accessForm.addEventListener("submit", async (event) => {
   persistRestaurantAuth(data);
   restaurantRefs.accessForm.reset();
   hydrateRestaurant(data.state);
+  startRestaurantLiveStream();
 });
 
 restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
@@ -614,6 +724,38 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
   showToast(`${restaurant.name} icin platform entegrasyonu kaydedildi.`);
 });
 
+restaurantRefs.copyWebhookButton?.addEventListener("click", async () => {
+  const text = restaurantRefs.integrationWizardWebhook?.textContent || "";
+  if (!text) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Webhook adresi kopyalandi.");
+  } catch {
+    showToast("Webhook adresi kopyalanamadi.", "error");
+  }
+});
+
+restaurantRefs.testIntegrationButton?.addEventListener("click", async () => {
+  const accountId = restaurantState.data?.integrationWizard?.currentAccountId;
+  if (!accountId) {
+    showToast("Test icin once platform hesabi kaydet.", "error");
+    return;
+  }
+  const response = await api("/api/restaurant/platform-accounts/test", {
+    method: "POST",
+    headers: restaurantAuthHeaders(),
+    retryWithRefresh: refreshRestaurantAccess,
+    body: JSON.stringify({ accountId }),
+  });
+  hydrateRestaurant(response.state);
+  showToast(
+    response.verification.status === "verified" ? "Baglanti basarili." : "Baglanti kontrol edildi.",
+    response.verification.status === "verified" ? "success" : "error"
+  );
+});
+
 restaurantRefs.logoutButton?.addEventListener("click", () => {
   if (restaurantState.refreshToken) {
     api("/api/restaurant/logout", {
@@ -633,6 +775,8 @@ restaurantRefs.logoutButton?.addEventListener("click", () => {
     packages: [],
     webhookLogs: [],
     platformAccounts: [],
+    restaurantPerformance: null,
+    integrationWizard: null,
     stats: {
       totalRestaurants: 0,
       totalCouriers: 0,

@@ -14,6 +14,7 @@ const courierState = {
   historyRange: "7d",
   historyVisibleCount: 50,
   lastPackageSnapshot: new Map(),
+  liveStream: null,
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -74,6 +75,9 @@ const courierRefs = {
   missionMeta: document.getElementById("courierMissionMeta"),
   stats: document.getElementById("courierStats"),
   dayMetrics: document.getElementById("courierDayMetrics"),
+  earningsMetrics: document.getElementById("courierEarningsMetrics"),
+  shiftMetrics: document.getElementById("courierShiftMetrics"),
+  liveBadge: document.getElementById("courierLiveBadge"),
   dayCloseButton: document.getElementById("courierDayCloseButton"),
   packages: document.getElementById("courierPackages"),
   history: document.getElementById("courierHistory"),
@@ -96,6 +100,8 @@ function clearCourierAuth() {
   courierState.data = null;
   courierState.lastCoords = null;
   courierState.lastPackageSnapshot = new Map();
+  courierState.liveStream?.close?.();
+  courierState.liveStream = null;
   localStorage.removeItem(STORAGE_TOKEN_KEY);
   localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY);
 }
@@ -150,6 +156,42 @@ function startWorkspacePolling() {
   courierState.workspacePollId = window.setInterval(() => {
     loadCourierWorkspace({ silent: true });
   }, WORKSPACE_POLL_MS);
+}
+
+function startCourierLiveStream() {
+  if (courierState.liveStream || !courierState.token) {
+    return;
+  }
+
+  courierState.liveStream = connectLiveStream("/api/courier/stream", courierState.token, {
+    onMessage(event) {
+      const toastableTypes = new Set([
+        "package-created",
+        "package-assigned",
+        "assignment-waiting",
+        "package-status",
+        "package-reassign",
+        "package-override",
+        "package-unassign",
+        "integration-order",
+        "platform-order",
+        "courier-day-close",
+        "courier-availability",
+      ]);
+      if (event?.message && toastableTypes.has(event.type)) {
+        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+      }
+      loadCourierWorkspace({ silent: true });
+    },
+    onError() {
+      if (courierRefs.liveBadge) {
+        courierRefs.liveBadge.textContent = "Canli akis tekrar baglaniyor";
+      }
+      courierState.liveStream?.close?.();
+      courierState.liveStream = null;
+      window.setTimeout(() => startCourierLiveStream(), 2000);
+    },
+  });
 }
 
 function requestNotificationPermission() {
@@ -280,6 +322,78 @@ function renderCourierDayMetrics(dayMetrics) {
       <strong>${metrics.hasClosedDay ? `Kapandi ${formatTimeAgo(metrics.closedAt)}` : "Henuz kapanmadi"}</strong>
     </article>
   `;
+}
+
+function renderCourierEarnings(earningsSummary) {
+  if (!courierRefs.earningsMetrics) {
+    return;
+  }
+
+  const data = earningsSummary || {
+    today: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
+    yesterday: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
+    last7Days: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
+    total: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
+  };
+
+  courierRefs.earningsMetrics.innerHTML = `
+    <article class="mini-stat-card">
+      <span>Bugun</span>
+      <strong>${formatCurrency(data.today.totalAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Dun</span>
+      <strong>${formatCurrency(data.yesterday.totalAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Son 7 Gun</span>
+      <strong>${formatCurrency(data.last7Days.totalAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Toplam Teslimat</span>
+      <strong>${data.total.deliveredCount}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Nakit / Online</span>
+      <strong>${formatCurrency(data.total.cashAmount)} / ${formatCurrency(data.total.paidOnlineAmount)}</strong>
+    </article>
+  `;
+}
+
+function renderCourierShiftSummary(shiftSummary) {
+  if (!courierRefs.shiftMetrics) {
+    return;
+  }
+
+  const currentShift = shiftSummary?.currentShift || null;
+  const recentShifts = shiftSummary?.recentShifts || [];
+  const items = [];
+
+  items.push(`
+    <article class="stack-card">
+      <div class="stack-top">
+        <div>
+          <strong>Vardiya Baslangici</strong>
+          <p>${currentShift?.startedAt ? formatDate(currentShift.startedAt) : "Acik vardiya yok"}</p>
+        </div>
+        <span class="soft-badge">${currentShift ? "Aktif" : "Kapali"}</span>
+      </div>
+    </article>
+  `);
+
+  items.push(`
+    <article class="stack-card">
+      <div class="stack-top">
+        <div>
+          <strong>Vardiya Bitisi</strong>
+          <p>${currentShift ? "Henuz kapanmadi" : (recentShifts[0]?.endedAt ? formatDate(recentShifts[0].endedAt) : "Kayit yok")}</p>
+        </div>
+        <span class="soft-badge">${recentShifts.length} kayit</span>
+      </div>
+    </article>
+  `);
+
+  courierRefs.shiftMetrics.innerHTML = items.join("");
 }
 
 function renderPackages(packages) {
@@ -469,13 +583,19 @@ function hydrateCourierWorkspace(data) {
   setLoggedIn(true);
   requestNotificationPermission();
   startWorkspacePolling();
+  startCourierLiveStream();
   courierRefs.name.textContent = data.courier.name;
   courierRefs.summary.textContent =
     `${data.courier.name} hesabinda ${data.packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length} aktif paket var.`;
+  if (courierRefs.liveBadge) {
+    courierRefs.liveBadge.textContent = "Canli akis acik";
+  }
   setLocationStatus(data.courier.lastLocationAt ? `Canli konum aktif. Son guncelleme ${formatTimeAgo(data.courier.lastLocationAt)}.` : "Konum izni verilirse admin paneli seni canli gorur.");
   syncAvailabilityButton(data.courier);
   renderCourierStats(data.courier, data.packages);
   renderCourierDayMetrics(data.dayMetrics);
+  renderCourierEarnings(data.earningsSummary);
+  renderCourierShiftSummary(data.shiftSummary);
   renderCourierFocus(data.courier, data.packages);
   renderPackages(data.packages);
   renderCourierHistory(data.packages);
@@ -605,12 +725,15 @@ async function loadCourierWorkspace(options = {}) {
     });
     hydrateCourierWorkspace(data);
   } catch (error) {
-    clearCourierAuth();
-    stopWorkspacePolling();
-    setLoggedIn(false);
-    if (!options.silent) {
-      courierRefs.summary.textContent = error.message;
-    }
+  clearCourierAuth();
+  stopWorkspacePolling();
+  setLoggedIn(false);
+  if (courierRefs.liveBadge) {
+    courierRefs.liveBadge.textContent = "Canli akis kapali";
+  }
+  if (!options.silent) {
+    courierRefs.summary.textContent = error.message;
+  }
   }
 }
 
@@ -694,6 +817,9 @@ courierRefs.logoutButton?.addEventListener("click", async () => {
   setLoggedIn(false);
   setLocationStatus("Konum kapatildi.");
   courierRefs.summary.textContent = "Cikis yapildi.";
+  if (courierRefs.liveBadge) {
+    courierRefs.liveBadge.textContent = "Canli akis kapali";
+  }
 });
 
 window.addEventListener("beforeunload", stopLocationWatch);

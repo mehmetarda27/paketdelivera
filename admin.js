@@ -7,6 +7,7 @@ const adminState = {
   token: localStorage.getItem(ADMIN_TOKEN_KEY) || "",
   refreshToken: localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "",
   selectedRestaurantId: "",
+  liveStream: null,
 };
 
 const adminRefs = {
@@ -24,6 +25,7 @@ const adminRefs = {
   offlineCourierCount: document.getElementById("offlineCourierCount"),
   selectedRestaurantTitle: document.getElementById("selectedRestaurantTitle"),
   packagePanelTitle: document.getElementById("packagePanelTitle"),
+  liveBadge: document.getElementById("adminLiveBadge"),
   restaurantStatsBoard: document.getElementById("restaurantStatsBoard"),
   restaurantForm: document.getElementById("restaurantForm"),
   restaurantZone: document.getElementById("restaurantZone"),
@@ -32,6 +34,7 @@ const adminRefs = {
   courierZone: document.getElementById("courierZone"),
   courierList: document.getElementById("courierList"),
   zoneBoard: document.getElementById("zoneBoard"),
+  zoneAlertList: document.getElementById("zoneAlertList"),
   packageList: document.getElementById("packageList"),
   awaitingPackageList: document.getElementById("awaitingPackageList"),
   activeCourierOpsList: document.getElementById("activeCourierOpsList"),
@@ -59,6 +62,8 @@ function clearAdminAuth() {
   adminState.refreshToken = "";
   adminState.data = null;
   adminState.selectedRestaurantId = "";
+  adminState.liveStream?.close?.();
+  adminState.liveStream = null;
   localStorage.removeItem(ADMIN_TOKEN_KEY);
   localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
 }
@@ -91,6 +96,29 @@ function setAdminLoggedIn(isLoggedIn) {
   adminRefs.workspace.classList.toggle("hidden", !isLoggedIn);
 }
 
+function startAdminLiveStream() {
+  if (adminState.liveStream || !adminState.token) {
+    return;
+  }
+
+  adminState.liveStream = connectLiveStream("/api/admin/stream", adminState.token, {
+    onMessage(event) {
+      if (event?.message) {
+        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+      }
+      loadAdminState().catch(() => {});
+    },
+    onError() {
+      if (adminRefs.liveBadge) {
+        adminRefs.liveBadge.textContent = "Canli akis tekrar baglaniyor";
+      }
+      adminState.liveStream?.close?.();
+      adminState.liveStream = null;
+      window.setTimeout(() => startAdminLiveStream(), 2000);
+    },
+  });
+}
+
 function bootstrapPath() {
   const params = new URLSearchParams();
   if (adminState.selectedRestaurantId) {
@@ -111,6 +139,7 @@ async function loadAdminState() {
     retryWithRefresh: refreshAdminAccess,
   });
   hydrateAdmin(data);
+  startAdminLiveStream();
 }
 
 function renderAdminStats(stats) {
@@ -256,6 +285,31 @@ function renderZoneBoard(zones) {
   });
 }
 
+function renderZoneAlerts(zoneAlerts) {
+  adminRefs.zoneAlertList.innerHTML = "";
+
+  if (!zoneAlerts || zoneAlerts.length === 0) {
+    adminRefs.zoneAlertList.innerHTML = '<div class="empty-state">Su an kritik bolge yogunlugu yok.</div>';
+    return;
+  }
+
+  zoneAlerts.forEach((alert) => {
+    const card = document.createElement("article");
+    card.className = `stack-card ${alert.severity === "critical" ? "priority-alert-card" : ""}`;
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${alert.zone}</strong>
+          <p>${alert.message}</p>
+          <p>${alert.waitingCount} bekleyen siparis - en eski bekleme ${alert.oldestWaitingMinutes} dk</p>
+        </div>
+        <span class="soft-badge">${alert.severity === "critical" ? "Kirmizi Oncelik" : "Yogunluk"}</span>
+      </div>
+    `;
+    adminRefs.zoneAlertList.appendChild(card);
+  });
+}
+
 function packageVisible(pkg) {
   const query = adminRefs.searchInput.value.trim().toLowerCase();
   if (!query) {
@@ -315,6 +369,10 @@ function buildPackageCard(pkg) {
   const select = node.querySelector(".status-select");
   const reassignButton = node.querySelector(".reassign-btn");
 
+  const wrapper = node.querySelector(".package-card");
+  if (!pkg.assignedCourierId && ["pending", "awaiting_assignment"].includes(pkg.status)) {
+    wrapper.classList.add("priority-alert-card");
+  }
   node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)}`;
   node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
   node.querySelector(".platform-name").textContent = pkg.sourcePlatform;
@@ -566,6 +624,9 @@ function renderCourierDailyReports(reports) {
 function hydrateAdmin(data) {
   adminState.data = data;
   setAdminLoggedIn(true);
+  if (adminRefs.liveBadge) {
+    adminRefs.liveBadge.textContent = "Canli akis acik";
+  }
   renderAdminStats(data.stats);
   setZoneOptions(adminRefs.courierZone, data.zones);
   setZoneOptions(adminRefs.restaurantZone, data.zones);
@@ -573,6 +634,7 @@ function hydrateAdmin(data) {
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
   renderZoneBoard(data.zones);
+  renderZoneAlerts(data.zoneAlerts || []);
   renderAdminPackages(data.packages);
   renderAwaitingPackages(data.packages);
   renderActiveCourierOps(data.couriers);
@@ -594,6 +656,7 @@ adminRefs.loginForm.addEventListener("submit", async (event) => {
   persistAdminAuth(login);
   adminRefs.loginForm.reset();
   await loadAdminState();
+  startAdminLiveStream();
 });
 
 adminRefs.courierForm.addEventListener("submit", async (event) => {
@@ -668,12 +731,18 @@ adminRefs.logoutButton?.addEventListener("click", () => {
   clearAdminAuth();
   adminRefs.summary.textContent = "Admin oturumu kapatildi.";
   setAdminLoggedIn(false);
+  if (adminRefs.liveBadge) {
+    adminRefs.liveBadge.textContent = "Canli akis kapali";
+  }
 });
 
 loadAdminState().catch((error) => {
   clearAdminAuth();
   adminRefs.summary.textContent = error.message;
   setAdminLoggedIn(false);
+  if (adminRefs.liveBadge) {
+    adminRefs.liveBadge.textContent = "Canli akis kapali";
+  }
 });
 
 setInterval(() => {
