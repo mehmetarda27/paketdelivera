@@ -48,6 +48,7 @@ const PLATFORM_VERIFICATION_STATUS = {
   FAILED: "failed",
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
+const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 25_000);
 const PENDING_STATUS = "pending";
 const AWAITING_ASSIGNMENT_STATUS = "awaiting_assignment";
 const ASSIGNED_STATUS = "assigned";
@@ -330,6 +331,53 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (courier_id) REFERENCES couriers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS notification_logs (
+    id TEXT PRIMARY KEY,
+    target_role TEXT NOT NULL,
+    target_id TEXT,
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS courier_shift_plans (
+    id TEXT PRIMARY KEY,
+    courier_id TEXT NOT NULL,
+    zone TEXT NOT NULL,
+    plan_date TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (courier_id) REFERENCES couriers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS cash_reconciliations (
+    id TEXT PRIMARY KEY,
+    courier_id TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    expected_cash REAL NOT NULL DEFAULT 0,
+    reported_cash REAL NOT NULL DEFAULT 0,
+    variance REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    package_ids_json TEXT NOT NULL,
+    admin_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (courier_id) REFERENCES couriers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS announcements (
+    id TEXT PRIMARY KEY,
+    target_role TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   );
 `);
 
@@ -762,14 +810,14 @@ function validateIntegrationDraft(body, restaurant) {
     phone: trimmed(body.phone),
     address: trimmed(body.address),
     zone: trimmed(body.zone || restaurant.zone),
-    eta: trimmed(body.eta),
+    eta: trimmed(body.eta) || `${suggestedRestaurantPrepMinutes(trimmed(body.zone || restaurant.zone))} dk`,
     paymentMethod,
     orderAmount: normalizeMoney(body.orderAmount ?? body.amount ?? body.totalAmount ?? body.total_price),
     paymentStatus: normalizePaymentStatus(body.paymentStatus, paymentMethod),
     latitude: Number(body.latitude ?? body.x ?? restaurant.latitude),
     longitude: Number(body.longitude ?? body.y ?? restaurant.longitude),
     note: trimmed(body.note),
-    status: trimmed(body.status) ? normalizeStatus(body.status) : AWAITING_ASSIGNMENT_STATUS,
+    status: trimmed(body.status) ? normalizeStatus(body.status) : PENDING_STATUS,
     assignmentStatus: "pending",
     assignedCourierId: null,
     assignedCourierName: null,
@@ -832,6 +880,15 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   }
 
   return UNPAID_PAYMENT_STATUS;
+}
+
+function suggestedRestaurantPrepMinutes(zone, state = currentState()) {
+  const zonePackages = state.packages.filter((pkg) => pkg.zone === zone && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(pkg.status)));
+  const zoneCouriers = state.couriers.filter((courier) => courier.zone === zone);
+  const busyCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_BUSY_STATUS).length;
+  const onlineCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS).length;
+  const pressure = zonePackages.length + (busyCouriers * 2) - onlineCouriers;
+  return Math.max(5, Math.min(15, 5 + Math.max(0, pressure)));
 }
 
 function normalizeCourierStatus(status, available = false) {
@@ -1343,6 +1400,110 @@ function writeAuditLog(entry) {
   );
 }
 
+function shouldPersistNotification(event) {
+  return Boolean(event?.message) && !["courier-location"].includes(event.type || "");
+}
+
+function persistNotification(targetRole, targetId, event) {
+  db.prepare(`
+    INSERT INTO notification_logs (id, target_role, target_id, event_type, message, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    uid("ntf"),
+    targetRole,
+    targetId || null,
+    event.type || "workspace-update",
+    event.message,
+    nowIso()
+  );
+}
+
+function persistNotificationsForEvent(event) {
+  if (!shouldPersistNotification(event)) {
+    return;
+  }
+  persistNotification("admin", null, event);
+  if (event.restaurantId) {
+    persistNotification("restaurant", event.restaurantId, event);
+  }
+  if (event.courierId) {
+    persistNotification("courier", event.courierId, event);
+  }
+}
+
+function getNotifications(targetRole, targetId = null, limit = 20) {
+  const rows = targetId
+    ? db.prepare(`
+      SELECT * FROM notification_logs
+      WHERE target_role = ? AND target_id = ?
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `).all(targetRole, targetId, limit)
+    : db.prepare(`
+      SELECT * FROM notification_logs
+      WHERE target_role = ? AND target_id IS NULL
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `).all(targetRole, limit);
+
+  return rows.map((row) => ({
+    id: row.id,
+    eventType: row.event_type,
+    message: row.message,
+    createdAt: row.created_at,
+  }));
+}
+
+function getAnnouncements(targetRole = null) {
+  const rows = targetRole
+    ? db.prepare(`
+      SELECT * FROM announcements
+      WHERE active = 1 AND target_role = ?
+      ORDER BY datetime(updated_at) DESC
+    `).all(targetRole)
+    : db.prepare(`
+      SELECT * FROM announcements
+      WHERE active = 1
+      ORDER BY datetime(updated_at) DESC
+    `).all();
+
+  return rows.map((row) => ({
+    id: row.id,
+    targetRole: row.target_role,
+    title: row.title,
+    message: row.message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function createAnnouncement(targetRole, title, message) {
+  const stamp = nowIso();
+  const id = uid("announce");
+  db.prepare(`
+    INSERT INTO announcements (id, target_role, title, message, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 1, ?, ?)
+  `).run(id, targetRole, title, message, stamp, stamp);
+  return id;
+}
+
+function deactivateAnnouncement(announcementId) {
+  const result = db.prepare(`
+    UPDATE announcements
+    SET active = 0, updated_at = ?
+    WHERE id = ? AND active = 1
+  `).run(nowIso(), announcementId);
+  return result.changes > 0;
+}
+
+function clearAnnouncements(targetRole = "courier") {
+  db.prepare(`
+    UPDATE announcements
+    SET active = 0, updated_at = ?
+    WHERE target_role = ? AND active = 1
+  `).run(nowIso(), targetRole);
+}
+
 function getPlatformAccounts(filter = {}) {
   const rows = filter.restaurantId
     ? db.prepare("SELECT * FROM platform_accounts WHERE restaurant_id = ? ORDER BY datetime(updated_at) DESC").all(filter.restaurantId)
@@ -1450,6 +1611,7 @@ function streamMatchesAudience(stream, event) {
 }
 
 function broadcastLiveEvent(event) {
+  persistNotificationsForEvent(event);
   const payload = `event: ${event.type || "workspace-update"}\ndata: ${JSON.stringify({
     type: event.type || "workspace-update",
     restaurantId: event.restaurantId || null,
@@ -1895,7 +2057,7 @@ function buildCourierWorkspace(courierId) {
   return {
     courier: {
       ...sanitizeCourier(courier),
-      activeLoad: packages.filter((item) => isActivePackageStatus(item.status)).length,
+      activeLoad: packages.filter((item) => isCapacityBlockingPackage(item)).length,
     },
     packages,
     dayMetrics: {
@@ -1909,6 +2071,8 @@ function buildCourierWorkspace(courierId) {
     },
     earningsSummary: buildCourierEarningsSummary(packages),
     shiftSummary: buildCourierShiftSummary(courierId),
+    notifications: getNotifications("courier", courierId, 20),
+    announcements: getAnnouncements("courier"),
   };
 }
 
@@ -2064,8 +2228,21 @@ function activeAssignmentsForCourier(packages, courierId, excludePackageId = nul
   return packages.filter((item) =>
     item.assignedCourierId === courierId &&
     item.id !== excludePackageId &&
-    isActivePackageStatus(item.status)
+    isCapacityBlockingPackage(item)
   ).length;
+}
+
+function isCourierOfferExpired(pkg, referenceTime = Date.now()) {
+  return normalizeStatus(pkg?.status) === ASSIGNED_STATUS &&
+    pkg?.assignedAt &&
+    referenceTime - new Date(pkg.assignedAt).getTime() >= COURIER_OFFER_TIMEOUT_MS;
+}
+
+function isCapacityBlockingPackage(pkg) {
+  if (!isActivePackageStatus(pkg?.status)) {
+    return false;
+  }
+  return !isCourierOfferExpired(pkg);
 }
 
 function toRadians(value) {
@@ -2184,7 +2361,8 @@ function evaluateAssignmentFailure(state, pkg) {
   };
 }
 
-function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map()) {
+function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
+  const excludedCourierIds = new Set(options.excludedCourierIds || []);
   return state.couriers
     .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS && courier.zone === pkg.zone)
     .map((courier) => ({
@@ -2195,7 +2373,11 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map()) {
         activeAssignmentsForCourier(state.packages, courier.id, pkg.id)
       ),
     }))
-    .filter(({ distance: courierDistance, load }) => courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM && load < 1)
+    .filter(({ courier, distance: courierDistance, load }) =>
+      courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM &&
+      load < 1 &&
+      !excludedCourierIds.has(courier.id)
+    )
     .sort((left, right) => left.distance - right.distance || left.load - right.load);
 }
 
@@ -2277,7 +2459,8 @@ function tryAssignPackageAtomically(pkg, candidate) {
     }
 
     const freshStatus = normalizeStatus(freshPackage.status);
-    if (!isAssignableOrderStatus(freshStatus)) {
+    const freshOfferExpired = isCourierOfferExpired(mapPackageRow(freshPackage, new Map()));
+    if (!isAssignableOrderStatus(freshStatus) || (freshStatus === ASSIGNED_STATUS && !freshOfferExpired)) {
       return { ok: false, reason: "sistemsel hata", note: "Siparis bu durumda otomatik atamaya uygun degil." };
     }
 
@@ -2305,7 +2488,20 @@ function tryAssignPackageAtomically(pkg, candidate) {
         WHERE assigned_courier_id = ?
           AND id != ?
           AND status IN (?, ?, ?)
-      `).get(targetCourier.id, pkg.id, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS)?.total || 0
+          AND NOT (
+            status = ?
+            AND assigned_at IS NOT NULL
+            AND (strftime('%s','now') - strftime('%s', assigned_at)) * 1000 >= ?
+          )
+      `).get(
+        targetCourier.id,
+        pkg.id,
+        ASSIGNED_STATUS,
+        ACCEPTED_BY_COURIER_STATUS,
+        ON_ROUTE_STATUS,
+        ASSIGNED_STATUS,
+        COURIER_OFFER_TIMEOUT_MS
+      )?.total || 0
     );
 
     if (activeLoad >= 1) {
@@ -2319,7 +2515,14 @@ function tryAssignPackageAtomically(pkg, candidate) {
       SET status = ?, assignment_status = ?, assigned_courier_id = ?, assigned_courier_name = ?, assigned_at = ?,
           distance_km = ?, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
       WHERE id = ?
-        AND status IN (?, ?, ?, ?)
+        AND (
+          status IN (?, ?, ?, ?)
+          OR (
+            status = ?
+            AND assigned_at IS NOT NULL
+            AND (strftime('%s','now') - strftime('%s', assigned_at)) * 1000 >= ?
+          )
+        )
     `).run(
       ASSIGNED_STATUS,
       "assigned",
@@ -2334,7 +2537,9 @@ function tryAssignPackageAtomically(pkg, candidate) {
       PENDING_STATUS,
       AWAITING_ASSIGNMENT_STATUS,
       ASSIGNED_STATUS,
-      FAILED_STATUS
+      FAILED_STATUS,
+      ASSIGNED_STATUS,
+      COURIER_OFFER_TIMEOUT_MS
     );
 
     if (update.changes !== 1) {
@@ -2348,11 +2553,17 @@ function tryAssignPackageAtomically(pkg, candidate) {
 
 function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
   const packageStatus = normalizeStatus(pkg.status);
-  if (!isAssignableOrderStatus(packageStatus)) {
+  const offerExpired = isCourierOfferExpired(pkg);
+  if (!isAssignableOrderStatus(packageStatus) || (packageStatus === ASSIGNED_STATUS && !offerExpired)) {
     return false;
   }
 
-  const ranked = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
+  const ranked = rankEligibleCouriers(
+    state,
+    pkg,
+    occupiedCourierLoads,
+    offerExpired && pkg.assignedCourierId ? { excludedCourierIds: [pkg.assignedCourierId] } : {}
+  );
   if (ranked.length === 0) {
     const failure = evaluateAssignmentFailure(state, pkg);
     persistPackageAssignment(buildAssignmentFailure(pkg, failure.reason, failure.note));
@@ -2402,6 +2613,130 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
     message: `${pkg.trackingNo || pkg.id} paketi hala uygun kurye bekliyor.`,
   });
   return false;
+}
+
+function getShiftPlans(planDate = dayKey()) {
+  return db.prepare(`
+    SELECT plans.*, couriers.name AS courier_name, couriers.zone AS courier_zone
+    FROM courier_shift_plans plans
+    JOIN couriers ON couriers.id = plans.courier_id
+    WHERE plans.plan_date = ?
+    ORDER BY plans.start_time ASC
+  `).all(planDate).map((row) => ({
+    id: row.id,
+    courierId: row.courier_id,
+    courierName: row.courier_name,
+    zone: row.zone || row.courier_zone,
+    planDate: row.plan_date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function summarizeShiftPlans(planDate = dayKey()) {
+  const plans = getShiftPlans(planDate);
+  return getZones().map((zone) => {
+    const zonePlans = plans.filter((plan) => plan.zone === zone);
+    const active = zonePlans.length;
+    return {
+      zone,
+      plannedCouriers: active,
+      missingCouriers: Math.max(0, 2 - active),
+    };
+  });
+}
+
+function upsertCashReconciliation(courierId, reportDate, summary) {
+  const now = nowIso();
+  const expectedCash = Number(summary.cashCollectedAmount || 0);
+  const variance = 0;
+  const existing = db.prepare("SELECT * FROM cash_reconciliations WHERE courier_id = ? AND report_date = ?").get(courierId, reportDate);
+  if (existing) {
+    db.prepare(`
+      UPDATE cash_reconciliations
+      SET expected_cash = ?, reported_cash = ?, variance = ?, package_ids_json = ?, updated_at = ?
+      WHERE id = ?
+    `).run(expectedCash, expectedCash, variance, json(summary.packageIds || []), now, existing.id);
+  } else {
+    db.prepare(`
+      INSERT INTO cash_reconciliations (id, courier_id, report_date, expected_cash, reported_cash, variance, status, package_ids_json, admin_note, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)
+    `).run(uid("cash"), courierId, reportDate, expectedCash, expectedCash, variance, json(summary.packageIds || []), now, now);
+  }
+}
+
+function getCashReconciliations(limit = 30) {
+  return db.prepare(`
+    SELECT reconciliations.*, couriers.name AS courier_name, couriers.zone AS courier_zone
+    FROM cash_reconciliations reconciliations
+    JOIN couriers ON couriers.id = reconciliations.courier_id
+    ORDER BY datetime(reconciliations.updated_at) DESC
+    LIMIT ?
+  `).all(limit).map((row) => ({
+    id: row.id,
+    courierId: row.courier_id,
+    courierName: row.courier_name,
+    zone: row.courier_zone,
+    reportDate: row.report_date,
+    expectedCash: Number(row.expected_cash || 0),
+    reportedCash: Number(row.reported_cash || 0),
+    variance: Number(row.variance || 0),
+    status: row.status,
+    packageIds: parseJson(row.package_ids_json, []),
+    adminNote: row.admin_note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function upsertShiftPlan(courierId, planDate, startTime, endTime, zone) {
+  const courier = getCourierById(courierId);
+  if (!courier) {
+    throw httpError(404, "Kurye bulunamadi.");
+  }
+  const stamp = nowIso();
+  const existing = db.prepare("SELECT * FROM courier_shift_plans WHERE courier_id = ? AND plan_date = ?").get(courierId, planDate);
+  if (existing) {
+    db.prepare(`
+      UPDATE courier_shift_plans
+      SET zone = ?, start_time = ?, end_time = ?, status = 'planned', updated_at = ?
+      WHERE id = ?
+    `).run(zone || courier.zone, startTime, endTime, stamp, existing.id);
+    return existing.id;
+  }
+
+  const id = uid("shiftplan");
+  db.prepare(`
+    INSERT INTO courier_shift_plans (id, courier_id, zone, plan_date, start_time, end_time, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?)
+  `).run(id, courierId, zone || courier.zone, planDate, startTime, endTime, stamp, stamp);
+  return id;
+}
+
+function updateCashReconciliationRecord(recordId, payload = {}) {
+  const current = db.prepare("SELECT * FROM cash_reconciliations WHERE id = ?").get(recordId);
+  if (!current) {
+    throw httpError(404, "Nakit mutabakat kaydi bulunamadi.");
+  }
+
+  const expectedCash = Number(current.expected_cash || 0);
+  const reportedCash = payload.reportedCash === undefined || payload.reportedCash === ""
+    ? Number(current.reported_cash || expectedCash)
+    : normalizeMoney(payload.reportedCash);
+  const status = trimmed(payload.status) || current.status || "pending";
+  const adminNote = trimmed(payload.adminNote) || current.admin_note || "";
+  const variance = Number((reportedCash - expectedCash).toFixed(2));
+
+  db.prepare(`
+    UPDATE cash_reconciliations
+    SET reported_cash = ?, variance = ?, status = ?, admin_note = ?, updated_at = ?
+    WHERE id = ?
+  `).run(reportedCash, variance, status, adminNote, nowIso(), recordId);
+
+  return db.prepare("SELECT * FROM cash_reconciliations WHERE id = ?").get(recordId);
 }
 
 function adminAssignPackageToCourier(packageId, courierId) {
@@ -2518,11 +2853,14 @@ function rebalancePackages() {
   const state = currentState();
   const occupiedCourierLoads = new Map();
   state.packages
-    .filter((pkg) => isActivePackageStatus(pkg.status))
+    .filter((pkg) => isCapacityBlockingPackage(pkg))
     .forEach((pkg) => reserveCourier(occupiedCourierLoads, pkg.assignedCourierId, 1));
 
   const candidatePackages = state.packages
-    .filter((pkg) => [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(normalizeStatus(pkg.status)))
+    .filter((pkg) => {
+      const status = normalizeStatus(pkg.status);
+      return [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(status) || isCourierOfferExpired(pkg);
+    })
     .sort((left, right) => waitingPackagePriority(left) - waitingPackagePriority(right));
 
   candidatePackages.forEach((pkg) => {
@@ -2588,6 +2926,15 @@ function decorateState(filter = {}) {
     couriers,
     packages,
     courierDailyReports: getCourierDailyReports(50),
+    shiftPlans: getShiftPlans(dayKey()),
+    shiftPlanSummary: summarizeShiftPlans(dayKey()),
+    cashReconciliations: getCashReconciliations(30),
+    announcements: filter.courierId ? getAnnouncements("courier") : getAnnouncements(),
+    notifications: filter.courierId
+      ? getNotifications("courier", filter.courierId, 20)
+      : filter.restaurantId
+        ? getNotifications("restaurant", filter.restaurantId, 20)
+        : getNotifications("admin", null, 20),
     webhookLogs: state.webhookLogs,
     stats: stats(state),
     restaurantPerformance: filter.restaurantId ? buildRestaurantPerformance(packages) : null,
@@ -2984,11 +3331,11 @@ function mapExternalStatusToInternal(status) {
   const incoming = trimmed(status).toUpperCase();
 
   if (!incoming) {
-    return AWAITING_ASSIGNMENT_STATUS;
+    return PENDING_STATUS;
   }
 
   if (["CREATED", "RECEIVED", "NEW", "PREPARING"].includes(incoming)) {
-    return AWAITING_ASSIGNMENT_STATUS;
+    return PENDING_STATUS;
   }
 
   if (["ASSIGNED", "COURIER_ASSIGNED"].includes(incoming)) {
@@ -3015,7 +3362,7 @@ function mapExternalStatusToInternal(status) {
     return CANCELED_STATUS;
   }
 
-  return AWAITING_ASSIGNMENT_STATUS;
+  return PENDING_STATUS;
 }
 
 function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
@@ -3097,7 +3444,7 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
     shipment.eta,
     shipment.promised_for,
     shipment.accepted_for,
-    "Platform Akisi"
+    `${suggestedRestaurantPrepMinutes(safeZone)} dk`
   );
 
   return {
@@ -3848,6 +4195,85 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const restaurantPackageActionMatch = pathname.match(/^\/api\/restaurant\/packages\/([^/]+)\/action$/);
+  if (req.method === "POST" && restaurantPackageActionMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const action = trimmed(body.action).toLowerCase();
+    const packageId = restaurantPackageActionMatch[1];
+    const target = db.prepare("SELECT * FROM packages WHERE id = ? AND restaurant_id = ?").get(packageId, session.restaurant_id);
+
+    if (!target) {
+      sendJson(res, 404, { error: "Paket bulunamadi." });
+      return;
+    }
+
+    const source = normalizeOrderSource(target.source, target.source_platform);
+    if (source === "external_manual" || source === "manual") {
+      sendJson(res, 400, { error: "Bu aksiyon sadece platform siparisleri icin kullanilir." });
+      return;
+    }
+
+    if (action === "confirm") {
+      db.prepare(`
+        UPDATE packages
+        SET assignment_reason = ?, eta = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        "Restoran siparisi onayladi.",
+        `${suggestedRestaurantPrepMinutes(target.zone)} dk`,
+        nowIso(),
+        packageId
+      );
+      broadcastLiveEvent({
+        type: "restaurant-confirmed",
+        restaurantId: session.restaurant_id,
+        message: "Platform siparisi restoran tarafinda onaylandi.",
+      });
+      sendJson(res, 200, decorateState({
+        restaurantId: session.restaurant_id,
+        includeRestaurantSecrets: true,
+        req,
+      }));
+      return;
+    }
+
+    if (action === "ready") {
+      db.prepare(`
+        UPDATE packages
+        SET status = ?, assignment_status = ?, assignment_reason = ?, eta = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        AWAITING_ASSIGNMENT_STATUS,
+        "pending",
+        "Restoran kuryeye hazir verdi.",
+        `${suggestedRestaurantPrepMinutes(target.zone)} dk`,
+        nowIso(),
+        packageId
+      );
+      rebalancePackages();
+      broadcastLiveEvent({
+        type: "restaurant-ready",
+        restaurantId: session.restaurant_id,
+        message: "Siparis kuryeye hazir olarak havuza alindi.",
+      });
+      sendJson(res, 200, decorateState({
+        restaurantId: session.restaurant_id,
+        includeRestaurantSecrets: true,
+        req,
+      }));
+      return;
+    }
+
+    sendJson(res, 400, { error: "Gecersiz restoran paketi aksiyonu." });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/restaurants") {
     const adminSession = getAdminSession(req);
     if (!adminSession) {
@@ -4438,6 +4864,7 @@ async function handleApi(req, res, pathname) {
     }
 
     const summary = upsertCourierDailyReport(session.courier_id, dayKey());
+    upsertCashReconciliation(session.courier_id, dayKey(), summary);
     closeCourierShift(session.courier_id);
     const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
@@ -4459,6 +4886,187 @@ async function handleApi(req, res, pathname) {
       ...(workspace || { courier: null, packages: [], dayMetrics: null }),
       dayCloseReport: summary,
       courierDailyReports: getCourierDailyReports(50),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/shift-plans") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Vardiya planlama limiti asildi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const courierId = trimmed(body.courierId);
+    const planDate = trimmed(body.planDate) || dayKey();
+    const startTime = trimmed(body.startTime) || "10:00";
+    const endTime = trimmed(body.endTime) || "18:00";
+    const zone = trimmed(body.zone);
+
+    if (!courierId) {
+      sendJson(res, 400, { error: "Kurye secilmelidir." });
+      return;
+    }
+
+    upsertShiftPlan(courierId, planDate, startTime, endTime, zone);
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_shift_planned",
+      details: { courierId, planDate, startTime, endTime, zone },
+    });
+    broadcastLiveEvent({
+      type: "courier-shift-ended",
+      courierId,
+      message: "Kurye vardiya plani guncellendi.",
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/announcements") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Duyuru gonderme limiti asildi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const title = trimmed(body.title);
+    const message = trimmed(body.message);
+    const targetRole = trimmed(body.targetRole) || "courier";
+
+    if (!title || !message) {
+      sendJson(res, 400, { error: "Baslik ve duyuru mesaji zorunludur." });
+      return;
+    }
+
+    createAnnouncement(targetRole, title, message);
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "announcement_created",
+      details: { targetRole, title },
+    });
+    broadcastLiveEvent({
+      type: "workspace-update",
+      message: `${title} duyurusu yayinlandi.`,
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
+  const announcementMatch = pathname.match(/^\/api\/admin\/announcements\/([^/]+)$/);
+  if (req.method === "DELETE" && announcementMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    if (!deactivateAnnouncement(announcementMatch[1])) {
+      sendJson(res, 404, { error: "Duyuru bulunamadi." });
+      return;
+    }
+
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "announcement_cleared",
+      details: { announcementId: announcementMatch[1] },
+    });
+    broadcastLiveEvent({
+      type: "workspace-update",
+      message: "Operasyon duyurusu kaldirildi.",
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/announcements/clear") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    clearAnnouncements("courier");
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "announcements_cleared",
+      details: { targetRole: "courier" },
+    });
+    broadcastLiveEvent({
+      type: "workspace-update",
+      message: "Tum kurye duyurulari sifirlandi.",
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
+  const reconciliationMatch = pathname.match(/^\/api\/admin\/cash-reconciliations\/([^/]+)$/);
+  if (req.method === "PATCH" && reconciliationMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Nakit mutabakat limiti asildi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const updated = updateCashReconciliationRecord(reconciliationMatch[1], body);
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "cash_reconciliation_updated",
+      details: {
+        reconciliationId: updated.id,
+        status: updated.status,
+        reportedCash: updated.reported_cash,
+      },
+    });
+    broadcastLiveEvent({
+      type: "workspace-update",
+      courierId: updated.courier_id,
+      message: "Nakit mutabakat kaydi guncellendi.",
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
     });
     return;
   }

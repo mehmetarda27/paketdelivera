@@ -1,6 +1,6 @@
 const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
-const RESTAURANT_WORKSPACE_REFRESH_MS = 6_000;
+const RESTAURANT_WORKSPACE_REFRESH_MS = 12_000;
 
 const restaurantState = {
   data: null,
@@ -42,6 +42,7 @@ const restaurantRefs = {
   activeCouriers: document.getElementById("restaurantActiveCouriers"),
   performanceBoard: document.getElementById("restaurantPerformanceBoard"),
   liveBadge: document.getElementById("restaurantLiveBadge"),
+  notificationCenter: document.getElementById("restaurantNotificationCenter"),
   activeOrders: document.getElementById("activeOrders"),
   orderHistory: document.getElementById("orderHistory"),
   historyMeta: document.getElementById("restaurantHistoryMeta"),
@@ -124,7 +125,14 @@ function startRestaurantLiveStream() {
   restaurantState.liveStream = connectLiveStream("/api/restaurant/stream", restaurantState.token, {
     onMessage(event) {
       if (event?.message) {
-        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+        showToast(event.message, notificationTone(event.type));
+        if (event.type === "package-created" || event.type === "platform-order" || event.type === "integration-order") {
+          playSignal("assignment");
+        } else if (event.type === "assignment-waiting") {
+          playSignal("critical");
+        } else if (event.type === "package-status") {
+          playSignal("ready");
+        }
       }
       loadRestaurantWorkspace({ silent: true });
     },
@@ -464,6 +472,9 @@ function renderActiveOrders(data) {
     const sourceLabel = pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform;
     const assignmentBadge = pkg.assignedCourierId ? "Kurye Atandi" : "Atama Bekliyor";
     const assignmentTone = pkg.assignedCourierId ? "soft-badge" : "soft-badge status-awaiting-assignment";
+    const prepCode = `DLV-${String(pkg.id || "").slice(-4).toUpperCase()}`;
+    const isPlatformOrder = pkg.source !== "external_manual" && pkg.source !== "manual";
+    const isConfirmed = String(pkg.assignmentReason || "").toLowerCase().includes("onay");
 
     const card = document.createElement("article");
     card.className = "stack-card order-summary-card";
@@ -484,6 +495,10 @@ function renderActiveOrders(data) {
         <div>
           <span>Paket ID</span>
           <strong>${pkg.id}</strong>
+        </div>
+        <div>
+          <span>Hazirlik Kodu</span>
+          <strong>${prepCode}</strong>
         </div>
         <div>
           <span>Adres</span>
@@ -513,9 +528,56 @@ function renderActiveOrders(data) {
           <span>Atama Zamani</span>
           <strong>${pkg.assignedAt ? formatDate(pkg.assignedAt) : "-"}</strong>
         </div>
+        <div>
+          <span>Hazirlik Sayaci</span>
+          <strong>${pkg.eta || "5 dk"}</strong>
+        </div>
       </div>
       ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
     `;
+
+    if (isPlatformOrder && !pkg.assignedCourierId && ["pending", "awaiting_assignment"].includes(pkg.status)) {
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+
+      if (pkg.status === "pending" && !isConfirmed) {
+        const confirmButton = document.createElement("button");
+        confirmButton.type = "button";
+        confirmButton.className = "ghost-btn";
+        confirmButton.textContent = "Siparisi Onayla";
+        confirmButton.addEventListener("click", async () => {
+          const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
+            method: "POST",
+            headers: restaurantAuthHeaders(),
+            retryWithRefresh: refreshRestaurantAccess,
+            body: JSON.stringify({ action: "confirm" }),
+          });
+          hydrateRestaurant(next);
+          showToast("Siparis onaylandi.");
+        });
+        actions.appendChild(confirmButton);
+      }
+
+      if (pkg.status === "pending") {
+        const readyButton = document.createElement("button");
+        readyButton.type = "button";
+        readyButton.className = "primary-btn";
+        readyButton.textContent = "Kuryeye Hazir Ver";
+        readyButton.addEventListener("click", async () => {
+          const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
+            method: "POST",
+            headers: restaurantAuthHeaders(),
+            retryWithRefresh: refreshRestaurantAccess,
+            body: JSON.stringify({ action: "ready" }),
+          });
+          hydrateRestaurant(next);
+          showToast("Siparis kurye havuzuna alindi.");
+        });
+        actions.appendChild(readyButton);
+      }
+
+      card.appendChild(actions);
+    }
     restaurantRefs.activeOrders.appendChild(card);
   });
 }
@@ -570,6 +632,10 @@ function renderOrderHistory(packages) {
   });
 }
 
+function renderRestaurantNotifications(notifications) {
+  renderNotificationCenter(restaurantRefs.notificationCenter, notifications || [], "Restoran icin bildirim yok.");
+}
+
 function hydrateRestaurant(data, explicitIntegration = null) {
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
@@ -606,6 +672,7 @@ function hydrateRestaurant(data, explicitIntegration = null) {
   renderRecentOrders(data.packages);
   renderActiveOrders(data);
   renderOrderHistory(data.packages);
+  renderRestaurantNotifications(data.notifications || []);
   setIntegrationInfo(data, explicitIntegration);
   setPlatformSetup(data);
 }

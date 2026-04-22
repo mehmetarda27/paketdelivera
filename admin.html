@@ -103,6 +103,38 @@
         <div id="restaurantStatsBoard" class="zone-board"></div>
       </section>
 
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Duyuru Paneli</p>
+            <h3>Tum kuryelere kalici operasyon duyurusu gonder</h3>
+          </div>
+          <button id="clearAnnouncementsButton" class="ghost-btn" type="button">Tumunu Sifirla</button>
+        </div>
+        <form id="announcementForm" class="form-grid">
+          <label>
+            Baslik
+            <input name="title" type="text" placeholder="Onemli operasyon duyurusu" required>
+          </label>
+          <label class="full-width">
+            Mesaj
+            <textarea name="message" rows="3" placeholder="Tum online kuryeler Mezitli yogunluguna destek versin." required></textarea>
+          </label>
+          <button class="primary-btn full-width" type="submit">Duyuruyu Yayinla</button>
+        </form>
+        <div id="announcementList" class="stack-list compact-stack-list"></div>
+      </section>
+
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Bildirim Merkezi</p>
+            <h3>Son operasyon bildirimleri</h3>
+          </div>
+        </div>
+        <div id="adminNotificationCenter" class="stack-list compact-stack-list"></div>
+      </section>
+
       <section class="dashboard-grid">
         <article class="glass-panel">
           <div class="panel-head">
@@ -237,6 +269,48 @@
             </div>
           </div>
           <div id="activeCourierOpsList" class="stack-list"></div>
+        </article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Vardiya Planlama</p>
+              <h3>Bolge bazli kurye planlari</h3>
+            </div>
+          </div>
+          <form id="shiftPlanForm" class="form-grid">
+            <label>
+              Kurye
+              <select id="shiftPlanCourier" name="courierId"></select>
+            </label>
+            <label>
+              Tarih
+              <input id="shiftPlanDate" name="planDate" type="date">
+            </label>
+            <label>
+              Baslangic
+              <input name="startTime" type="time" value="10:00">
+            </label>
+            <label>
+              Bitis
+              <input name="endTime" type="time" value="18:00">
+            </label>
+            <button class="primary-btn full-width" type="submit">Vardiya Kaydet</button>
+          </form>
+          <div id="shiftPlanSummary" class="zone-board"></div>
+          <div id="shiftPlanList" class="stack-list compact-stack-list"></div>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Nakit Mutabakat</p>
+              <h3>Kurye kasa kapanis kontrolu</h3>
+            </div>
+          </div>
+          <div id="cashReconciliationList" class="stack-list"></div>
         </article>
       </section>
 

@@ -1,6 +1,6 @@
 const ADMIN_TOKEN_KEY = "deliveraAdminToken";
 const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
-const ADMIN_REFRESH_MS = 15_000;
+const ADMIN_REFRESH_MS = 20_000;
 
 const adminState = {
   data: null,
@@ -26,12 +26,22 @@ const adminRefs = {
   selectedRestaurantTitle: document.getElementById("selectedRestaurantTitle"),
   packagePanelTitle: document.getElementById("packagePanelTitle"),
   liveBadge: document.getElementById("adminLiveBadge"),
+  notificationCenter: document.getElementById("adminNotificationCenter"),
+  announcementForm: document.getElementById("announcementForm"),
+  clearAnnouncementsButton: document.getElementById("clearAnnouncementsButton"),
+  announcementList: document.getElementById("announcementList"),
   restaurantStatsBoard: document.getElementById("restaurantStatsBoard"),
   restaurantForm: document.getElementById("restaurantForm"),
   restaurantZone: document.getElementById("restaurantZone"),
   platformChecks: document.getElementById("platformChecks"),
   courierForm: document.getElementById("courierForm"),
   courierZone: document.getElementById("courierZone"),
+  shiftPlanForm: document.getElementById("shiftPlanForm"),
+  shiftPlanCourier: document.getElementById("shiftPlanCourier"),
+  shiftPlanDate: document.getElementById("shiftPlanDate"),
+  shiftPlanSummary: document.getElementById("shiftPlanSummary"),
+  shiftPlanList: document.getElementById("shiftPlanList"),
+  cashReconciliationList: document.getElementById("cashReconciliationList"),
   courierList: document.getElementById("courierList"),
   zoneBoard: document.getElementById("zoneBoard"),
   zoneAlertList: document.getElementById("zoneAlertList"),
@@ -104,7 +114,14 @@ function startAdminLiveStream() {
   adminState.liveStream = connectLiveStream("/api/admin/stream", adminState.token, {
     onMessage(event) {
       if (event?.message) {
-        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+        showToast(event.message, notificationTone(event.type));
+        if (event.type === "assignment-waiting") {
+          playSignal("critical");
+        } else if (event.type === "package-assigned") {
+          playSignal("assignment");
+        } else if (event.type === "package-status") {
+          playSignal("ready");
+        }
       }
       loadAdminState().catch(() => {});
     },
@@ -621,6 +638,153 @@ function renderCourierDailyReports(reports) {
   });
 }
 
+function renderAdminNotifications(notifications) {
+  renderNotificationCenter(adminRefs.notificationCenter, notifications || [], "Bildirim henuz yok.");
+}
+
+function renderAnnouncements(items) {
+  adminRefs.announcementList.innerHTML = "";
+  const courierAnnouncements = (items || []).filter((item) => item.targetRole === "courier");
+
+  if (!courierAnnouncements.length) {
+    adminRefs.announcementList.innerHTML = '<div class="empty-state">Aktif kurye duyurusu yok.</div>';
+    return;
+  }
+
+  courierAnnouncements.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "stack-card notification-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${item.title}</strong>
+          <p>${item.message}</p>
+          <p>Yayin: ${formatDate(item.updatedAt || item.createdAt)}</p>
+        </div>
+        <button class="ghost-btn" type="button">Sil</button>
+      </div>
+    `;
+    card.querySelector("button").addEventListener("click", async () => {
+      const data = await api(`/api/admin/announcements/${item.id}`, {
+        method: "DELETE",
+        headers: adminHeaders(),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data);
+      showToast("Duyuru kaldirildi.");
+    });
+    adminRefs.announcementList.appendChild(card);
+  });
+}
+
+function renderShiftPlanTools(couriers, plans, summary) {
+  if (adminRefs.shiftPlanCourier) {
+    adminRefs.shiftPlanCourier.innerHTML = ['<option value="">Kurye sec</option>']
+      .concat((couriers || []).map((courier) => `<option value="${courier.id}">${courier.name} - ${courier.zone}</option>`))
+      .join("");
+  }
+  if (adminRefs.shiftPlanDate && !adminRefs.shiftPlanDate.value) {
+    adminRefs.shiftPlanDate.value = new Date().toISOString().slice(0, 10);
+  }
+
+  adminRefs.shiftPlanSummary.innerHTML = "";
+  (summary || []).forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "zone-card";
+    card.innerHTML = `
+      <strong>${item.zone}</strong>
+      <p>${item.plannedCouriers} planli kurye</p>
+      <p>${item.missingCouriers > 0 ? `${item.missingCouriers} eksik vardiya` : "Kadrolama dengeli"}</p>
+    `;
+    adminRefs.shiftPlanSummary.appendChild(card);
+  });
+
+  adminRefs.shiftPlanList.innerHTML = "";
+  if (!(plans || []).length) {
+    adminRefs.shiftPlanList.innerHTML = '<div class="empty-state">Bugun icin vardiya plani kaydi yok.</div>';
+    return;
+  }
+
+  plans.forEach((plan) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${plan.courierName}</strong>
+          <p>${plan.zone} - ${plan.planDate}</p>
+          <p>${plan.startTime} / ${plan.endTime}</p>
+        </div>
+        <span class="soft-badge">${plan.status}</span>
+      </div>
+    `;
+    adminRefs.shiftPlanList.appendChild(card);
+  });
+}
+
+function renderCashReconciliations(items) {
+  adminRefs.cashReconciliationList.innerHTML = "";
+  if (!(items || []).length) {
+    adminRefs.cashReconciliationList.innerHTML = '<div class="empty-state">Nakit mutabakat kaydi henuz yok.</div>';
+    return;
+  }
+
+  items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    const inputId = `cash-${item.id}`;
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${item.courierName} - ${item.reportDate}</strong>
+          <p>${item.zone} bolgesi</p>
+          <p>Beklenen ${formatCurrency(item.expectedCash)} - Bildirilen ${formatCurrency(item.reportedCash)}</p>
+        </div>
+        <span class="soft-badge">${item.status}</span>
+      </div>
+      <div class="meta-grid compact-meta-grid">
+        <div>
+          <span>Fark</span>
+          <strong>${formatCurrency(item.variance)}</strong>
+        </div>
+        <div>
+          <span>Paket</span>
+          <strong>${item.packageIds.length}</strong>
+        </div>
+      </div>
+      <div class="card-actions">
+        <input id="${inputId}" class="status-select" type="number" step="0.01" value="${Number(item.reportedCash || 0).toFixed(2)}">
+        <button class="ghost-btn" type="button" data-action="approve">Onayla</button>
+        <button class="ghost-btn" type="button" data-action="issue">Sorun Isaretle</button>
+      </div>
+    `;
+
+    card.querySelector('[data-action="approve"]').addEventListener("click", async () => {
+      const reportedCash = card.querySelector(`#${inputId}`).value;
+      const data = await api(`/api/admin/cash-reconciliations/${item.id}`, {
+        method: "PATCH",
+        headers: adminHeaders(),
+        body: JSON.stringify({ status: "approved", reportedCash }),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data);
+    });
+
+    card.querySelector('[data-action="issue"]').addEventListener("click", async () => {
+      const reportedCash = card.querySelector(`#${inputId}`).value;
+      const data = await api(`/api/admin/cash-reconciliations/${item.id}`, {
+        method: "PATCH",
+        headers: adminHeaders(),
+        body: JSON.stringify({ status: "issue", reportedCash }),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data);
+    });
+
+    adminRefs.cashReconciliationList.appendChild(card);
+  });
+}
+
 function hydrateAdmin(data) {
   adminState.data = data;
   setAdminLoggedIn(true);
@@ -641,6 +805,10 @@ function hydrateAdmin(data) {
   renderWebhookLogs(data.webhookLogs);
   renderAuditLogs(data.auditLogs || []);
   renderCourierDailyReports(data.courierDailyReports || []);
+  renderAdminNotifications(data.notifications || []);
+  renderAnnouncements(data.announcements || []);
+  renderShiftPlanTools(data.couriers || [], data.shiftPlans || [], data.shiftPlanSummary || []);
+  renderCashReconciliations(data.cashReconciliations || []);
 }
 
 adminRefs.loginForm.addEventListener("submit", async (event) => {
@@ -704,6 +872,53 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
   renderPlatformChecks();
   hydrateAdmin(data);
   showToast(`${payload.name} restorani basariyla kaydedildi.`);
+});
+
+adminRefs.shiftPlanForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.shiftPlanForm);
+  const data = await api("/api/admin/shift-plans", {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify({
+      courierId: formData.get("courierId"),
+      planDate: formData.get("planDate"),
+      startTime: formData.get("startTime"),
+      endTime: formData.get("endTime"),
+    }),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  hydrateAdmin(data);
+  showToast("Vardiya plani kaydedildi.");
+});
+
+adminRefs.announcementForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.announcementForm);
+  const data = await api("/api/admin/announcements", {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify({
+      targetRole: "courier",
+      title: formData.get("title"),
+      message: formData.get("message"),
+    }),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  adminRefs.announcementForm.reset();
+  hydrateAdmin(data);
+  showToast("Kurye duyurusu yayinlandi.");
+});
+
+adminRefs.clearAnnouncementsButton?.addEventListener("click", async () => {
+  const data = await api("/api/admin/announcements/clear", {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify({ targetRole: "courier" }),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  hydrateAdmin(data);
+  showToast("Tum kurye duyurulari sifirlandi.");
 });
 
 adminRefs.searchInput.addEventListener("input", () => {

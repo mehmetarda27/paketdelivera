@@ -1,7 +1,7 @@
 const STORAGE_TOKEN_KEY = "kuryeTakipCourierToken";
 const STORAGE_REFRESH_TOKEN_KEY = "kuryeTakipCourierRefreshToken";
 const LOCATION_PUSH_MS = 2_000;
-const WORKSPACE_POLL_MS = 4_000;
+const WORKSPACE_POLL_MS = 12_000;
 
 const courierState = {
   token: localStorage.getItem(STORAGE_TOKEN_KEY) || "",
@@ -14,6 +14,7 @@ const courierState = {
   historyRange: "7d",
   historyVisibleCount: 50,
   lastPackageSnapshot: new Map(),
+  packageActionDrafts: new Map(),
   liveStream: null,
   lastWorkspaceLoadAt: 0,
 };
@@ -80,6 +81,8 @@ const courierRefs = {
   shiftMetrics: document.getElementById("courierShiftMetrics"),
   liveBadge: document.getElementById("courierLiveBadge"),
   dayCloseButton: document.getElementById("courierDayCloseButton"),
+  notificationCenter: document.getElementById("courierNotificationCenter"),
+  announcementList: document.getElementById("courierAnnouncementList"),
   packages: document.getElementById("courierPackages"),
   history: document.getElementById("courierHistory"),
   historyMeta: document.getElementById("courierHistoryMeta"),
@@ -101,6 +104,7 @@ function clearCourierAuth() {
   courierState.data = null;
   courierState.lastCoords = null;
   courierState.lastPackageSnapshot = new Map();
+  courierState.packageActionDrafts = new Map();
   courierState.liveStream?.close?.();
   courierState.liveStream = null;
   localStorage.removeItem(STORAGE_TOKEN_KEY);
@@ -180,7 +184,14 @@ function startCourierLiveStream() {
         "courier-availability",
       ]);
       if (event?.message && toastableTypes.has(event.type)) {
-        showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
+        showToast(event.message, notificationTone(event.type));
+        if (event.type === "package-assigned") {
+          playSignal("assignment-long");
+        } else if (event.type === "assignment-waiting") {
+          playSignal("critical");
+        } else if (event.type === "package-status") {
+          playSignal("ready");
+        }
       }
       if (event?.type !== "courier-location") {
         loadCourierWorkspace({ silent: true, force: true });
@@ -211,6 +222,7 @@ function requestNotificationPermission() {
 
 function notifyNewAssignment(pkg) {
   showToast(`${pkg.restaurantName} tarafindan yeni paket dustu: ${pkg.recipient}`, "success");
+  playSignal("assignment-long");
 
   if (typeof Notification === "undefined" || Notification.permission !== "granted") {
     return;
@@ -246,6 +258,42 @@ function processIncomingPackageNotifications(packages) {
   });
 
   courierState.lastPackageSnapshot = nextSnapshot;
+}
+
+function packageRenderSignature(pkg) {
+  return [
+    pkg.id,
+    pkg.status,
+    pkg.paymentStatus,
+    pkg.failureReason,
+    pkg.assignedAt,
+    pkg.acceptedAt,
+    pkg.onRouteAt,
+    pkg.deliveredAt,
+    pkg.failedAt,
+    pkg.updatedAt,
+    pkg.lastAssignmentError,
+  ].join("|");
+}
+
+function getPackageDraft(pkgId) {
+  return courierState.packageActionDrafts.get(pkgId) || { paymentStatus: "", failureReason: "" };
+}
+
+function setPackageDraft(pkgId, nextDraft) {
+  courierState.packageActionDrafts.set(pkgId, {
+    ...getPackageDraft(pkgId),
+    ...nextDraft,
+  });
+}
+
+function clearResolvedPackageDrafts(packages) {
+  const activeIds = new Set((packages || []).filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).map((pkg) => pkg.id));
+  [...courierState.packageActionDrafts.keys()].forEach((pkgId) => {
+    if (!activeIds.has(pkgId)) {
+      courierState.packageActionDrafts.delete(pkgId);
+    }
+  });
 }
 
 function locationLabel(courier) {
@@ -417,7 +465,9 @@ function renderPackages(packages) {
     const assignedAtBadge = node.querySelector(".assigned-at-badge");
     const etaBadge = node.querySelector(".eta-badge");
     const failureBadge = node.querySelector(".failure-badge");
-    let selectedPaymentStatus = pkg.paymentStatus || "";
+    const currentDraft = getPackageDraft(pkg.id);
+    let selectedPaymentStatus = currentDraft.paymentStatus || pkg.paymentStatus || "";
+    let selectedFailureReason = currentDraft.failureReason || "";
 
     node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo}`;
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
@@ -431,7 +481,12 @@ function renderPackages(packages) {
     node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
-    assignedAtBadge.textContent = `Atama ${pkg.assignedAt ? formatTimeAgo(pkg.assignedAt) : "bekliyor"}`;
+    const offerWindowSeconds = pkg.status === "assigned" && pkg.assignedAt
+      ? Math.max(0, 25 - Math.floor((Date.now() - new Date(pkg.assignedAt).getTime()) / 1000))
+      : 0;
+    assignedAtBadge.textContent = pkg.status === "assigned"
+      ? `Teklif ${offerWindowSeconds} sn`
+      : `Atama ${pkg.assignedAt ? formatTimeAgo(pkg.assignedAt) : "bekliyor"}`;
     etaBadge.textContent = `Teslim hedefi ${pkg.eta || "-"}`;
 
     if (pkg.failureReason) {
@@ -451,6 +506,7 @@ function renderPackages(packages) {
         body: JSON.stringify({ status, failureReason, paymentStatus }),
         retryWithRefresh: refreshCourierAccess,
       });
+      courierState.packageActionDrafts.delete(pkg.id);
       hydrateCourierWorkspace(data);
     };
 
@@ -487,12 +543,12 @@ function renderPackages(packages) {
         '<option value="paid_online">Online Odendi</option>',
         '<option value="payment_issue">Odeme Sorunu</option>',
       ].join("");
-      if (["cash_collected", "paid_online", "payment_issue"].includes(pkg.paymentStatus)) {
-        paymentSelect.value = pkg.paymentStatus;
-        selectedPaymentStatus = pkg.paymentStatus;
+      if (["cash_collected", "paid_online", "payment_issue"].includes(selectedPaymentStatus)) {
+        paymentSelect.value = selectedPaymentStatus;
       }
       paymentSelect.addEventListener("change", () => {
         selectedPaymentStatus = paymentSelect.value;
+        setPackageDraft(pkg.id, { paymentStatus: selectedPaymentStatus });
       });
 
       const deliveredButton = document.createElement("button");
@@ -516,13 +572,18 @@ function renderPackages(packages) {
       failureSelect.innerHTML = ['<option value="">Sorun nedeni sec</option>']
         .concat(COURIER_FAILURE_REASON_OPTIONS.map((item) => `<option value="${item.value}">${item.label}</option>`))
         .join("");
+      failureSelect.value = selectedFailureReason;
+      failureSelect.addEventListener("change", () => {
+        selectedFailureReason = failureSelect.value;
+        setPackageDraft(pkg.id, { failureReason: selectedFailureReason });
+      });
 
       const failureButton = document.createElement("button");
       failureButton.type = "button";
       failureButton.className = "ghost-btn";
       failureButton.textContent = "Reddet / Sorun Bildir";
       failureButton.addEventListener("click", async () => {
-        await submitStatus("failed", failureSelect.value);
+        await submitStatus("failed", selectedFailureReason);
       });
 
       actions.appendChild(failureSelect);
@@ -581,6 +642,36 @@ function renderCourierHistory(packages) {
   });
 }
 
+function renderCourierNotifications(notifications) {
+  renderNotificationCenter(courierRefs.notificationCenter, notifications || [], "Kurye icin bildirim yok.");
+}
+
+function renderCourierAnnouncements(items) {
+  courierRefs.announcementList.innerHTML = "";
+  const announcements = (items || []).filter((item) => item.targetRole === "courier");
+
+  if (!announcements.length) {
+    courierRefs.announcementList.innerHTML = '<div class="empty-state compact-empty-state">Aktif admin duyurusu yok.</div>';
+    return;
+  }
+
+  announcements.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "stack-card notification-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${item.title}</strong>
+          <p>${item.message}</p>
+          <p>Yayin zamani ${formatDate(item.updatedAt || item.createdAt)}</p>
+        </div>
+        <span class="soft-badge">Aktif</span>
+      </div>
+    `;
+    courierRefs.announcementList.appendChild(card);
+  });
+}
+
 function renderCourierFocus(courier, packages) {
   const priority = packages.find((pkg) => pkg.status === "on_route") || packages.find((pkg) => pkg.status === "accepted_by_courier") || packages[0] || null;
 
@@ -604,6 +695,7 @@ function syncAvailabilityButton(courier) {
 
 function hydrateCourierWorkspace(data) {
   processIncomingPackageNotifications(data.packages);
+  clearResolvedPackageDrafts(data.packages);
   courierState.data = data;
   setLoggedIn(true);
   requestNotificationPermission();
@@ -624,6 +716,8 @@ function hydrateCourierWorkspace(data) {
   renderCourierFocus(data.courier, data.packages);
   renderPackages(data.packages);
   renderCourierHistory(data.packages);
+  renderCourierNotifications(data.notifications || []);
+  renderCourierAnnouncements(data.announcements || []);
 }
 
 courierRefs.historyFilters?.addEventListener("click", (event) => {

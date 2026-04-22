@@ -41,6 +41,8 @@ const COURIER_STATUS_LABELS = {
 };
 
 let toastHost = null;
+let audioContextRef = null;
+const signalCooldowns = new Map();
 
 async function api(path, options = {}) {
   async function runRequest() {
@@ -200,6 +202,117 @@ function showToast(message, tone = "success") {
       toast.remove();
     }, 220);
   }, 2600);
+}
+
+function notificationTone(eventType = "") {
+  if (["assignment-waiting"].includes(eventType)) {
+    return "error";
+  }
+  if (["package-assigned", "package-created", "platform-order", "integration-order"].includes(eventType)) {
+    return "success";
+  }
+  return "info";
+}
+
+function getAudioContext() {
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) {
+    return null;
+  }
+  if (!audioContextRef) {
+    audioContextRef = new AudioCtor();
+  }
+  return audioContextRef;
+}
+
+function playSignal(kind = "default") {
+  const now = Date.now();
+  const cooldown = signalCooldowns.get(kind) || 0;
+  if (cooldown > now) {
+    return;
+  }
+  const cooldownMs = kind === "assignment-long" ? 6500 : 2200;
+  signalCooldowns.set(kind, now + cooldownMs);
+
+  const ctx = getAudioContext();
+  if (!ctx) {
+    return;
+  }
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
+  const profile = {
+    assignment: [880, 1174, 1320],
+    "assignment-long": [880, 1174, 1320, 1174, 880, 1320, 1174, 880, 1320, 1174, 880, 1320],
+    critical: [320, 260, 320, 260],
+    ready: [640, 880, 980],
+    default: [720, 860],
+  }[kind] || [720];
+
+  const stepSeconds = kind === "assignment-long" ? 0.5 : 0.18;
+  const rampUpSeconds = kind === "assignment-long" ? 0.04 : 0.02;
+  const noteLengthSeconds = kind === "assignment-long" ? 0.42 : 0.16;
+  const peakGain = kind === "assignment-long" ? 0.16 : 0.12;
+
+  const startAt = ctx.currentTime;
+  profile.forEach((freq, index) => {
+    const osc = ctx.createOscillator();
+    const support = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = kind === "critical" ? "square" : "sine";
+    support.type = "triangle";
+    osc.frequency.value = freq;
+    support.frequency.value = freq * 0.5;
+    gain.gain.setValueAtTime(0.0001, startAt + index * stepSeconds);
+    gain.gain.exponentialRampToValueAtTime(peakGain, startAt + index * stepSeconds + rampUpSeconds);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + index * stepSeconds + noteLengthSeconds);
+    osc.connect(gain);
+    support.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(startAt + index * stepSeconds);
+    support.start(startAt + index * stepSeconds);
+    osc.stop(startAt + index * stepSeconds + noteLengthSeconds);
+    support.stop(startAt + index * stepSeconds + noteLengthSeconds);
+  });
+}
+
+function renderNotificationCenter(target, notifications = [], emptyText = "Bildirim yok.") {
+  if (!target) {
+    return;
+  }
+
+  target.innerHTML = "";
+  if (!notifications.length) {
+    target.innerHTML = `<div class="empty-state compact-empty-state">${emptyText}</div>`;
+    return;
+  }
+
+  notifications.slice(0, 8).forEach((item) => {
+    const titleMap = {
+      "package-created": "Yeni Paket",
+      "package-assigned": "Kurye Atamasi",
+      "assignment-waiting": "Kritik Bekleme",
+      "package-status": "Durum Guncellemesi",
+      "platform-order": "Platform Siparisi",
+      "integration-order": "Entegrasyon Siparisi",
+      "courier-day-close": "Gun Sonu",
+      "courier-availability": "Kurye Durumu",
+      "workspace-update": "Sistem Bildirimi",
+    };
+    const card = document.createElement("article");
+    card.className = "stack-card notification-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${titleMap[item.eventType] || "Sistem Bildirimi"}</strong>
+          <p>${item.message || "-"}</p>
+        </div>
+        <span class="soft-badge">${formatTimeAgo(item.createdAt)}</span>
+      </div>
+    `;
+    target.appendChild(card);
+  });
 }
 
 function connectLiveStream(path, token, handlers = {}) {
