@@ -17,6 +17,7 @@ const courierState = {
   packageActionDrafts: new Map(),
   liveStream: null,
   lastWorkspaceLoadAt: 0,
+  activeProfileSection: "day-close",
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -182,10 +183,14 @@ function startCourierLiveStream() {
         "platform-order",
         "courier-day-close",
         "courier-availability",
+        "shift-plan-offer",
+        "shift-plan-accepted",
       ]);
       if (event?.message && toastableTypes.has(event.type)) {
         showToast(event.message, notificationTone(event.type));
         if (event.type === "package-assigned") {
+          playSignal("assignment-long");
+        } else if (event.type === "shift-plan-offer") {
           playSignal("assignment-long");
         } else if (event.type === "assignment-waiting") {
           playSignal("critical");
@@ -411,6 +416,95 @@ function renderCourierEarnings(earningsSummary) {
   `;
 }
 
+function syncCourierProfilePanels() {
+  const panels = [...document.querySelectorAll(".courier-profile-panel .inner-day-panel")];
+  panels.forEach((panel, index) => {
+    const sectionKey = panel.dataset.section || `panel-${index}`;
+    const isActive = sectionKey === courierState.activeProfileSection;
+    panel.classList.toggle("panel-expanded", isActive);
+    panel.classList.toggle("panel-collapsed", !isActive);
+  });
+}
+
+function initializeCourierProfilePanels() {
+  const sectionKeys = ["day-close", "earnings", "notifications", "announcements"];
+  const panels = [...document.querySelectorAll(".courier-profile-panel .inner-day-panel")];
+
+  panels.forEach((panel, index) => {
+    panel.dataset.section = sectionKeys[index] || `panel-${index}`;
+    const header = panel.querySelector(".panel-head");
+    if (!header || header.dataset.bound === "1") {
+      return;
+    }
+
+    header.dataset.bound = "1";
+    header.classList.add("panel-toggle-head");
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+    header.setAttribute("aria-expanded", panel.dataset.section === courierState.activeProfileSection ? "true" : "false");
+
+    const togglePanel = () => {
+      courierState.activeProfileSection = courierState.activeProfileSection === panel.dataset.section
+        ? ""
+        : panel.dataset.section;
+      syncCourierProfilePanels();
+      panels.forEach((item) => {
+        const itemHeader = item.querySelector(".panel-head");
+        if (itemHeader) {
+          itemHeader.setAttribute("aria-expanded", item.dataset.section === courierState.activeProfileSection ? "true" : "false");
+        }
+      });
+    };
+
+    header.addEventListener("click", (event) => {
+      if (event.target.closest("button, select, input, textarea, a, label")) {
+        return;
+      }
+      togglePanel();
+    });
+
+    header.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      togglePanel();
+    });
+  });
+
+  syncCourierProfilePanels();
+}
+
+function shiftPlanStatusLabel(status) {
+  if (status === "accepted") {
+    return "Onaylandi";
+  }
+  if (status === "awaiting_courier_acceptance") {
+    return "Onay Bekliyor";
+  }
+  if (status === "expired") {
+    return "Sure Doldu";
+  }
+  return status || "Planlandi";
+}
+
+function shiftDeadlineText(value) {
+  if (!value) {
+    return "Sure bilgisi yok";
+  }
+  const diffMs = new Date(value).getTime() - Date.now();
+  if (diffMs <= 0) {
+    return "Onay suresi doldu";
+  }
+  const totalMinutes = Math.max(1, Math.ceil(diffMs / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0) {
+    return `${hours} sa ${minutes} dk kaldi`;
+  }
+  return `${minutes} dk kaldi`;
+}
+
 function renderCourierShiftSummary(shiftSummary) {
   if (!courierRefs.shiftMetrics) {
     return;
@@ -418,6 +512,7 @@ function renderCourierShiftSummary(shiftSummary) {
 
   const currentShift = shiftSummary?.currentShift || null;
   const recentShifts = shiftSummary?.recentShifts || [];
+  const shiftPlans = shiftSummary?.shiftPlans || [];
   const items = [];
 
   items.push(`
@@ -444,7 +539,35 @@ function renderCourierShiftSummary(shiftSummary) {
     </article>
   `);
 
+  shiftPlans.slice(0, 3).forEach((plan) => {
+    items.push(`
+      <article class="stack-card shift-offer-card ${plan.status === "awaiting_courier_acceptance" ? "shift-offer-pending" : ""}">
+        <div class="stack-top">
+          <div>
+            <strong>${plan.planDate} - ${plan.startTime} / ${plan.endTime}</strong>
+            <p>${plan.zone} bolgesi vardiya plani</p>
+            <p>${plan.status === "awaiting_courier_acceptance" ? shiftDeadlineText(plan.offerExpiresAt) : (plan.acceptedAt ? `Onay ${formatDate(plan.acceptedAt)}` : shiftPlanStatusLabel(plan.status))}</p>
+          </div>
+          <span class="soft-badge">${shiftPlanStatusLabel(plan.status)}</span>
+        </div>
+        ${plan.status === "awaiting_courier_acceptance" ? `<div class="stack-actions"><button class="primary-btn" type="button" data-shift-accept="${plan.id}">Vardiyayi Onayla</button></div>` : ""}
+      </article>
+    `);
+  });
+
   courierRefs.shiftMetrics.innerHTML = items.join("");
+  [...courierRefs.shiftMetrics.querySelectorAll("[data-shift-accept]")].forEach((button) => {
+    button.addEventListener("click", async () => {
+      const data = await api(`/api/courier/shift-plans/${button.dataset.shiftAccept}/accept`, {
+        method: "POST",
+        headers: authHeaders(courierState.token),
+        body: "{}",
+        retryWithRefresh: refreshCourierAccess,
+      });
+      hydrateCourierWorkspace(data);
+      showToast("Vardiya plani onaylandi.");
+    });
+  });
 }
 
 function renderPackages(packages) {
@@ -694,6 +817,7 @@ function syncAvailabilityButton(courier) {
 }
 
 function hydrateCourierWorkspace(data) {
+  initializeCourierProfilePanels();
   processIncomingPackageNotifications(data.packages);
   clearResolvedPackageDrafts(data.packages);
   courierState.data = data;

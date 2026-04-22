@@ -8,6 +8,7 @@ const adminState = {
   refreshToken: localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "",
   selectedRestaurantId: "",
   liveStream: null,
+  activeWorkspaceCard: "admin-announcements",
 };
 
 const adminRefs = {
@@ -104,6 +105,78 @@ function renderPlatformChecks() {
 function setAdminLoggedIn(isLoggedIn) {
   adminRefs.loginPanel.classList.toggle("hidden", isLoggedIn);
   adminRefs.workspace.classList.toggle("hidden", !isLoggedIn);
+}
+
+function syncAdminWorkspaceCards() {
+  const cards = [...document.querySelectorAll(".workspace-collapsible-admin")];
+  cards.forEach((card) => {
+    const isActive = card.dataset.cardKey === adminState.activeWorkspaceCard;
+    card.classList.toggle("panel-expanded", isActive);
+    card.classList.toggle("panel-collapsed", !isActive);
+    const header = card.querySelector(".panel-head");
+    if (header) {
+      header.setAttribute("aria-expanded", isActive ? "true" : "false");
+    }
+  });
+}
+
+function initializeAdminWorkspaceCards() {
+  const cardMap = [
+    ["#adminWorkspace > section:nth-of-type(3)", "admin-restaurant-focus"],
+    ["#adminWorkspace > section:nth-of-type(4)", "admin-announcements"],
+    ["#adminWorkspace > section:nth-of-type(5)", "admin-notifications"],
+    ["#adminWorkspace > section:nth-of-type(6) > article:nth-of-type(1)", "admin-restaurant-form"],
+    ["#adminWorkspace > section:nth-of-type(6) > article:nth-of-type(2)", "admin-courier-form"],
+    ["#adminWorkspace > section:nth-of-type(6) > article:nth-of-type(3)", "admin-zone-board"],
+    ["#adminWorkspace > section:nth-of-type(6) > article:nth-of-type(4)", "admin-zone-alerts"],
+    ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(1)", "admin-shift-plan"],
+    ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(2)", "admin-cash"],
+    ["#adminWorkspace > section:nth-of-type(10)", "admin-webhooks"],
+    ["#adminWorkspace > section:nth-of-type(11)", "admin-audit"],
+    ["#adminWorkspace > section:nth-of-type(12)", "admin-day-close"],
+  ];
+
+  cardMap.forEach(([selector, key]) => {
+    const card = document.querySelector(selector);
+    if (!card) {
+      return;
+    }
+
+    card.dataset.cardKey = key;
+    card.classList.add("workspace-collapsible", "workspace-collapsible-admin");
+
+    const header = card.querySelector(".panel-head");
+    if (!header || header.dataset.bound === "1") {
+      return;
+    }
+
+    header.dataset.bound = "1";
+    header.classList.add("panel-toggle-head");
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+
+    const activate = () => {
+      adminState.activeWorkspaceCard = adminState.activeWorkspaceCard === key ? "" : key;
+      syncAdminWorkspaceCards();
+    };
+
+    header.addEventListener("click", (event) => {
+      if (event.target.closest("button, select, input, textarea, a, label")) {
+        return;
+      }
+      activate();
+    });
+
+    header.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      activate();
+    });
+  });
+
+  syncAdminWorkspaceCards();
 }
 
 function startAdminLiveStream() {
@@ -705,6 +778,22 @@ function renderShiftPlanTools(couriers, plans, summary) {
     return;
   }
 
+  const acceptedPlans = plans.filter((plan) => plan.status === "accepted");
+  if (acceptedPlans.length) {
+    const acceptedCard = document.createElement("article");
+    acceptedCard.className = "stack-card notification-card";
+    acceptedCard.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>Kabul Eden Kuryeler</strong>
+          <p>${acceptedPlans.map((plan) => `${plan.courierName} (${plan.startTime}-${plan.endTime})`).join(" - ")}</p>
+        </div>
+        <span class="soft-badge">${acceptedPlans.length} kabul</span>
+      </div>
+    `;
+    adminRefs.shiftPlanList.appendChild(acceptedCard);
+  }
+
   plans.forEach((plan) => {
     const card = document.createElement("article");
     card.className = "stack-card";
@@ -714,8 +803,13 @@ function renderShiftPlanTools(couriers, plans, summary) {
           <strong>${plan.courierName}</strong>
           <p>${plan.zone} - ${plan.planDate}</p>
           <p>${plan.startTime} / ${plan.endTime}</p>
+          <p>${plan.status === "accepted"
+            ? `Kurye onayi ${formatDate(plan.acceptedAt)}`
+            : plan.status === "awaiting_courier_acceptance"
+              ? `Kurye onayi bekleniyor. Son sure ${formatDate(plan.offerExpiresAt)}`
+              : "Onay suresi doldu"}</p>
         </div>
-        <span class="soft-badge">${plan.status}</span>
+        <span class="soft-badge">${plan.status === "accepted" ? "Onaylandi" : plan.status === "awaiting_courier_acceptance" ? "Bekliyor" : "Sure Doldu"}</span>
       </div>
     `;
     adminRefs.shiftPlanList.appendChild(card);
@@ -788,6 +882,7 @@ function renderCashReconciliations(items) {
 function hydrateAdmin(data) {
   adminState.data = data;
   setAdminLoggedIn(true);
+  initializeAdminWorkspaceCards();
   if (adminRefs.liveBadge) {
     adminRefs.liveBadge.textContent = "Canli akis acik";
   }

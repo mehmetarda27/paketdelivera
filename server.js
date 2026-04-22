@@ -439,6 +439,17 @@ if (!packageColumns.includes("updated_at")) {
   db.exec("ALTER TABLE packages ADD COLUMN updated_at TEXT");
 }
 
+const shiftPlanColumns = db.prepare("PRAGMA table_info(courier_shift_plans)").all().map((row) => row.name);
+if (!shiftPlanColumns.includes("offer_expires_at")) {
+  db.exec("ALTER TABLE courier_shift_plans ADD COLUMN offer_expires_at TEXT");
+}
+if (!shiftPlanColumns.includes("accepted_at")) {
+  db.exec("ALTER TABLE courier_shift_plans ADD COLUMN accepted_at TEXT");
+}
+if (!shiftPlanColumns.includes("notified_at")) {
+  db.exec("ALTER TABLE courier_shift_plans ADD COLUMN notified_at TEXT");
+}
+
 db.prepare(`
   UPDATE packages
   SET source = 'external_manual',
@@ -945,6 +956,12 @@ function assignmentStatusForOrder(status) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function plusHoursIso(value, hours) {
+  const base = new Date(value);
+  base.setHours(base.getHours() + hours);
+  return base.toISOString();
 }
 
 function clientIp(req) {
@@ -1973,9 +1990,11 @@ function buildCourierEarningsSummary(packages) {
 
 function buildCourierShiftSummary(courierId) {
   const shifts = getCourierShifts(courierId, 12);
+  const plans = getCourierShiftPlans(courierId, 12);
   return {
     currentShift: shifts.find((shift) => !shift.endedAt) || null,
     recentShifts: shifts,
+    shiftPlans: plans,
   };
 }
 
@@ -2616,6 +2635,7 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
 }
 
 function getShiftPlans(planDate = dayKey()) {
+  expirePendingShiftPlans();
   return db.prepare(`
     SELECT plans.*, couriers.name AS courier_name, couriers.zone AS courier_zone
     FROM courier_shift_plans plans
@@ -2631,6 +2651,35 @@ function getShiftPlans(planDate = dayKey()) {
     startTime: row.start_time,
     endTime: row.end_time,
     status: row.status,
+    offerExpiresAt: row.offer_expires_at || null,
+    acceptedAt: row.accepted_at || null,
+    notifiedAt: row.notified_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function getCourierShiftPlans(courierId, limit = 12) {
+  expirePendingShiftPlans();
+  return db.prepare(`
+    SELECT plans.*, couriers.name AS courier_name, couriers.zone AS courier_zone
+    FROM courier_shift_plans plans
+    JOIN couriers ON couriers.id = plans.courier_id
+    WHERE plans.courier_id = ?
+    ORDER BY datetime(plans.plan_date || 'T' || plans.start_time) DESC, datetime(plans.updated_at) DESC
+    LIMIT ?
+  `).all(courierId, limit).map((row) => ({
+    id: row.id,
+    courierId: row.courier_id,
+    courierName: row.courier_name,
+    zone: row.zone || row.courier_zone,
+    planDate: row.plan_date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    status: row.status,
+    offerExpiresAt: row.offer_expires_at || null,
+    acceptedAt: row.accepted_at || null,
+    notifiedAt: row.notified_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -2657,7 +2706,7 @@ function upsertCashReconciliation(courierId, reportDate, summary) {
   if (existing) {
     db.prepare(`
       UPDATE cash_reconciliations
-      SET expected_cash = ?, reported_cash = ?, variance = ?, package_ids_json = ?, updated_at = ?
+      SET expected_cash = ?, reported_cash = ?, variance = ?, status = 'pending', admin_note = NULL, package_ids_json = ?, updated_at = ?
       WHERE id = ?
     `).run(expectedCash, expectedCash, variance, json(summary.packageIds || []), now, existing.id);
   } else {
@@ -2698,22 +2747,59 @@ function upsertShiftPlan(courierId, planDate, startTime, endTime, zone) {
     throw httpError(404, "Kurye bulunamadi.");
   }
   const stamp = nowIso();
+  const offerExpiresAt = plusHoursIso(stamp, 1);
   const existing = db.prepare("SELECT * FROM courier_shift_plans WHERE courier_id = ? AND plan_date = ?").get(courierId, planDate);
   if (existing) {
     db.prepare(`
       UPDATE courier_shift_plans
-      SET zone = ?, start_time = ?, end_time = ?, status = 'planned', updated_at = ?
+      SET zone = ?, start_time = ?, end_time = ?, status = 'awaiting_courier_acceptance', offer_expires_at = ?, accepted_at = NULL, notified_at = ?, updated_at = ?
       WHERE id = ?
-    `).run(zone || courier.zone, startTime, endTime, stamp, existing.id);
+    `).run(zone || courier.zone, startTime, endTime, offerExpiresAt, stamp, stamp, existing.id);
     return existing.id;
   }
 
   const id = uid("shiftplan");
   db.prepare(`
-    INSERT INTO courier_shift_plans (id, courier_id, zone, plan_date, start_time, end_time, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?)
-  `).run(id, courierId, zone || courier.zone, planDate, startTime, endTime, stamp, stamp);
+    INSERT INTO courier_shift_plans (id, courier_id, zone, plan_date, start_time, end_time, status, offer_expires_at, accepted_at, notified_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'awaiting_courier_acceptance', ?, NULL, ?, ?, ?)
+  `).run(id, courierId, zone || courier.zone, planDate, startTime, endTime, offerExpiresAt, stamp, stamp, stamp);
   return id;
+}
+
+function expirePendingShiftPlans() {
+  db.prepare(`
+    UPDATE courier_shift_plans
+    SET status = 'expired', updated_at = ?
+    WHERE status = 'awaiting_courier_acceptance'
+      AND offer_expires_at IS NOT NULL
+      AND datetime(offer_expires_at) <= datetime(?)
+  `).run(nowIso(), nowIso());
+}
+
+function acceptShiftPlan(courierId, planId) {
+  expirePendingShiftPlans();
+  const plan = db.prepare("SELECT * FROM courier_shift_plans WHERE id = ? AND courier_id = ?").get(planId, courierId);
+  if (!plan) {
+    throw httpError(404, "Vardiya plani bulunamadi.");
+  }
+  if (plan.status === "accepted") {
+    return plan.id;
+  }
+  if (plan.status !== "awaiting_courier_acceptance") {
+    throw httpError(400, "Bu vardiya plani artik onaylanamaz.");
+  }
+  if (plan.offer_expires_at && new Date(plan.offer_expires_at).getTime() <= Date.now()) {
+    db.prepare("UPDATE courier_shift_plans SET status = 'expired', updated_at = ? WHERE id = ?").run(nowIso(), plan.id);
+    throw httpError(400, "Vardiya onay suresi doldu.");
+  }
+
+  const stamp = nowIso();
+  db.prepare(`
+    UPDATE courier_shift_plans
+    SET status = 'accepted', accepted_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(stamp, stamp, plan.id);
+  return plan.id;
 }
 
 function updateCashReconciliationRecord(recordId, payload = {}) {
@@ -4768,6 +4854,42 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const courierShiftPlanAcceptMatch = pathname.match(/^\/api\/courier\/shift-plans\/([^/]+)\/accept$/);
+  if (req.method === "POST" && courierShiftPlanAcceptMatch) {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Oturum bulunamadi." });
+      return;
+    }
+
+    const retryAfter = applyRateLimit(req, "courierStatus", RATE_LIMITS.courierStatus);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Vardiya onay limiti asildi." });
+      return;
+    }
+
+    const planId = courierShiftPlanAcceptMatch[1];
+    acceptShiftPlan(session.courier_id, planId);
+    const workspace = buildCourierWorkspace(session.courier_id);
+    const courier = getCourierById(session.courier_id);
+    const acceptedPlan = getCourierShiftPlans(session.courier_id, 12).find((item) => item.id === planId);
+
+    writeAuditLog({
+      actorRole: "courier",
+      actorId: session.courier_id,
+      action: "courier_shift_plan_accepted",
+      details: { planId },
+    });
+    broadcastLiveEvent({
+      type: "shift-plan-accepted",
+      courierId: session.courier_id,
+      message: `${courier?.name || "Kurye"} ${acceptedPlan?.planDate || ""} vardiya planini kabul etti.`,
+    });
+    sendJson(res, 200, workspace || { courier: null, packages: [] });
+    return;
+  }
+
   const courierPackageMatch = pathname.match(/^\/api\/courier\/packages\/([^/]+)\/status$/);
   if (req.method === "PATCH" && courierPackageMatch) {
     const session = getCourierSession(req);
@@ -4917,6 +5039,7 @@ async function handleApi(req, res, pathname) {
     }
 
     upsertShiftPlan(courierId, planDate, startTime, endTime, zone);
+    const courier = getCourierById(courierId);
     writeAuditLog({
       actorRole: "admin",
       actorId: adminActorId(adminSession),
@@ -4924,9 +5047,9 @@ async function handleApi(req, res, pathname) {
       details: { courierId, planDate, startTime, endTime, zone },
     });
     broadcastLiveEvent({
-      type: "courier-shift-ended",
+      type: "shift-plan-offer",
       courierId,
-      message: "Kurye vardiya plani guncellendi.",
+      message: `${courier?.name || "Kurye"} icin ${planDate} ${startTime}-${endTime} vardiya plani olusturuldu. 1 saat icinde onay bekleniyor.`,
     });
     sendJson(res, 200, {
       ...decorateState(),

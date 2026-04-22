@@ -11,6 +11,7 @@ const restaurantState = {
   historyVisibleCount: 50,
   workspacePollId: null,
   liveStream: null,
+  activeWorkspaceCard: "restaurant-integration-wizard",
 };
 
 const restaurantRefs = {
@@ -98,6 +99,75 @@ function setRestaurantWorkspaceVisible(isVisible) {
   restaurantRefs.createSection.classList.toggle("hidden", isVisible);
   restaurantRefs.workspace.classList.toggle("hidden", !isVisible);
   restaurantRefs.logoutButton.classList.toggle("hidden", !isVisible);
+}
+
+function syncRestaurantWorkspaceCards() {
+  const cards = [...document.querySelectorAll(".workspace-collapsible-restaurant")];
+  cards.forEach((card) => {
+    const isActive = card.dataset.cardKey === restaurantState.activeWorkspaceCard;
+    card.classList.toggle("panel-expanded", isActive);
+    card.classList.toggle("panel-collapsed", !isActive);
+    const header = card.querySelector(".panel-head");
+    if (header) {
+      header.setAttribute("aria-expanded", isActive ? "true" : "false");
+    }
+  });
+}
+
+function initializeRestaurantWorkspaceCards() {
+  const cardMap = [
+    ["#restaurantWorkspace > section:nth-of-type(2) > article:nth-of-type(1)", "restaurant-performance"],
+    ["#restaurantWorkspace > section:nth-of-type(2) > article:nth-of-type(2)", "restaurant-integration-wizard"],
+    ["#restaurantWorkspace > section:nth-of-type(3)", "restaurant-notifications"],
+    ["#restaurantWorkspace > section:nth-of-type(4) > article:nth-of-type(3)", "restaurant-payload"],
+    ["#restaurantWorkspace > section:nth-of-type(6)", "restaurant-history"],
+    ["#restaurantWorkspace > section:nth-of-type(7) > article:nth-of-type(1)", "restaurant-platform-form"],
+    ["#restaurantWorkspace > section:nth-of-type(7) > article:nth-of-type(2)", "restaurant-webhook-info"],
+    ["#restaurantWorkspace > section:nth-of-type(8)", "restaurant-account"],
+    ["#restaurantWorkspace > section:nth-of-type(9)", "restaurant-platform-accounts"],
+  ];
+
+  cardMap.forEach(([selector, key]) => {
+    const card = document.querySelector(selector);
+    if (!card) {
+      return;
+    }
+
+    card.dataset.cardKey = key;
+    card.classList.add("workspace-collapsible", "workspace-collapsible-restaurant");
+
+    const header = card.querySelector(".panel-head");
+    if (!header || header.dataset.bound === "1") {
+      return;
+    }
+
+    header.dataset.bound = "1";
+    header.classList.add("panel-toggle-head");
+    header.tabIndex = 0;
+    header.setAttribute("role", "button");
+
+    const activate = () => {
+      restaurantState.activeWorkspaceCard = restaurantState.activeWorkspaceCard === key ? "" : key;
+      syncRestaurantWorkspaceCards();
+    };
+
+    header.addEventListener("click", (event) => {
+      if (event.target.closest("button, select, input, textarea, a, label")) {
+        return;
+      }
+      activate();
+    });
+
+    header.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      activate();
+    });
+  });
+
+  syncRestaurantWorkspaceCards();
 }
 
 function stopRestaurantWorkspacePolling() {
@@ -639,6 +709,7 @@ function renderRestaurantNotifications(notifications) {
 function hydrateRestaurant(data, explicitIntegration = null) {
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
+  initializeRestaurantWorkspaceCards();
   const activePackages = activeOrderPackages(data.packages || []);
   const awaitingPackages = activePackages.filter((pkg) => pkg.status === "pending" || pkg.status === "awaiting_assignment");
   const inTransitPackages = activePackages.filter((pkg) => pkg.status === "accepted_by_courier" || pkg.status === "on_route");

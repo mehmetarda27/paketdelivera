@@ -208,7 +208,7 @@ function notificationTone(eventType = "") {
   if (["assignment-waiting"].includes(eventType)) {
     return "error";
   }
-  if (["package-assigned", "package-created", "platform-order", "integration-order"].includes(eventType)) {
+  if (["package-assigned", "package-created", "platform-order", "integration-order", "shift-plan-offer", "shift-plan-accepted"].includes(eventType)) {
     return "success";
   }
   return "info";

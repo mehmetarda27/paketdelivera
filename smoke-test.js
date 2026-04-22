@@ -296,9 +296,47 @@ async function run() {
       }),
     });
     const courierHeaders = { Authorization: `Bearer ${courierLogin.token}` };
+
+    let shiftPlanState = await request("/api/admin/shift-plans", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        courierId: createdCourier.id,
+        planDate: new Date().toISOString().slice(0, 10),
+        startTime: "11:00",
+        endTime: "19:00",
+        zone: "Erdemli",
+      }),
+    });
+    const pendingShiftPlan = (shiftPlanState.shiftPlans || []).find((plan) => plan.courierId === createdCourier.id);
+    if (!pendingShiftPlan || pendingShiftPlan.status !== "awaiting_courier_acceptance") {
+      throw new Error("Kurye vardiya teklifi olusmadi.");
+    }
+
     let courierWorkspace = await request("/api/courier/me", {
       headers: courierHeaders,
     });
+    const courierShiftPlan = (courierWorkspace.shiftSummary?.shiftPlans || []).find((plan) => plan.id === pendingShiftPlan.id);
+    if (!courierShiftPlan || courierShiftPlan.status !== "awaiting_courier_acceptance") {
+      throw new Error("Kurye panelinde vardiya teklifi gorunmedi.");
+    }
+    courierWorkspace = await request(`/api/courier/shift-plans/${pendingShiftPlan.id}/accept`, {
+      method: "POST",
+      headers: courierHeaders,
+      body: JSON.stringify({}),
+    });
+    const acceptedShiftPlan = (courierWorkspace.shiftSummary?.shiftPlans || []).find((plan) => plan.id === pendingShiftPlan.id);
+    if (!acceptedShiftPlan || acceptedShiftPlan.status !== "accepted") {
+      throw new Error("Kurye vardiya planini kabul edemedi.");
+    }
+    shiftPlanState = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    const acceptedAdminShiftPlan = (shiftPlanState.shiftPlans || []).find((plan) => plan.id === pendingShiftPlan.id);
+    if (!acceptedAdminShiftPlan || acceptedAdminShiftPlan.status !== "accepted") {
+      throw new Error("Admin vardiya kabul bilgisini goremiyor.");
+    }
+
     if (courierWorkspace.packages.filter((pkg) => ["assigned", "accepted_by_courier", "on_route"].includes(pkg.status)).length !== 1) {
       throw new Error("Ayni kurye birden fazla aktif paket aldi.");
     }
