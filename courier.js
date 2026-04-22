@@ -15,6 +15,7 @@ const courierState = {
   historyVisibleCount: 50,
   lastPackageSnapshot: new Map(),
   liveStream: null,
+  lastWorkspaceLoadAt: 0,
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -181,7 +182,9 @@ function startCourierLiveStream() {
       if (event?.message && toastableTypes.has(event.type)) {
         showToast(event.message, event.type === "assignment-waiting" ? "error" : "success");
       }
-      loadCourierWorkspace({ silent: true });
+      if (event?.type !== "courier-location") {
+        loadCourierWorkspace({ silent: true, force: true });
+      }
     },
     onError() {
       if (courierRefs.liveBadge) {
@@ -414,6 +417,7 @@ function renderPackages(packages) {
     const assignedAtBadge = node.querySelector(".assigned-at-badge");
     const etaBadge = node.querySelector(".eta-badge");
     const failureBadge = node.querySelector(".failure-badge");
+    let selectedPaymentStatus = pkg.paymentStatus || "";
 
     node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo}`;
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
@@ -440,11 +444,11 @@ function renderPackages(packages) {
     badge.textContent = statusLabel(pkg.status);
     badge.className = `status-badge ${statusClassName(pkg.status)}`;
 
-    const submitStatus = async (status, failureReason = "") => {
+    const submitStatus = async (status, failureReason = "", paymentStatus = "") => {
       const data = await api(`/api/courier/packages/${pkg.id}/status`, {
         method: "PATCH",
         headers: authHeaders(courierState.token),
-        body: JSON.stringify({ status, failureReason }),
+        body: JSON.stringify({ status, failureReason, paymentStatus }),
         retryWithRefresh: refreshCourierAccess,
       });
       hydrateCourierWorkspace(data);
@@ -475,13 +479,34 @@ function renderPackages(packages) {
     }
 
     if (pkg.status === "on_route") {
+      const paymentSelect = document.createElement("select");
+      paymentSelect.className = "status-select";
+      paymentSelect.innerHTML = [
+        '<option value="">Odeme durumunu sec</option>',
+        '<option value="cash_collected">Nakit Alindi</option>',
+        '<option value="paid_online">Online Odendi</option>',
+        '<option value="payment_issue">Odeme Sorunu</option>',
+      ].join("");
+      if (["cash_collected", "paid_online", "payment_issue"].includes(pkg.paymentStatus)) {
+        paymentSelect.value = pkg.paymentStatus;
+        selectedPaymentStatus = pkg.paymentStatus;
+      }
+      paymentSelect.addEventListener("change", () => {
+        selectedPaymentStatus = paymentSelect.value;
+      });
+
       const deliveredButton = document.createElement("button");
       deliveredButton.type = "button";
       deliveredButton.className = "primary-btn";
       deliveredButton.textContent = "Teslim Edildi";
       deliveredButton.addEventListener("click", async () => {
-        await submitStatus("delivered");
+        if (!selectedPaymentStatus) {
+          showToast("Teslim oncesi odeme durumunu sec.", "error");
+          return;
+        }
+        await submitStatus("delivered", "", selectedPaymentStatus);
       });
+      actions.appendChild(paymentSelect);
       actions.appendChild(deliveredButton);
     }
 
@@ -621,13 +646,25 @@ courierRefs.historyMore?.addEventListener("click", () => {
 });
 
 async function pushCourierLocation(payload) {
+  const isLocationOnlyUpdate =
+    (typeof payload.latitude === "number" || typeof payload.longitude === "number") &&
+    typeof payload.available !== "boolean";
   const data = await api("/api/courier/location", {
     method: "PATCH",
     headers: authHeaders(courierState.token),
     body: JSON.stringify(payload),
     retryWithRefresh: refreshCourierAccess,
   });
-  hydrateCourierWorkspace(data);
+  if (isLocationOnlyUpdate) {
+    if (courierState.data?.courier && data?.courier) {
+      courierState.data = {
+        ...courierState.data,
+        courier: data.courier,
+      };
+    }
+  } else {
+    hydrateCourierWorkspace(data);
+  }
   return data;
 }
 
@@ -717,6 +754,12 @@ async function loadCourierWorkspace(options = {}) {
     setLoggedIn(false);
     return;
   }
+
+  const now = Date.now();
+  if (options.silent && !options.force && now - courierState.lastWorkspaceLoadAt < 1500) {
+    return;
+  }
+  courierState.lastWorkspaceLoadAt = now;
 
   try {
     const data = await api("/api/courier/me", {

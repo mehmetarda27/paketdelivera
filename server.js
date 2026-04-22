@@ -4361,6 +4361,7 @@ async function handleApi(req, res, pathname) {
 
     const nextStatus = normalizeStatus(body.status || target.status);
     const currentStatus = normalizeStatus(target.status);
+    const nextPaymentStatus = body.paymentStatus ? normalizePaymentStatus(body.paymentStatus, target.payment_method) : target.payment_status;
 
     if (!COURIER_ALLOWED_STATUSES.has(nextStatus)) {
       sendJson(res, 400, { error: "Kurye bu duruma gecis yapamaz." });
@@ -4381,9 +4382,15 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
+    if (nextStatus === DELIVERED_STATUS && !body.paymentStatus) {
+      sendJson(res, 400, { error: "Teslim oncesi odeme durumu secilmelidir." });
+      return;
+    }
+
     updatePackageLifecycle(packageId, {
       status: nextStatus,
       failureReason: nextStatus === FAILED_STATUS ? failureReason : "",
+      paymentStatus: nextPaymentStatus,
     }, {
       status: target.status,
       paymentStatus: target.payment_status,

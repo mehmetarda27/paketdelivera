@@ -323,7 +323,7 @@ async function run() {
     courierWorkspace = await request(`/api/courier/packages/${assignedPackage.id}/status`, {
       method: "PATCH",
       headers: courierHeaders,
-      body: JSON.stringify({ status: "delivered" }),
+      body: JSON.stringify({ status: "delivered", paymentStatus: "cash_collected" }),
     });
     await request(`/api/admin/packages/${assignedPackage.id}/status`, {
       method: "PATCH",
