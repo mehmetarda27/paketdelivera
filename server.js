@@ -3093,6 +3093,7 @@ function rebalancePackages() {
   assignmentSweepRunning = true;
   try {
   const state = currentState();
+  syncCourierOperationalStatuses(state);
   const occupiedCourierLoads = new Map();
   state.packages
     .filter((pkg) => isCapacityBlockingPackage(pkg))
@@ -3109,7 +3110,6 @@ function rebalancePackages() {
     attemptPackageAssignment(state, pkg, occupiedCourierLoads);
   });
 
-  syncCourierOperationalStatuses(state);
   } finally {
     assignmentSweepRunning = false;
     if (assignmentSweepQueued) {
