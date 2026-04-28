@@ -135,6 +135,34 @@ function setLocationStatus(message) {
   courierRefs.locationStatus.textContent = message;
 }
 
+function hasOrderMapTarget(order) {
+  const latitude = Number(order?.latitude);
+  const longitude = Number(order?.longitude);
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return true;
+  }
+  return Boolean(String(order?.deliveryAddress || order?.address || "").trim());
+}
+
+function openOrderMap(order) {
+  const latitude = Number(order?.latitude);
+  const longitude = Number(order?.longitude);
+  let url = "";
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  } else {
+    const address = String(order?.deliveryAddress || order?.address || "").trim();
+    if (!address) {
+      showToast("Adres bulunamadi.", "error");
+      return;
+    }
+    url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  }
+
+  window.open(url, "_blank");
+}
+
 function stopLocationWatch() {
   if (courierState.watchId !== null) {
     navigator.geolocation.clearWatch(courierState.watchId);
@@ -634,6 +662,17 @@ function renderPackages(packages) {
     };
 
     actions.innerHTML = "";
+
+    if (hasOrderMapTarget(pkg)) {
+      const mapButton = document.createElement("button");
+      mapButton.type = "button";
+      mapButton.className = "ghost-btn";
+      mapButton.textContent = "Haritada Ac";
+      mapButton.addEventListener("click", () => {
+        openOrderMap(pkg);
+      });
+      actions.appendChild(mapButton);
+    }
 
     if (pkg.status === "assigned") {
       const acceptButton = document.createElement("button");
