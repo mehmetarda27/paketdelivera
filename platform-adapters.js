@@ -20,6 +20,21 @@ function normalizeItems(items) {
   }));
 }
 
+function normalizeCoordinate(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Number(parsed.toFixed(6)) : null;
+}
+
+function pickCoordinate(...values) {
+  for (const value of values) {
+    const normalized = normalizeCoordinate(value);
+    if (normalized !== null) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
 function normalizePlatformKey(platform) {
   return trimmed(platform).toLowerCase().replaceAll(" ", "_").replaceAll("-", "_");
 }
@@ -37,6 +52,33 @@ function baseNormalizeOrder(platformKey, rawBody) {
     totalPrice: normalizeMoney(body.totalPrice ?? body.total_price ?? body.amount),
     paymentMethod: trimmed(body.paymentMethod ?? body.payment_method) || "Online Odeme",
     customerNote: trimmed(body.customerNote ?? body.customer_note ?? body.note),
+    customerLatitude: pickCoordinate(
+      body.customerLat,
+      body.customer_lat,
+      body.customerLatitude,
+      body.customer_latitude,
+      body.lat,
+      body.latitude,
+      body.customer?.lat,
+      body.customer?.latitude,
+      body.deliveryLocation?.lat,
+      body.deliveryLocation?.latitude
+    ),
+    customerLongitude: pickCoordinate(
+      body.customerLng,
+      body.customer_lng,
+      body.customerLongitude,
+      body.customer_longitude,
+      body.lng,
+      body.longitude,
+      body.lon,
+      body.customer?.lng,
+      body.customer?.longitude,
+      body.customer?.lon,
+      body.deliveryLocation?.lng,
+      body.deliveryLocation?.longitude
+    ),
+    customerAddress: trimmed(body.customerAddress ?? body.customer_address ?? body.address ?? body.deliveryAddress ?? body.delivery_address),
     rawPayload: body,
   };
 }
@@ -79,6 +121,23 @@ const platformAdapters = {
       totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.payment?.totalPrice),
       paymentMethod: trimmed(rawBody.paymentMethod ?? order.payment?.method ?? order.paymentMethod) || "Online Odeme",
       customerNote: trimmed(rawBody.customerNote ?? order.customerNote ?? order.note),
+      customerLatitude: pickCoordinate(
+        rawBody.customerLat,
+        rawBody.customer_lat,
+        order.deliveryAddress?.lat,
+        order.deliveryAddress?.latitude,
+        order.customer?.lat,
+        order.customer?.latitude
+      ),
+      customerLongitude: pickCoordinate(
+        rawBody.customerLng,
+        rawBody.customer_lng,
+        order.deliveryAddress?.lng,
+        order.deliveryAddress?.longitude,
+        order.customer?.lng,
+        order.customer?.longitude
+      ),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.deliveryAddress?.address1 ?? order.address),
       items: normalizeItems(rawBody.items ?? order.items ?? order.products),
       rawPayload: rawBody,
     };
@@ -95,6 +154,23 @@ const platformAdapters = {
       totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.total_amount ?? order.payment?.amount),
       paymentMethod: trimmed(rawBody.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || "Online Odeme",
       customerNote: trimmed(rawBody.customerNote ?? order.customerNote ?? order.note),
+      customerLatitude: pickCoordinate(
+        rawBody.customerLat,
+        rawBody.customer_lat,
+        order.deliveryAddress?.lat,
+        order.deliveryAddress?.latitude,
+        order.customer?.lat,
+        order.customer?.latitude
+      ),
+      customerLongitude: pickCoordinate(
+        rawBody.customerLng,
+        rawBody.customer_lng,
+        order.deliveryAddress?.lng,
+        order.deliveryAddress?.longitude,
+        order.customer?.lng,
+        order.customer?.longitude
+      ),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address ?? order.deliveryAddress),
       items: normalizeItems(rawBody.items ?? order.items ?? order.products),
       rawPayload: rawBody,
     };
@@ -111,6 +187,23 @@ const platformAdapters = {
       totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.totalAmount),
       paymentMethod: trimmed(rawBody.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || "Online Odeme",
       customerNote: trimmed(rawBody.customerNote ?? order.note ?? order.customerNote),
+      customerLatitude: pickCoordinate(
+        rawBody.customerLat,
+        rawBody.customer_lat,
+        order.customer?.lat,
+        order.customer?.latitude,
+        order.deliveryLocation?.lat,
+        order.deliveryLocation?.latitude
+      ),
+      customerLongitude: pickCoordinate(
+        rawBody.customerLng,
+        rawBody.customer_lng,
+        order.customer?.lng,
+        order.customer?.longitude,
+        order.deliveryLocation?.lng,
+        order.deliveryLocation?.longitude
+      ),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address),
       items: normalizeItems(rawBody.items ?? order.items ?? order.products),
       rawPayload: rawBody,
     };
@@ -127,6 +220,23 @@ const platformAdapters = {
       totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.amount),
       paymentMethod: trimmed(rawBody.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || "Online Odeme",
       customerNote: trimmed(rawBody.customerNote ?? order.note ?? order.customerNote),
+      customerLatitude: pickCoordinate(
+        rawBody.customerLat,
+        rawBody.customer_lat,
+        order.customer?.lat,
+        order.customer?.latitude,
+        order.deliveryAddress?.lat,
+        order.deliveryAddress?.latitude
+      ),
+      customerLongitude: pickCoordinate(
+        rawBody.customerLng,
+        rawBody.customer_lng,
+        order.customer?.lng,
+        order.customer?.longitude,
+        order.deliveryAddress?.lng,
+        order.deliveryAddress?.longitude
+      ),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address ?? order.deliveryAddress),
       items: normalizeItems(rawBody.items ?? order.items ?? order.products),
       rawPayload: rawBody,
     };

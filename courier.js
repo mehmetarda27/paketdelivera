@@ -135,24 +135,28 @@ function setLocationStatus(message) {
   courierRefs.locationStatus.textContent = message;
 }
 
-function hasOrderMapTarget(order) {
-  const latitude = Number(order?.latitude);
-  const longitude = Number(order?.longitude);
+function hasMapTarget(latitudeValue, longitudeValue, addressValue) {
+  const latitude = Number(latitudeValue);
+  const longitude = Number(longitudeValue);
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
     return true;
   }
-  return Boolean(String(order?.deliveryAddress || order?.address || "").trim());
+  return Boolean(String(addressValue || "").trim());
 }
 
-function openOrderMap(order) {
-  const latitude = Number(order?.latitude);
-  const longitude = Number(order?.longitude);
+function openOrderMap(order, target = "customer") {
+  const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
+  const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
+  const address = String(
+    target === "restaurant"
+      ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
+      : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
+  ).trim();
   let url = "";
 
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
     url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
   } else {
-    const address = String(order?.deliveryAddress || order?.address || "").trim();
     if (!address) {
       showToast("Adres bulunamadi.", "error");
       return;
@@ -663,15 +667,26 @@ function renderPackages(packages) {
 
     actions.innerHTML = "";
 
-    if (hasOrderMapTarget(pkg)) {
-      const mapButton = document.createElement("button");
-      mapButton.type = "button";
-      mapButton.className = "ghost-btn";
-      mapButton.textContent = "Haritada Ac";
-      mapButton.addEventListener("click", () => {
-        openOrderMap(pkg);
+    if (hasMapTarget(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, pkg.restaurantAddress || pkg.restaurantName || pkg.zone)) {
+      const restaurantMapButton = document.createElement("button");
+      restaurantMapButton.type = "button";
+      restaurantMapButton.className = "ghost-btn";
+      restaurantMapButton.textContent = "Restorani Haritada Ac";
+      restaurantMapButton.addEventListener("click", () => {
+        openOrderMap(pkg, "restaurant");
       });
-      actions.appendChild(mapButton);
+      actions.appendChild(restaurantMapButton);
+    }
+
+    if (hasMapTarget(pkg.customerLat ?? pkg.customerLatitude, pkg.customerLng ?? pkg.customerLongitude, pkg.customerAddress || pkg.deliveryAddress || pkg.address)) {
+      const customerMapButton = document.createElement("button");
+      customerMapButton.type = "button";
+      customerMapButton.className = "ghost-btn";
+      customerMapButton.textContent = "Musteriyi Haritada Ac";
+      customerMapButton.addEventListener("click", () => {
+        openOrderMap(pkg, "customer");
+      });
+      actions.appendChild(customerMapButton);
     }
 
     if (pkg.status === "assigned") {
@@ -1007,6 +1022,16 @@ function startLocationWatch() {
 }
 
 async function loadCourierWorkspace(options = {}) {
+  if (!courierState.token) {
+    if (courierState.refreshToken) {
+      try {
+        await refreshCourierAccess();
+      } catch {
+        clearCourierAuth();
+      }
+    }
+  }
+
   if (!courierState.token) {
     setLoggedIn(false);
     return;

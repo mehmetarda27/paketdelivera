@@ -180,7 +180,7 @@ async function run() {
         name: "Smoke Kurye 3",
         username: courier3Username,
         password: courier3Password,
-        zone: "Erdemli",
+        zone: "Akdeniz",
         latitude: courierLatitude + 0.0002,
         longitude: courierLongitude + 0.0002,
         available: false,
@@ -299,6 +299,9 @@ async function run() {
     });
     if (webhookResponse.package.status !== "pending_approval") {
       throw new Error("Platform siparisi pending_approval durumunda kaydolmadi.");
+    }
+    if (webhookResponse.package.customerAddress !== "Mersin Mezitli sahil caddesi webhook no 12") {
+      throw new Error("Platform siparisinde musteri adresi customer_address alanina kaydolmadi.");
     }
     if (webhookResponse.package.assignedCourierId) {
       throw new Error("Platform siparisi restoran onayi olmadan kuryeye atandi.");
@@ -532,6 +535,10 @@ async function run() {
     if (!printSource.includes(".print()")) {
       throw new Error("Yazdirma ekrani window.print akisini icermiyor.");
     }
+    const courierSource = fs.readFileSync(path.join(__dirname, "courier.js"), "utf8");
+    if (!courierSource.includes("Restorani Haritada Ac") || !courierSource.includes("Musteriyi Haritada Ac") || !courierSource.includes("openOrderMap")) {
+      throw new Error("Kurye paneli restoran/musteri harita butonlarini icermiyor.");
+    }
 
     await delay(1200);
     const afterDeliveryBootstrap = await request("/api/admin/bootstrap", {
@@ -727,6 +734,26 @@ async function run() {
       headers: adminHeaders,
       body: JSON.stringify({ status: "awaiting_assignment" }),
     });
+    await request(`/api/admin/couriers/${createdCourier.id}/availability`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ available: false }),
+    });
+    await request(`/api/admin/couriers/${createdCourier2.id}/availability`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ available: false }),
+    });
+    await request(`/api/admin/couriers/${createdCourier4.id}/availability`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ available: false }),
+    });
+    await request(`/api/admin/couriers/${createdCourier5.id}/availability`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ available: false }),
+    });
 
     await request(`/api/admin/packages/${thirdManualPackage.id}/unassign`, {
       method: "POST",
@@ -740,6 +767,9 @@ async function run() {
     const retriedPackage = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id);
     if (!retriedPackage || retriedPackage.status !== "assigned") {
       throw new Error("Unassign sonrasi yeniden atama mantigi calismadi.");
+    }
+    if (retriedPackage.assignedCourierId !== createdCourier3.id) {
+      throw new Error("Farkli bolgedeki ama 5 km icindeki online kurye otomatik atamada secilemedi.");
     }
     if (!retriedPackage.lastAssignmentAttemptAt) {
       throw new Error("Son atama denemesi bilgisi admin tarafinda gorunmuyor.");

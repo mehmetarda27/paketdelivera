@@ -220,6 +220,16 @@ function bootstrapPath() {
 
 async function loadAdminState() {
   if (!adminState.token) {
+    if (adminState.refreshToken) {
+      try {
+        await refreshAdminAccess();
+      } catch {
+        clearAdminAuth();
+      }
+    }
+  }
+
+  if (!adminState.token) {
     setAdminLoggedIn(false);
     return;
   }
@@ -434,23 +444,51 @@ function normalizeZoneValue(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function buildCourierOverrideOptions(pkg) {
-  const packageZone = normalizeZoneValue(pkg.zone);
-  const allCouriers = adminState.data?.couriers || [];
-  const sameZoneCouriers = allCouriers.filter((courier) => normalizeZoneValue(courier.zone) === packageZone);
+function toRadians(value) {
+  return (value * Math.PI) / 180;
+}
 
-  return sameZoneCouriers
+function distanceKm(aLat, aLng, bLat, bLng) {
+  const lat1 = Number(aLat);
+  const lng1 = Number(aLng);
+  const lat2 = Number(bLat);
+  const lng2 = Number(bLng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) {
+    return null;
+  }
+
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const latA = toRadians(lat1);
+  const latB = toRadians(lat2);
+  const haversine =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(latA) * Math.cos(latB) * Math.sin(dLng / 2) ** 2;
+
+  return Number((2 * earthRadiusKm * Math.asin(Math.sqrt(haversine))).toFixed(1));
+}
+
+function buildCourierOverrideOptions(pkg) {
+  const allCouriers = adminState.data?.couriers || [];
+  return allCouriers
     .sort((left, right) => {
       const leftEligible = left.status === "online" && Number(left.activeLoad || 0) < 1;
       const rightEligible = right.status === "online" && Number(right.activeLoad || 0) < 1;
       if (leftEligible !== rightEligible) {
         return Number(rightEligible) - Number(leftEligible);
       }
+      const leftDistance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, left.latitude, left.longitude);
+      const rightDistance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, right.latitude, right.longitude);
+      if (leftDistance !== null && rightDistance !== null && leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
       return left.name.localeCompare(right.name, "tr");
     })
     .map((courier) => {
       const activeLoad = Number(courier.activeLoad || 0);
       const isEligible = courier.status === "online" && activeLoad < 1;
+      const distance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, courier.latitude, courier.longitude);
       const reason = !isEligible
         ? courier.status !== "online"
           ? courier.status === "busy"
@@ -461,7 +499,7 @@ function buildCourierOverrideOptions(pkg) {
 
       return {
         value: courier.id,
-        label: `${courier.name} - ${courierStatusLabel(courier.status)} - ${reason}`,
+        label: `${courier.name} - ${courier.zone} - ${distance === null ? "Mesafe yok" : `${distance} km`} - ${reason}`,
         disabled: !isEligible,
       };
     });
@@ -626,7 +664,7 @@ function buildPackageCard(pkg) {
   if (!courierOptions.length) {
     const helper = document.createElement("p");
     helper.className = "subtle-text";
-    helper.textContent = `${pkg.zone || "Bolge"} icin eslesen kurye bulunamadi. Kurye bolgesiyle paket bolgesini kontrol et.`;
+    helper.textContent = "Uygun kurye bulunamadi: online kurye yok / mesafe disi / bolge farkli olsa bile musait kurye bulunamadi.";
     actions.appendChild(helper);
   }
 

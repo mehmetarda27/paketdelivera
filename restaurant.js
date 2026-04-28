@@ -976,6 +976,16 @@ restaurantRefs.historyMore?.addEventListener("click", () => {
 
 async function loadRestaurantWorkspace(options = {}) {
   if (!restaurantState.token) {
+    if (restaurantState.refreshToken) {
+      try {
+        await refreshRestaurantAccess();
+      } catch {
+        clearRestaurantAuth();
+      }
+    }
+  }
+
+  if (!restaurantState.token) {
     try {
       const restored = await tryRestaurantSessionFromStoredAccess();
       if (restored) {

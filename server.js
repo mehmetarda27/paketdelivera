@@ -194,6 +194,9 @@ db.exec(`
     payment_status TEXT NOT NULL DEFAULT 'unpaid',
     x REAL NOT NULL,
     y REAL NOT NULL,
+    customer_lat REAL,
+    customer_lng REAL,
+    customer_address TEXT,
     note TEXT NOT NULL,
     status TEXT NOT NULL,
     assignment_status TEXT,
@@ -456,6 +459,15 @@ if (!packageColumns.includes("items_json")) {
 }
 if (!packageColumns.includes("raw_payload_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN raw_payload_json TEXT");
+}
+if (!packageColumns.includes("customer_lat")) {
+  db.exec("ALTER TABLE packages ADD COLUMN customer_lat REAL");
+}
+if (!packageColumns.includes("customer_lng")) {
+  db.exec("ALTER TABLE packages ADD COLUMN customer_lng REAL");
+}
+if (!packageColumns.includes("customer_address")) {
+  db.exec("ALTER TABLE packages ADD COLUMN customer_address TEXT");
 }
 if (!packageColumns.includes("platform_status_logs_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN platform_status_logs_json TEXT");
@@ -830,6 +842,9 @@ function normalizeOrder(platform, rawBody) {
     totalPrice: normalizeMoney(normalized.totalPrice),
     paymentMethod: trimmed(normalized.paymentMethod) || "Online Odeme",
     customerNote: trimmed(normalized.customerNote),
+    customerLatitude: Number.isFinite(Number(normalized.customerLatitude)) ? Number(normalized.customerLatitude) : null,
+    customerLongitude: Number.isFinite(Number(normalized.customerLongitude)) ? Number(normalized.customerLongitude) : null,
+    customerAddress: trimmed(normalized.customerAddress || normalized.address),
     rawPayload: normalized.rawPayload || rawBody || {},
   };
 
@@ -945,6 +960,13 @@ function validateIntegrationDraft(body, restaurant) {
     longitude: Number(body.longitude ?? body.y ?? restaurant.longitude),
     note: trimmed(body.note),
     customerNote: trimmed(body.customerNote ?? body.customer_note),
+    customerLatitude: Number.isFinite(Number(body.customerLatitude ?? body.customer_lat ?? body.customerLat))
+      ? Number(body.customerLatitude ?? body.customer_lat ?? body.customerLat)
+      : null,
+    customerLongitude: Number.isFinite(Number(body.customerLongitude ?? body.customer_lng ?? body.customerLng))
+      ? Number(body.customerLongitude ?? body.customer_lng ?? body.customerLng)
+      : null,
+    customerAddress: trimmed(body.customerAddress ?? body.customer_address ?? body.address),
     items,
     rawPayload: body.rawPayload ?? body.raw_payload ?? null,
     status: trimmed(body.status) ? normalizeStatus(body.status) : PENDING_STATUS,
@@ -1924,6 +1946,12 @@ function getPackages(filter = {}) {
     longitude: row.y,
     note: row.note,
     customerNote: row.customer_note || "",
+    customerLat: row.customer_lat,
+    customerLng: row.customer_lng,
+    customerAddress: row.customer_address || row.delivery_address || row.address,
+    restaurantLat: row.x,
+    restaurantLng: row.y,
+    restaurantAddress: row.zone,
     items: parseJson(row.items_json, []),
     rawPayload: parseJson(row.raw_payload_json, null),
     platformStatusLogs: parseJson(row.platform_status_logs_json, []),
@@ -1969,6 +1997,12 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     longitude: row.y,
     note: row.note,
     customerNote: row.customer_note || "",
+    customerLat: row.customer_lat,
+    customerLng: row.customer_lng,
+    customerAddress: row.customer_address || row.delivery_address || row.address,
+    restaurantLat: row.x,
+    restaurantLng: row.y,
+    restaurantAddress: row.zone,
     items: parseJson(row.items_json, []),
     rawPayload: parseJson(row.raw_payload_json, null),
     platformStatusLogs: parseJson(row.platform_status_logs_json, []),
@@ -2501,19 +2535,19 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const zoneCouriers = state.couriers.filter((courier) => courier.zone === pkg.zone);
-  if (zoneCouriers.length === 0) {
+  const allCouriers = state.couriers;
+  if (allCouriers.length === 0) {
     return {
       reason: "uygun kurye yok",
-      note: `${pkg.zone} bolgesinde kayitli kurye bulunamadi.`,
+      note: "Uygun kurye bulunamadi: kayitli kurye yok.",
     };
   }
 
-  const onlineCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS);
+  const onlineCouriers = allCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS);
   if (onlineCouriers.length === 0) {
     return {
-      reason: "uygun kurye yok",
-      note: `${pkg.zone} bolgesinde online kurye bulunamadi.`,
+      reason: "online kurye yok",
+      note: "Uygun kurye bulunamadi: online kurye yok.",
     };
   }
 
@@ -2521,20 +2555,20 @@ function evaluateAssignmentFailure(state, pkg) {
   if (freeOnlineCouriers.length === 0) {
     return {
       reason: "tum kuryeler busy",
-      note: `${pkg.zone} bolgesindeki online kuryelerin hepsi aktif gorevde.`,
+      note: "Uygun kurye bulunamadi: tum online kuryeler aktif gorevde.",
     };
   }
 
   return {
-    reason: "uygun kurye yok",
-    note: `${pkg.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde uygun aktif kurye yok.`,
+    reason: "mesafe disi",
+    note: `Uygun kurye bulunamadi: ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde kurye yok.`,
   };
 }
 
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
   const ranked = state.couriers
-    .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS && courier.zone === pkg.zone)
+    .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS)
     .map((courier) => ({
       courier,
       distance: distance(courier.latitude, courier.longitude, pkg.latitude, pkg.longitude),
@@ -2661,11 +2695,6 @@ function tryAssignPackageAtomically(pkg, candidate) {
     if (!targetCourier) {
       updatePackageAssignmentFailure(pkg.id, "uygun kurye yok", "Secilen kurye kaydi bulunamadi.");
       return { ok: false, reason: "uygun kurye yok", note: "Secilen kurye kaydi bulunamadi." };
-    }
-
-    if (targetCourier.zone !== freshPackage.zone) {
-      updatePackageAssignmentFailure(pkg.id, "tenant uyusmuyor", "Kurye zone bilgisi siparisle uyusmuyor.");
-      return { ok: false, reason: "tenant uyusmuyor", note: "Kurye zone bilgisi siparisle uyusmuyor." };
     }
 
     const courierStatus = normalizeCourierStatus(targetCourier.status, Boolean(targetCourier.available));
@@ -3027,10 +3056,6 @@ function adminAssignPackageToCourier(packageId, courierId) {
     const courier = db.prepare("SELECT * FROM couriers WHERE id = ?").get(courierId);
     if (!courier) {
       throw httpError(404, "Kurye bulunamadi.");
-    }
-
-    if (courier.zone !== target.zone) {
-      throw httpError(400, "Kurye ve siparis bolgesi uyusmuyor.");
     }
 
     if (normalizeCourierStatus(courier.status, Boolean(courier.available)) !== COURIER_ONLINE_STATUS) {
@@ -3455,10 +3480,10 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
   db.prepare(`
     INSERT INTO packages (
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, external_order_no, external_order_id,
-      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, note, customer_note, items_json, raw_payload_json, status, assignment_status,
+      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pkg.id,
     pkg.trackingNo,
@@ -3479,6 +3504,9 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
     pkg.paymentStatus,
     pkg.latitude,
     pkg.longitude,
+    pkg.customerLatitude ?? null,
+    pkg.customerLongitude ?? null,
+    pkg.customerAddress || pkg.deliveryAddress || pkg.address,
     pkg.note,
     pkg.customerNote || null,
     json(Array.isArray(pkg.items) ? pkg.items : []),
@@ -3740,6 +3768,9 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
       "Gizli Numara"
     ),
     address: safeAddress,
+    customerAddress: safeAddress,
+    customerLatitude: latitude,
+    customerLongitude: longitude,
     zone: safeZone,
     eta,
     paymentMethod,
@@ -3861,6 +3892,9 @@ function createSimplePlatformPayload(order, restaurant) {
     recipient: order.customerName,
     phone: order.phone,
     address: order.address,
+    customerAddress: order.customerAddress || order.address,
+    customerLatitude: Number.isFinite(Number(order.customerLatitude)) ? Number(order.customerLatitude) : null,
+    customerLongitude: Number.isFinite(Number(order.customerLongitude)) ? Number(order.customerLongitude) : null,
     zone: restaurant.zone,
     eta: `${suggestedRestaurantPrepMinutes(restaurant.zone)} dk`,
     paymentMethod: order.paymentMethod || "Online Odeme",
@@ -4599,6 +4633,9 @@ async function handleApi(req, res, pathname) {
       recipient: restaurantRow.name,
       phone: "-",
       address: draft.deliveryAddress,
+      customerAddress: draft.deliveryAddress,
+      customerLatitude: null,
+      customerLongitude: null,
       zone: restaurantRow.zone,
       eta: "Planlanacak",
       paymentMethod: "Panel Kaydi",
