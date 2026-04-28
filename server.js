@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { URL } = require("url");
 const { DatabaseSync } = require("node:sqlite");
+const { getPlatformAdapter, normalizePlatformKey } = require("./platform-adapters");
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = path.resolve(process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
@@ -456,6 +457,9 @@ if (!packageColumns.includes("items_json")) {
 if (!packageColumns.includes("raw_payload_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN raw_payload_json TEXT");
 }
+if (!packageColumns.includes("platform_status_logs_json")) {
+  db.exec("ALTER TABLE packages ADD COLUMN platform_status_logs_json TEXT");
+}
 
 const shiftPlanColumns = db.prepare("PRAGMA table_info(courier_shift_plans)").all().map((row) => row.name);
 if (!shiftPlanColumns.includes("offer_expires_at")) {
@@ -540,6 +544,24 @@ if (!platformAccountColumns.includes("verified_at")) {
 if (!platformAccountColumns.includes("last_validation_mode")) {
   db.exec("ALTER TABLE platform_accounts ADD COLUMN last_validation_mode TEXT");
 }
+if (!platformAccountColumns.includes("access_token")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN access_token TEXT");
+}
+if (!platformAccountColumns.includes("refresh_token")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN refresh_token TEXT");
+}
+if (!platformAccountColumns.includes("token_expires_at")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN token_expires_at TEXT");
+}
+if (!platformAccountColumns.includes("callback_url")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN callback_url TEXT");
+}
+if (!platformAccountColumns.includes("auth_type")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN auth_type TEXT");
+}
+if (!platformAccountColumns.includes("webhook_secret")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN webhook_secret TEXT");
+}
 
 const zoneInsert = db.prepare("INSERT OR IGNORE INTO zones (name) VALUES (?)");
 DEFAULT_ZONES.forEach((zone) => zoneInsert.run(zone));
@@ -553,6 +575,12 @@ function json(value) {
 }
 
 function parseJson(value, fallback) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
   try {
     return JSON.parse(value);
   } catch {
@@ -747,9 +775,14 @@ function validatePlatformAccountDraft(body) {
     apiPassword: String(body.apiPassword || ""),
     apiKey: trimmed(body.apiKey),
     apiSecret: trimmed(body.apiSecret),
+    accessToken: trimmed(body.accessToken),
+    refreshToken: trimmed(body.refreshToken),
+    tokenExpiresAt: trimmed(body.tokenExpiresAt),
+    callbackUrl: trimmed(body.callbackUrl),
     storeFrontCode: trimmed(body.storeFrontCode),
     chainId: trimmed(body.chainId),
     vendorId: trimmed(body.vendorId),
+    authType: trimmed(body.authType || body.auth_type || body.webhookAuthType) || PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
     webhookAuthType: PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
     webhookApiKey: "",
     webhookUsername: "",
@@ -783,74 +816,36 @@ function normalizeIncomingOrderItems(items) {
 
 function normalizeOrder(platform, rawBody) {
   const normalizedPlatform = normalizePlatformInput(platform);
-  const body = rawBody || {};
-  const order = body.order || body.data || body.payload || body;
-  const directItems = body.items || order.items || body.products || order.products;
-  const normalized = {
+  const adapter = getPlatformAdapter(normalizePlatformKey(normalizedPlatform || platform));
+  const normalized = adapter.normalizeOrder(rawBody || {});
+  const canonical = {
+    ...normalized,
     platform: normalizedPlatform,
-    platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id),
-    orderId: trimmed(body.orderId ?? body.order_id),
-    customerName: trimmed(body.customerName ?? body.customer_name),
-    phone: trimmed(body.phone),
-    address: trimmed(body.address),
-    items: normalizeIncomingOrderItems(directItems),
-    totalPrice: normalizeMoney(body.totalPrice ?? body.total_price),
-    paymentMethod: trimmed(body.paymentMethod ?? body.payment_method) || "Online Odeme",
-    customerNote: trimmed(body.customerNote ?? body.customer_note),
-    rawPayload: body,
+    platformRestaurantId: trimmed(normalized.platformRestaurantId),
+    orderId: trimmed(normalized.orderId),
+    customerName: trimmed(normalized.customerName),
+    phone: trimmed(normalized.phone),
+    address: trimmed(normalized.address),
+    items: normalizeIncomingOrderItems(normalized.items),
+    totalPrice: normalizeMoney(normalized.totalPrice),
+    paymentMethod: trimmed(normalized.paymentMethod) || "Online Odeme",
+    customerNote: trimmed(normalized.customerNote),
+    rawPayload: normalized.rawPayload || rawBody || {},
   };
 
-  if (normalizedPlatform === "Yemeksepeti") {
-    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.vendorId ?? body.vendor_id ?? order.vendorId ?? order.vendor_id);
-    normalized.orderId ||= trimmed(body.orderId ?? body.external_order_id ?? body.externalOrderId ?? order.orderId ?? order.externalOrderId);
-    normalized.customerName ||= trimmed(body.customerName ?? order.customerName ?? order.customer?.name);
-    normalized.phone ||= trimmed(body.phone ?? order.phone ?? order.customer?.phone);
-    normalized.address ||= trimmed(body.address ?? order.address ?? order.deliveryAddress);
-    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.total_amount ?? order.payment?.amount);
-    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
-    normalized.customerNote ||= trimmed(body.customerNote ?? order.customerNote ?? order.note);
-  } else if (normalizedPlatform === "Trendyol Go") {
-    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.storeFrontCode ?? body.store_front_code ?? body.sellerId ?? order.storeFrontCode);
-    normalized.orderId ||= trimmed(body.orderId ?? body.orderNumber ?? body.order_number ?? order.orderNumber);
-    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.fullName ?? order.customer?.name);
-    normalized.phone ||= trimmed(body.phone ?? order.customer?.phoneNumber ?? order.customer?.phone);
-    normalized.address ||= trimmed(body.address ?? order.deliveryAddress?.address1 ?? order.address);
-    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.payment?.totalPrice);
-    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.payment?.method ?? order.paymentMethod) || normalized.paymentMethod;
-    normalized.customerNote ||= trimmed(body.customerNote ?? order.customerNote ?? order.note);
-  } else if (normalizedPlatform === "GetirYemek") {
-    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.restaurantId ?? body.vendorId ?? order.restaurantId);
-    normalized.orderId ||= trimmed(body.orderId ?? body.id ?? order.id ?? order.orderId);
-    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.name);
-    normalized.phone ||= trimmed(body.phone ?? order.customer?.phone);
-    normalized.address ||= trimmed(body.address ?? order.address);
-    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.totalAmount);
-    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
-    normalized.customerNote ||= trimmed(body.customerNote ?? order.note ?? order.customerNote);
-  } else if (normalizedPlatform === "Migros Yemek") {
-    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.merchantId ?? body.vendorId ?? order.merchantId);
-    normalized.orderId ||= trimmed(body.orderId ?? body.id ?? order.id ?? order.orderNo);
-    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.name);
-    normalized.phone ||= trimmed(body.phone ?? order.customer?.phone);
-    normalized.address ||= trimmed(body.address ?? order.address ?? order.deliveryAddress);
-    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.amount);
-    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
-    normalized.customerNote ||= trimmed(body.customerNote ?? order.note ?? order.customerNote);
-  }
-
   if (
-    !normalized.platform ||
-    !normalized.platformRestaurantId ||
-    !normalized.orderId ||
-    !normalized.customerName ||
-    !normalized.phone ||
-    !normalized.address ||
-    normalized.totalPrice <= 0
+    !canonical.platform ||
+    !canonical.platformRestaurantId ||
+    !canonical.orderId ||
+    !canonical.customerName ||
+    !canonical.phone ||
+    !canonical.address ||
+    canonical.totalPrice <= 0
   ) {
     throw validationError("Platform siparis verisi eksik.");
   }
 
-  return normalized;
+  return canonical;
 }
 
 function validateAdminLoginDraft(body) {
@@ -1234,10 +1229,13 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     externalStoreId: account.externalStoreId,
     externalMerchantId: account.externalMerchantId,
     apiUsername: account.apiUsername,
+    apiKey: account.apiKey,
     storeFrontCode: account.storeFrontCode,
     chainId: account.chainId,
     vendorId: account.vendorId,
     webhookAuthType: account.webhookAuthType,
+    authType: account.authType || account.webhookAuthType,
+    callbackUrl: account.callbackUrl || "",
     webhookId: account.webhookId,
     settings: account.settings,
     active: account.active,
@@ -1252,12 +1250,15 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
   return {
     ...safeAccount,
     apiPassword: account.apiPassword,
-    apiKey: account.apiKey,
     apiSecret: account.apiSecret,
+    accessToken: account.accessToken,
+    refreshToken: account.refreshToken,
+    tokenExpiresAt: account.tokenExpiresAt,
     webhookApiKey: account.webhookApiKey,
     webhookUsername: account.webhookUsername,
     webhookPassword: account.webhookPassword,
     staticToken: account.staticToken,
+    webhookSecret: account.webhookSecret,
     verificationStatus: account.verificationStatus,
     verificationNote: account.verificationNote,
     lastVerificationAt: account.lastVerificationAt,
@@ -1669,6 +1670,11 @@ function getPlatformAccounts(filter = {}) {
     apiPassword: row.api_password,
     apiKey: row.api_key,
     apiSecret: row.api_secret,
+    accessToken: row.access_token,
+    refreshToken: row.refresh_token,
+    tokenExpiresAt: row.token_expires_at,
+    callbackUrl: row.callback_url,
+    authType: row.auth_type || row.webhook_auth_type,
     storeFrontCode: row.store_front_code,
     chainId: row.chain_id,
     vendorId: row.vendor_id,
@@ -1677,6 +1683,7 @@ function getPlatformAccounts(filter = {}) {
     webhookUsername: row.webhook_username,
     webhookPassword: row.webhook_password,
     staticToken: row.static_token,
+    webhookSecret: row.webhook_secret || row.static_token,
     webhookId: row.webhook_id,
     settings: parseJson(row.settings_json, {}),
     verificationStatus: row.verification_status || PLATFORM_VERIFICATION_STATUS.PENDING,
@@ -1919,6 +1926,7 @@ function getPackages(filter = {}) {
     customerNote: row.customer_note || "",
     items: parseJson(row.items_json, []),
     rawPayload: parseJson(row.raw_payload_json, null),
+    platformStatusLogs: parseJson(row.platform_status_logs_json, []),
     status: normalizeStatus(row.status),
     assignmentStatus: row.assignment_status || assignmentStatusForOrder(row.status),
     assignedCourierId: row.assigned_courier_id,
@@ -1963,6 +1971,7 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     customerNote: row.customer_note || "",
     items: parseJson(row.items_json, []),
     rawPayload: parseJson(row.raw_payload_json, null),
+    platformStatusLogs: parseJson(row.platform_status_logs_json, []),
     status: normalizeStatus(row.status),
     assignmentStatus: row.assignment_status || assignmentStatusForOrder(row.status),
     assignedCourierId: row.assigned_courier_id,
@@ -2709,6 +2718,8 @@ function tryAssignPackageAtomically(pkg, candidate) {
     }
 
     db.prepare("UPDATE couriers SET status = ? WHERE id = ?").run(COURIER_BUSY_STATUS, targetCourier.id);
+    const assignedPackage = getPackageById(pkg.id);
+    notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
     return { ok: true, courierId: targetCourier.id };
   });
 }
@@ -3024,6 +3035,8 @@ function adminAssignPackageToCourier(packageId, courierId) {
       packageId
     );
     db.prepare("UPDATE couriers SET status = ? WHERE id = ?").run(COURIER_BUSY_STATUS, courier.id);
+    const assignedPackage = getPackageById(packageId);
+    notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
     return { packageId, courierId: courier.id, courierName: courier.name };
   });
 }
@@ -3857,14 +3870,92 @@ function handleSimplePlatformOrder(order) {
   };
 }
 
-function notifyPlatformOrderRejected(platform, orderId, reason) {
-  return {
-    ok: true,
-    platform,
-    orderId,
-    reason: trimmed(reason) || "Restoran reddetti.",
-    mode: "placeholder",
+function getPackageById(packageId) {
+  return currentState().packages.find((item) => item.id === packageId) || null;
+}
+
+function appendPlatformStatusLog(packageId, entry) {
+  const target = db.prepare("SELECT platform_status_logs_json FROM packages WHERE id = ?").get(packageId);
+  if (!target) {
+    return [];
+  }
+
+  const logs = parseJson(target.platform_status_logs_json, []);
+  const nextLogs = logs.concat({
+    id: uid("plog"),
+    status: entry.status,
+    message: entry.message,
+    platform: entry.platform,
+    createdAt: nowIso(),
+    meta: entry.meta || {},
+  });
+  db.prepare("UPDATE packages SET platform_status_logs_json = ?, updated_at = ? WHERE id = ?").run(
+    json(nextLogs),
+    nowIso(),
+    packageId
+  );
+  return nextLogs;
+}
+
+function callPlatformStatusCallback(packageRecord, status, meta = {}) {
+  if (!packageRecord || !packageRecord.sourcePlatform) {
+    return { ok: false };
+  }
+
+  const adapter = getPlatformAdapter(normalizePlatformKey(packageRecord.sourcePlatform));
+  const orderData = {
+    orderId: packageRecord.externalOrderId || packageRecord.externalOrderNo,
+    restaurantId: packageRecord.restaurantId,
+    courierId: packageRecord.assignedCourierId || null,
+    status,
+    meta,
   };
+  const result = adapter.sendStatusUpdate(status, orderData);
+  const message = `platforma ${status} bildirildi`;
+  appendPlatformStatusLog(packageRecord.id, {
+    status,
+    message,
+    platform: packageRecord.sourcePlatform,
+    meta,
+  });
+  writeAuditLog({
+    actorRole: "integration",
+    actorId: packageRecord.restaurantId,
+    action: "platform_status_callback",
+    packageId: packageRecord.id,
+    restaurantId: packageRecord.restaurantId,
+    details: {
+      platform: packageRecord.sourcePlatform,
+      status,
+      meta,
+    },
+  });
+  return result;
+}
+
+function notifyPlatformOrderAccepted(platform, orderId, restaurantId, packageRecord = null) {
+  console.log("Platform status callback called", { platform, status: "accepted", orderId, restaurantId });
+  return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "accepted", { orderId, restaurantId });
+}
+
+function notifyPlatformOrderRejected(platform, orderId, reason, packageRecord = null) {
+  console.log("Platform status callback called", { platform, status: "rejected", orderId, reason });
+  return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "rejected", { orderId, reason });
+}
+
+function notifyPlatformOrderPreparing(platform, orderId, packageRecord = null) {
+  console.log("Platform status callback called", { platform, status: "preparing", orderId });
+  return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "preparing", { orderId });
+}
+
+function notifyPlatformOrderAssigned(platform, orderId, courierId, packageRecord = null) {
+  console.log("Platform status callback called", { platform, status: "assigned", orderId, courierId });
+  return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "assigned", { orderId, courierId });
+}
+
+function notifyPlatformOrderDelivered(platform, orderId, packageRecord = null) {
+  console.log("Platform status callback called", { platform, status: "delivered", orderId });
+  return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "delivered", { orderId });
 }
 
 function resolvePlatformAccountForWebhook(platform, req, body) {
@@ -4257,15 +4348,16 @@ async function handleApi(req, res, pathname) {
         UPDATE platform_accounts
         SET external_merchant_id = ?, api_username = ?, api_password = ?, api_key = ?, api_secret = ?,
             store_front_code = ?, chain_id = ?, vendor_id = ?, webhook_auth_type = ?, webhook_api_key = ?,
-            webhook_username = ?, webhook_password = ?, static_token = ?, settings_json = ?, verification_status = ?,
+            webhook_username = ?, webhook_password = ?, static_token = ?, access_token = ?, refresh_token = ?, token_expires_at = ?,
+            callback_url = ?, auth_type = ?, webhook_secret = ?, settings_json = ?, verification_status = ?,
             verification_note = ?, last_verification_at = ?, verified_at = ?, last_validation_mode = ?, active = ?, updated_at = ?
         WHERE id = ?
       `).run(
         draft.externalMerchantId || null,
         null,
         null,
-        null,
-        null,
+        draft.apiKey || null,
+        draft.apiSecret || null,
         null,
         null,
         null,
@@ -4273,6 +4365,12 @@ async function handleApi(req, res, pathname) {
         null,
         null,
         null,
+        draft.webhookSecret,
+        draft.accessToken || null,
+        draft.refreshToken || null,
+        draft.tokenExpiresAt || null,
+        draft.callbackUrl || null,
+        draft.authType,
         draft.webhookSecret,
         json(draft.settings),
         verification.status,
@@ -4289,9 +4387,10 @@ async function handleApi(req, res, pathname) {
         INSERT INTO platform_accounts (
           id, restaurant_id, platform, external_store_id, external_merchant_id, api_username, api_password,
           api_key, api_secret, store_front_code, chain_id, vendor_id, webhook_auth_type, webhook_api_key,
-          webhook_username, webhook_password, static_token, webhook_id, settings_json, verification_status,
+          webhook_username, webhook_password, static_token, access_token, refresh_token, token_expires_at,
+          callback_url, auth_type, webhook_secret, webhook_id, settings_json, verification_status,
           verification_note, last_verification_at, verified_at, last_validation_mode, active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         uid("pla"),
         session.restaurant_id,
@@ -4300,8 +4399,8 @@ async function handleApi(req, res, pathname) {
         draft.externalMerchantId || null,
         null,
         null,
-        null,
-        null,
+        draft.apiKey || null,
+        draft.apiSecret || null,
         null,
         null,
         null,
@@ -4309,6 +4408,12 @@ async function handleApi(req, res, pathname) {
         null,
         null,
         null,
+        draft.webhookSecret,
+        draft.accessToken || null,
+        draft.refreshToken || null,
+        draft.tokenExpiresAt || null,
+        draft.callbackUrl || null,
+        draft.authType,
         draft.webhookSecret,
         null,
         json(draft.settings),
@@ -4551,6 +4656,9 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
+      const confirmedPackage = getPackageById(packageId);
+      notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
+      notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
       rebalancePackages();
       broadcastLiveEvent({
         type: "restaurant-confirmed",
@@ -4578,7 +4686,8 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
-      notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason);
+      const rejectedPackage = getPackageById(packageId);
+      notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
       broadcastLiveEvent({
         type: "platform-order-rejected",
         restaurantId: session.restaurant_id,
@@ -4867,8 +4976,8 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const incomingSecret = trimmed(req.headers["x-platform-secret"]);
-    if (!incomingSecret || incomingSecret !== trimmed(match.restaurant.webhookSecret)) {
+    const adapter = getPlatformAdapter(normalizePlatformKey(match.account.platform));
+    if (!adapter.verifyWebhook(req, match.account) || trimmed(req.headers["x-platform-secret"]) !== trimmed(match.restaurant.webhookSecret)) {
       logWebhookAttempt({
         restaurantId: match.restaurant.id,
         sourcePlatform: match.account.platform,
@@ -5246,6 +5355,10 @@ async function handleApi(req, res, pathname) {
       paymentMethod: target.payment_method,
     });
     rebalancePackages();
+    if (nextStatus === DELIVERED_STATUS) {
+      const deliveredPackage = getPackageById(packageId);
+      notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+    }
 
     const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
@@ -5640,6 +5753,10 @@ async function handleApi(req, res, pathname) {
       paymentMethod: target.payment_method,
     });
     rebalancePackages();
+    if (nextStatus === DELIVERED_STATUS) {
+      const deliveredPackage = getPackageById(statusMatch[1]);
+      notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+    }
     writeAuditLog({
       actorRole: "admin",
       actorId: adminActorId(adminSession),

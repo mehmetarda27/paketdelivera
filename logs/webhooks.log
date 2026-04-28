@@ -143,3 +143,11 @@
 [2026-04-28T11:12:02.603Z] status=201 signature=valid restaurant=rst_j08lhgcy platform=Yemeksepeti order=YS-1777374722594
 [2026-04-28T11:12:02.610Z] status=201 signature=valid restaurant=rst_j08lhgcy platform=Yemeksepeti order=YS-1777374722594
 [2026-04-28T11:12:02.620Z] status=201 signature=valid restaurant=rst_j08lhgcy platform=Yemeksepeti order=YS-REJECT-1777374722611
+[2026-04-28T11:27:08.066Z] status=401 signature=invalid restaurant=rst_mssure0a platform=Yemeksepeti order=YS-WRONG-1777375628068
+[2026-04-28T11:27:08.075Z] status=201 signature=valid restaurant=rst_mssure0a platform=Yemeksepeti order=YS-1777375628071
+[2026-04-28T11:27:08.081Z] status=201 signature=valid restaurant=rst_mssure0a platform=Yemeksepeti order=YS-1777375628071
+[2026-04-28T11:27:08.090Z] status=201 signature=valid restaurant=rst_mssure0a platform=Yemeksepeti order=YS-REJECT-1777375628086
+[2026-04-28T11:28:43.292Z] status=401 signature=invalid restaurant=rst_8holym2o platform=Yemeksepeti order=YS-WRONG-1777375723289
+[2026-04-28T11:28:43.302Z] status=201 signature=valid restaurant=rst_8holym2o platform=Yemeksepeti order=YS-1777375723293
+[2026-04-28T11:28:43.308Z] status=201 signature=valid restaurant=rst_8holym2o platform=Yemeksepeti order=YS-1777375723293
+[2026-04-28T11:28:43.317Z] status=201 signature=valid restaurant=rst_8holym2o platform=Yemeksepeti order=YS-REJECT-1777375723309

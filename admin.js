@@ -536,7 +536,10 @@ function buildPackageCard(pkg) {
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
   node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
-  node.querySelector(".assignment-note").textContent = `${pkg.assignmentReason}${pkg.lastAssignmentError ? ` - Son Hata: ${pkg.lastAssignmentError}` : ""}`;
+  const platformLogText = Array.isArray(pkg.platformStatusLogs) && pkg.platformStatusLogs.length
+    ? ` - Platform: ${pkg.platformStatusLogs.map((item) => item.message).join(" | ")}`
+    : "";
+  node.querySelector(".assignment-note").textContent = `${pkg.assignmentReason}${pkg.lastAssignmentError ? ` - Son Hata: ${pkg.lastAssignmentError}` : ""}${platformLogText}`;
   node.querySelector(".note-text").textContent = `${pkg.zone} - ${pkg.address}${pkg.customerNote || pkg.note ? ` - ${pkg.customerNote || pkg.note}` : ""}${pkg.assignedAt ? ` - Atama ${formatDate(pkg.assignedAt)}` : ""}`;
 
   badge.textContent = statusLabel(pkg.status);

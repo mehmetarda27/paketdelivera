@@ -505,6 +505,9 @@ async function run() {
     if (!rejectedPackage || rejectedPackage.status !== "rejected" || rejectedPackage.assignedCourierId) {
       throw new Error("Reddedilen platform siparisi kuryeye atanmamasi gerekirken akisa girdi.");
     }
+    if (!rejectedPackage.platformStatusLogs?.some((item) => item.status === "rejected")) {
+      throw new Error("Platform rejected callback logu yazilmadi.");
+    }
 
     const approvedState = await request(`/api/restaurant/packages/${webhookResponse.package.id}/action`, {
       method: "POST",
@@ -517,6 +520,12 @@ async function run() {
     }
     if (!["preparing", "assigned"].includes(assignedWebhookAfterDelivery.status)) {
       throw new Error("Onaylanan platform siparisi preparing veya assigned durumuna gecmedi.");
+    }
+    if (!assignedWebhookAfterDelivery.platformStatusLogs?.some((item) => item.status === "accepted")) {
+      throw new Error("Platform accepted callback logu yazilmadi.");
+    }
+    if (!assignedWebhookAfterDelivery.platformStatusLogs?.some((item) => item.status === "preparing")) {
+      throw new Error("Platform preparing callback logu yazilmadi.");
     }
 
     const printSource = fs.readFileSync(path.join(__dirname, "restaurant.js"), "utf8");
@@ -531,6 +540,9 @@ async function run() {
     const assignedWebhookPackage = afterDeliveryBootstrap.packages.find((pkg) => pkg.id === assignedWebhookAfterDelivery.id);
     if (!assignedWebhookPackage?.assignedCourierId) {
       throw new Error("Platform siparisi bos kurye olmasina ragmen atanmadi.");
+    }
+    if (!assignedWebhookPackage.platformStatusLogs?.some((item) => item.status === "assigned")) {
+      throw new Error("Platform assigned callback logu yazilmadi.");
     }
 
     const courier4Login = await request("/api/courier/login", {
@@ -572,6 +584,22 @@ async function run() {
     if (!assignedCourierWorkspace.packages.some((pkg) => pkg.id === assignedWebhookAfterDelivery.id)) {
       throw new Error("Platform siparisi uygun kurye bosalinca kurye paneline dusmedi.");
     }
+    await request(`/api/courier/packages/${assignedWebhookAfterDelivery.id}/status`, {
+      method: "PATCH",
+      headers: platformCourierHeaders,
+      body: JSON.stringify({ status: "accepted_by_courier" }),
+    });
+    await request(`/api/courier/packages/${assignedWebhookAfterDelivery.id}/status`, {
+      method: "PATCH",
+      headers: platformCourierHeaders,
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    await request(`/api/courier/packages/${assignedWebhookAfterDelivery.id}/status`, {
+      method: "PATCH",
+      headers: platformCourierHeaders,
+      body: JSON.stringify({ status: "delivered", paymentStatus: "paid_online" }),
+    });
+    await delay(1200);
 
     const restaurantBootstrap = await request("/api/restaurant/bootstrap", {
       headers: restaurantHeaders,
@@ -590,7 +618,7 @@ async function run() {
     if (!restaurantBootstrap.packages.some((pkg) => pkg.source === "external_manual") || !restaurantBootstrap.packages.some((pkg) => pkg.source !== "external_manual")) {
       throw new Error("Restoran paneli manuel ve webhook siparislerini birlikte gosteremedi.");
     }
-    if (!restaurantBootstrap.packages.some((pkg) => pkg.id === webhookResponse.package.id && ["preparing", "assigned"].includes(pkg.status))) {
+    if (!restaurantBootstrap.packages.some((pkg) => pkg.id === webhookResponse.package.id && ["preparing", "assigned", "delivered"].includes(pkg.status))) {
       throw new Error("Restoran paneli onaylanan platform siparisini guncel gostermedi.");
     }
     if (!restaurantBootstrap.packages.some((pkg) => pkg.id === rejectedWebhookResponse.package.id && pkg.status === "rejected")) {
@@ -727,6 +755,10 @@ async function run() {
     }
     if (deliveredManualPackage.paymentStatus !== "cash_collected") {
       throw new Error("Manuel paket odeme yasam dongusu guncellenemedi.");
+    }
+    const deliveredWebhookPackage = bootstrap.packages.find((pkg) => pkg.id === assignedWebhookAfterDelivery.id);
+    if (!deliveredWebhookPackage?.platformStatusLogs?.some((item) => item.status === "delivered")) {
+      throw new Error("Platform delivered callback logu yazilmadi.");
     }
 
     console.log("Smoke test basarili: admin, restoran, kurye ve platform webhook akisi calisti.");
