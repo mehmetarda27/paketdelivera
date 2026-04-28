@@ -2533,7 +2533,7 @@ function evaluateAssignmentFailure(state, pkg) {
 
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
-  return state.couriers
+  const ranked = state.couriers
     .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS && courier.zone === pkg.zone)
     .map((courier) => ({
       courier,
@@ -2545,10 +2545,33 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     }))
     .filter(({ courier, distance: courierDistance, load }) =>
       courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM &&
-      load < 1 &&
-      !excludedCourierIds.has(courier.id)
+        load < 1 &&
+        !excludedCourierIds.has(courier.id)
     )
     .sort((left, right) => left.distance - right.distance || left.load - right.load);
+
+  console.log("Assignment courier distance check", {
+    packageId: pkg.id,
+    packageStatus: pkg.status,
+    zone: pkg.zone,
+    packageLat: pkg.latitude,
+    packageLng: pkg.longitude,
+    couriers: state.couriers
+      .filter((courier) => courier.zone === pkg.zone)
+      .map((courier) => ({
+        courierId: courier.id,
+        status: normalizeCourierStatus(courier.status, courier.available),
+        available: courier.available,
+        activeLoad: Math.max(
+          occupiedCourierLoads.get(courier.id) || 0,
+          activeAssignmentsForCourier(state.packages, courier.id, pkg.id)
+        ),
+        distanceKm: Number(distance(courier.latitude, courier.longitude, pkg.latitude, pkg.longitude).toFixed(3)),
+      })),
+    eligibleCourierIds: ranked.map((item) => item.courier.id),
+  });
+
+  return ranked;
 }
 
 function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
@@ -2714,11 +2737,21 @@ function tryAssignPackageAtomically(pkg, candidate) {
     );
 
     if (update.changes !== 1) {
+      console.log("Assignment skipped due to concurrent change", {
+        packageId: pkg.id,
+        courierId: targetCourier.id,
+      });
       return { ok: false, reason: "sistemsel hata", note: "Siparis bu arada baska bir islem tarafindan degisti." };
     }
 
     db.prepare("UPDATE couriers SET status = ? WHERE id = ?").run(COURIER_BUSY_STATUS, targetCourier.id);
     const assignedPackage = getPackageById(pkg.id);
+    console.log("Assignment success", {
+      packageId: pkg.id,
+      courierId: targetCourier.id,
+      courierStatus,
+      distanceKm: Number(candidate.distance.toFixed(3)),
+    });
     notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
     return { ok: true, courierId: targetCourier.id };
   });
@@ -4659,7 +4692,22 @@ async function handleApi(req, res, pathname) {
       const confirmedPackage = getPackageById(packageId);
       notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
       notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
+      console.log("Assignment triggered after approval", {
+        packageId,
+        previousStatus: target.status,
+        nextStatus: PREPARING_STATUS,
+        restaurantId: session.restaurant_id,
+        zone: target.zone,
+      });
       rebalancePackages();
+      const packageAfterAssignmentAttempt = getPackageById(packageId);
+      console.log("Assignment result after approval", {
+        packageId,
+        status: packageAfterAssignmentAttempt?.status,
+        assignmentStatus: packageAfterAssignmentAttempt?.assignmentStatus,
+        assignedCourierId: packageAfterAssignmentAttempt?.assignedCourierId || null,
+        lastAssignmentError: packageAfterAssignmentAttempt?.lastAssignmentError || "",
+      });
       broadcastLiveEvent({
         type: "restaurant-confirmed",
         restaurantId: session.restaurant_id,
