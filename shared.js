@@ -46,6 +46,8 @@ const COURIER_STATUS_LABELS = {
 let toastHost = null;
 let audioContextRef = null;
 const signalCooldowns = new Map();
+const RESTAURANT_ID_STORAGE_KEY = "deliveraRestaurantId";
+const RESTAURANT_API_KEY_STORAGE_KEY = "deliveraRestaurantApiKey";
 
 async function api(path, options = {}) {
   async function runRequest() {
@@ -53,6 +55,17 @@ async function api(path, options = {}) {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     };
+
+    if (String(path || "").startsWith("/api/restaurant")) {
+      const restaurantId = localStorage.getItem(RESTAURANT_ID_STORAGE_KEY) || "";
+      const apiKey = localStorage.getItem(RESTAURANT_API_KEY_STORAGE_KEY) || "";
+      if (restaurantId && !mergedHeaders["x-restaurant-id"]) {
+        mergedHeaders["x-restaurant-id"] = restaurantId;
+      }
+      if (apiKey && !mergedHeaders["x-api-key"]) {
+        mergedHeaders["x-api-key"] = apiKey;
+      }
+    }
 
     const response = await fetch(path, {
       ...options,

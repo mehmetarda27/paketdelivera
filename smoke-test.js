@@ -128,12 +128,15 @@ async function run() {
         restaurantId: createdRestaurantRecord.id,
         platform: "Yemeksepeti",
         externalStoreId: `vendor-${Date.now()}`,
-        webhookSecret: "smoke-platform-secret",
+        staticToken: "smoke-platform-secret",
       }),
     });
     const platformAccount = platformState.platformAccounts.find((item) => item.platform === "Yemeksepeti");
     if (!platformAccount) {
       throw new Error("Platform hesabi olusmadi.");
+    }
+    if (platformAccount.staticToken !== "smoke-platform-secret") {
+      throw new Error("Static Token webhook secret olarak map edilmedi.");
     }
 
     const courierState = await request("/api/admin/couriers", {

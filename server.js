@@ -712,8 +712,15 @@ function validateRestaurantDraft(body) {
 function validatePlatformAccountDraft(body) {
   const restaurantId = trimmed(body.restaurantId ?? body.restaurant_id);
   const platform = normalizePlatformInput(body.platform);
-  const externalStoreId = trimmed(body.externalStoreId ?? body.external_store_id);
-  const webhookSecret = trimmed(body.webhookSecret ?? body.webhook_secret);
+  const externalStoreId = trimmed(body.externalStoreId ?? body.external_store_id ?? body.platformRestaurantId ?? body.platform_restaurant_id);
+  const webhookSecret = trimmed(
+    body.webhookSecret ??
+    body.webhook_secret ??
+    body.staticToken ??
+    body.static_token ??
+    body.apiKey ??
+    body.apiPassword
+  );
 
   if (!restaurantId) {
     throw validationError("restaurant_id zorunludur.");
@@ -860,8 +867,8 @@ function validateAdminLoginDraft(body) {
 function validateRestaurantLoginDraft(body) {
   const username = trimmed(body.username).toLowerCase();
   const password = String(body.password || "");
-  const restaurantId = trimmed(body.restaurantId);
-  const apiKey = trimmed(body.apiKey);
+  const restaurantId = trimmed(body.restaurantId ?? body.restaurant_id ?? body.headerRestaurantId ?? body.header_restaurant_id);
+  const apiKey = trimmed(body.apiKey ?? body.api_key ?? body.headerApiKey ?? body.header_api_key);
 
   if (username && password) {
     return { mode: "portal", username, password };
@@ -4148,7 +4155,11 @@ async function handleApi(req, res, pathname) {
     }
 
     const { json: body } = await readRequestBody(req);
-    const access = validateRestaurantLoginDraft(body);
+    const access = validateRestaurantLoginDraft({
+      ...body,
+      headerRestaurantId: String(req.headers["x-restaurant-id"] || ""),
+      headerApiKey: String(req.headers["x-api-key"] || ""),
+    });
     const restaurant = access.mode === "portal"
       ? db.prepare("SELECT * FROM restaurants WHERE username = ?").get(access.username)
       : db.prepare("SELECT * FROM restaurants WHERE id = ? AND api_key = ?").get(access.restaurantId, access.apiKey);

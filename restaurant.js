@@ -1,5 +1,7 @@
 const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
+const RESTAURANT_ID_KEY = "deliveraRestaurantId";
+const RESTAURANT_API_KEY_KEY = "deliveraRestaurantApiKey";
 const RESTAURANT_WORKSPACE_REFRESH_MS = 12_000;
 
 const restaurantState = {
@@ -62,11 +64,73 @@ function restaurantAuthHeaders() {
   return authHeaders(restaurantState.token);
 }
 
+function safeSetText(element, value) {
+  if (!element) {
+    return;
+  }
+  element.textContent = value;
+}
+
+function persistRestaurantAccessInfo(payload = {}) {
+  const restaurantId = String(payload.restaurantId || payload.id || "").trim();
+  const apiKey = String(payload.apiKey || "").trim();
+
+  if (restaurantId) {
+    localStorage.setItem(RESTAURANT_ID_KEY, restaurantId);
+  }
+  if (apiKey) {
+    localStorage.setItem(RESTAURANT_API_KEY_KEY, apiKey);
+  }
+}
+
+function clearRestaurantAccessInfo() {
+  localStorage.removeItem(RESTAURANT_ID_KEY);
+  localStorage.removeItem(RESTAURANT_API_KEY_KEY);
+}
+
+function applyRestaurantAccessFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const restaurantId = String(params.get("restaurant_id") || params.get("restaurantId") || "").trim();
+  const apiKey = String(params.get("api_key") || params.get("apiKey") || "").trim();
+  if (restaurantId && apiKey) {
+    persistRestaurantAccessInfo({ restaurantId, apiKey });
+  }
+}
+
+async function tryRestaurantSessionFromStoredAccess() {
+  const restaurantId = localStorage.getItem(RESTAURANT_ID_KEY) || "";
+  const apiKey = localStorage.getItem(RESTAURANT_API_KEY_KEY) || "";
+  if (!restaurantId || !apiKey || restaurantState.token) {
+    return false;
+  }
+
+  const data = await api("/api/restaurant/session", {
+    method: "POST",
+    headers: {
+      "x-restaurant-id": restaurantId,
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({ restaurantId, apiKey }),
+  });
+  persistRestaurantAuth(data);
+  hydrateRestaurant(data.state);
+  startRestaurantWorkspacePolling();
+  startRestaurantLiveStream();
+  return true;
+}
+
 function persistRestaurantAuth(auth) {
   restaurantState.token = auth.token;
   restaurantState.refreshToken = auth.refreshToken;
   localStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
   localStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
+  const currentRestaurant = auth?.state?.restaurants?.[0];
+  if (currentRestaurant) {
+    persistRestaurantAccessInfo({
+      restaurantId: currentRestaurant.id,
+      apiKey: currentRestaurant.apiKey,
+    });
+  }
 }
 
 function clearRestaurantAuth() {
@@ -79,6 +143,7 @@ function clearRestaurantAuth() {
   restaurantState.liveStream = null;
   localStorage.removeItem(RESTAURANT_TOKEN_KEY);
   localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
+  clearRestaurantAccessInfo();
 }
 
 async function refreshRestaurantAccess() {
@@ -250,7 +315,7 @@ function simplifyPlatformAccountForm() {
   }
 
   const storeInput = form.querySelector('[name="externalStoreId"]');
-  const secretInput = form.querySelector('[name="staticToken"]');
+  const secretInput = form.querySelector('[name="staticToken"], [name="webhookSecret"]');
   const hiddenFieldNames = [
     "externalMerchantId",
     "webhookAuthType",
@@ -281,7 +346,6 @@ function simplifyPlatformAccountForm() {
   if (secretInput) {
     const secretLabel = secretInput.closest("label");
     setLabelText(secretLabel, "Webhook Secret");
-    secretInput.name = "webhookSecret";
     secretInput.type = "text";
     secretInput.placeholder = "Webhook icin gizli anahtar";
     secretInput.required = true;
@@ -414,17 +478,17 @@ function setIntegrationInfo(data, explicitIntegration = null) {
   const restaurant = getCurrentRestaurant(data);
 
   if (!restaurant) {
-    restaurantRefs.integrationRestaurant.textContent = "Henuz restoran oturumu acik degil.";
-    restaurantRefs.integrationApiKey.textContent = "API key burada gorunur";
-    restaurantRefs.integrationPortalUsername.textContent = "Portal kullanici burada gorunur";
-    restaurantRefs.integrationWebhookSecret.textContent = "Webhook secret burada gorunur";
-    restaurantRefs.integrationEndpoint.textContent = "Restoran girisi yapildiginda endpoint gorunur";
-    restaurantRefs.platformWebhookUrl.textContent = "Platform hesabini kaydedince webhook URL gorunur";
-    restaurantRefs.platformSetupName.textContent = "Henuz kayitli platform yok.";
-    restaurantRefs.platformSetupAuth.textContent = "Auth bilgisi burada gorunur";
-    restaurantRefs.platformSetupStore.textContent = "Store/vendor bilgisi burada gorunur";
-    restaurantRefs.platformSetupHint.textContent = "Trendyol ve Yemeksepeti icin webhook ile, digerleri icin ayni adapter mantigi ile calisir.";
-    restaurantRefs.samplePayload.textContent = "Restoran girisi yapildiginda ornek payload gorunecek.";
+    safeSetText(restaurantRefs.integrationRestaurant, "Henuz restoran oturumu acik degil.");
+    safeSetText(restaurantRefs.integrationApiKey, "API key burada gorunur");
+    safeSetText(restaurantRefs.integrationPortalUsername, "Portal kullanici burada gorunur");
+    safeSetText(restaurantRefs.integrationWebhookSecret, "Webhook secret burada gorunur");
+    safeSetText(restaurantRefs.integrationEndpoint, "Restoran girisi yapildiginda endpoint gorunur");
+    safeSetText(restaurantRefs.platformWebhookUrl, "Platform hesabini kaydedince webhook URL gorunur");
+    safeSetText(restaurantRefs.platformSetupName, "Henuz kayitli platform yok.");
+    safeSetText(restaurantRefs.platformSetupAuth, "Auth bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupStore, "Store/vendor bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupHint, "Trendyol ve Yemeksepeti icin webhook ile, digerleri icin ayni adapter mantigi ile calisir.");
+    safeSetText(restaurantRefs.samplePayload, "Restoran girisi yapildiginda ornek payload gorunecek.");
     return;
   }
 
@@ -451,34 +515,37 @@ function setIntegrationInfo(data, explicitIntegration = null) {
     },
   };
 
-  restaurantRefs.integrationRestaurant.textContent = `${integration.restaurantName} - ${restaurant.zone}`;
-  restaurantRefs.integrationApiKey.textContent = integration.apiKey;
-  restaurantRefs.integrationPortalUsername.textContent = integration.portalUsername || restaurant.username || "-";
-  restaurantRefs.integrationWebhookSecret.textContent = integration.webhookSecret;
-  restaurantRefs.integrationEndpoint.textContent = integration.endpoint;
-  restaurantRefs.samplePayload.textContent = JSON.stringify(integration.samplePayload, null, 2);
-  restaurantRefs.packageRestaurantId.value = restaurant.id;
+  safeSetText(restaurantRefs.integrationRestaurant, `${integration.restaurantName} - ${restaurant.zone}`);
+  safeSetText(restaurantRefs.integrationApiKey, integration.apiKey);
+  safeSetText(restaurantRefs.integrationPortalUsername, integration.portalUsername || restaurant.username || "-");
+  safeSetText(restaurantRefs.integrationWebhookSecret, integration.webhookSecret);
+  safeSetText(restaurantRefs.integrationEndpoint, integration.endpoint);
+  safeSetText(restaurantRefs.samplePayload, JSON.stringify(integration.samplePayload, null, 2));
+  if (restaurantRefs.packageRestaurantId) {
+    restaurantRefs.packageRestaurantId.value = restaurant.id;
+  }
 }
 
 function setPlatformSetup(data) {
   const account = getCurrentPlatformAccount(data);
 
   if (!account) {
-    restaurantRefs.platformWebhookUrl.textContent = "Platform hesabini kaydedince webhook URL gorunur";
-    restaurantRefs.platformSetupName.textContent = "Henuz kayitli platform yok.";
-    restaurantRefs.platformSetupAuth.textContent = "Secret bilgisi burada gorunur";
-    restaurantRefs.platformSetupStore.textContent = "Platform restoran bilgisi burada gorunur";
-    restaurantRefs.platformSetupHint.textContent = "Webhook kaydi sonrasi otomatik siparis akisina hazir olur.";
+    safeSetText(restaurantRefs.platformWebhookUrl, "Platform hesabini kaydedince webhook URL gorunur");
+    safeSetText(restaurantRefs.platformSetupName, "Henuz kayitli platform yok.");
+    safeSetText(restaurantRefs.platformSetupAuth, "Secret bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupStore, "Platform restoran bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupHint, "Webhook kaydi sonrasi otomatik siparis akisina hazir olur.");
     return;
   }
 
-  restaurantRefs.platformWebhookUrl.textContent = `${window.location.origin}/api/platform/order`;
-  restaurantRefs.platformSetupName.textContent = `${account.platform} - ${account.active ? "aktif" : "pasif"}`;
-  restaurantRefs.platformSetupStore.textContent = account.externalStoreId || "-";
-  restaurantRefs.platformSetupAuth.textContent = account.staticToken || "-";
-
-  restaurantRefs.platformSetupHint.textContent =
-    `${account.verificationStatus === "verified" ? "Basit webhook akisi hazir." : "Webhook kurulumu beklemede."} ${account.verificationNote || ""}`;
+  safeSetText(restaurantRefs.platformWebhookUrl, `${window.location.origin}/api/platform/order`);
+  safeSetText(restaurantRefs.platformSetupName, `${account.platform} - ${account.active ? "aktif" : "pasif"}`);
+  safeSetText(restaurantRefs.platformSetupStore, account.externalStoreId || "-");
+  safeSetText(restaurantRefs.platformSetupAuth, account.staticToken || "-");
+  safeSetText(
+    restaurantRefs.platformSetupHint,
+    `${account.verificationStatus === "verified" ? "Basit webhook akisi hazir." : "Webhook kurulumu beklemede."} ${account.verificationNote || ""}`
+  );
 }
 
 function renderRestaurantList(restaurants) {
@@ -843,6 +910,12 @@ function renderRestaurantNotifications(notifications) {
 function hydrateRestaurant(data, explicitIntegration = null) {
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
+  if (data.restaurants?.[0]) {
+    persistRestaurantAccessInfo({
+      restaurantId: data.restaurants[0].id,
+      apiKey: data.restaurants[0].apiKey,
+    });
+  }
   initializeRestaurantWorkspaceCards();
   const activePackages = activeOrderPackages(data.packages || []);
   const awaitingPackages = activePackages.filter((pkg) => pkg.status === "pending" || pkg.status === "awaiting_assignment");
@@ -903,6 +976,16 @@ restaurantRefs.historyMore?.addEventListener("click", () => {
 
 async function loadRestaurantWorkspace(options = {}) {
   if (!restaurantState.token) {
+    try {
+      const restored = await tryRestaurantSessionFromStoredAccess();
+      if (restored) {
+        return;
+      }
+    } catch (error) {
+      if (!options.silent) {
+        restaurantRefs.summary.textContent = "Restoran oturumu bulunamadi, lutfen tekrar giris yapin";
+      }
+    }
     stopRestaurantWorkspacePolling();
     hydrateRestaurant({
       zones: [],
@@ -937,7 +1020,9 @@ async function loadRestaurantWorkspace(options = {}) {
   } catch (error) {
     if (!options.silent) {
       clearRestaurantAuth();
-      restaurantRefs.summary.textContent = error.message;
+      restaurantRefs.summary.textContent = error.message.includes("oturumu")
+        ? "Restoran oturumu bulunamadi, lutfen tekrar giris yapin"
+        : error.message;
     }
   }
 }
@@ -945,46 +1030,69 @@ async function loadRestaurantWorkspace(options = {}) {
 restaurantRefs.accessForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(restaurantRefs.accessForm);
-  const data = await api("/api/restaurant/session", {
-    method: "POST",
-    body: JSON.stringify({
-      username: formData.get("username"),
-      password: formData.get("password"),
-    }),
-  });
+  try {
+    const data = await api("/api/restaurant/session", {
+      method: "POST",
+      body: JSON.stringify({
+        username: formData.get("username"),
+        password: formData.get("password"),
+      }),
+    });
 
-  persistRestaurantAuth(data);
-  restaurantRefs.accessForm.reset();
-  hydrateRestaurant(data.state);
-  startRestaurantLiveStream();
+    persistRestaurantAuth(data);
+    restaurantRefs.accessForm.reset();
+    hydrateRestaurant(data.state);
+    startRestaurantLiveStream();
+  } catch (error) {
+    restaurantRefs.summary.textContent = error.message.includes("Restoran kimligi")
+      ? "Restoran oturumu bulunamadi, lutfen tekrar giris yapin"
+      : error.message;
+    showToast(restaurantRefs.summary.textContent, "error");
+  }
 });
 
 restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   if (!restaurantState.token || !restaurantState.data?.restaurants?.[0]) {
-    restaurantRefs.summary.textContent = "Platform baglamadan once restoran girisi yapmalisin.";
+    restaurantRefs.summary.textContent = "Restoran oturumu bulunamadı, lütfen restoran paneline geçerli restoran bağlantısıyla girin.";
+    showToast("Restoran oturumu bulunamadı, lütfen restoran paneline geçerli restoran bağlantısıyla girin.", "error");
     return;
   }
 
   const restaurant = restaurantState.data.restaurants[0];
   const formData = new FormData(restaurantRefs.platformAccountForm);
-  const data = await api("/api/restaurant/platform-accounts", {
-    method: "POST",
-    headers: restaurantAuthHeaders(),
-    retryWithRefresh: refreshRestaurantAccess,
-    body: JSON.stringify({
-      restaurantId: restaurant.id,
-      platform: formData.get("platform"),
-      externalStoreId: formData.get("externalStoreId"),
-      webhookSecret: formData.get("webhookSecret"),
-    }),
-  });
+  const staticToken = String(formData.get("staticToken") || formData.get("webhookSecret") || "").trim();
+  const platformRequestBody = {
+    restaurantId: restaurant.id,
+    platform: formData.get("platform"),
+    platformRestaurantId: formData.get("externalStoreId"),
+    externalStoreId: formData.get("externalStoreId"),
+    webhookSecret: staticToken || String(formData.get("apiKey") || formData.get("apiPassword") || "").trim(),
+    authType: "static_token",
+    staticToken,
+  };
+  console.log("[Delivera][restaurant platform save] request body", platformRequestBody);
+  console.log("[Delivera][restaurant platform save] webhookSecret exists?", Boolean(platformRequestBody.webhookSecret));
 
-  restaurantRefs.platformAccountForm.reset();
-  restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
-  hydrateRestaurant(data);
-  showToast(`${restaurant.name} icin platform entegrasyonu kaydedildi.`);
+  try {
+    const data = await api("/api/restaurant/platform-accounts", {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+      body: JSON.stringify(platformRequestBody),
+    });
+
+    restaurantRefs.platformAccountForm.reset();
+    restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
+    simplifyPlatformAccountForm();
+    hydrateRestaurant(data);
+    restaurantRefs.summary.textContent = "Platform hesabı kaydedildi";
+    showToast("Platform hesabi kaydedildi");
+  } catch (error) {
+    restaurantRefs.summary.textContent = error.message || "Platform hesabi kaydedilemedi.";
+    showToast(error.message || "Platform hesabi kaydedilemedi.", "error");
+  }
 });
 
 restaurantRefs.copyWebhookButton?.addEventListener("click", async () => {
@@ -1088,6 +1196,7 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
 
 restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
 restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
+applyRestaurantAccessFromQuery();
 simplifyPlatformAccountForm();
 restaurantRefs.samplePaymentMethod.addEventListener("change", () => {
   if (restaurantState.data) {
