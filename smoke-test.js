@@ -72,6 +72,7 @@ async function run() {
       DELIVERA_ADMIN_USERNAME: adminUsername,
       DELIVERA_ADMIN_PASSWORD: adminPassword,
       DELIVERA_ASSIGNMENT_RETRY_MS: "1000",
+      DELIVERA_COURIER_OFFER_TIMEOUT_MS: "2500",
       DELIVERA_DB_FILE: tempDbFile,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -464,6 +465,74 @@ async function run() {
     });
     await delay(1200);
 
+    let retryPackageInitial = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await delay(500);
+      bootstrap = await request("/api/admin/bootstrap", {
+        headers: adminHeaders,
+      });
+      retryPackageInitial = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id) || null;
+      if (retryPackageInitial?.status === "assigned" && retryPackageInitial.assignedCourierId) {
+        break;
+      }
+    }
+    if (!retryPackageInitial || retryPackageInitial.status !== "assigned") {
+      throw new Error("Retry test paketi ilk atamada assigned olmadi.");
+    }
+    const firstRetryCourierId = retryPackageInitial.assignedCourierId;
+    let retryPackageAfterTimeout = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await delay(500);
+      bootstrap = await request("/api/admin/bootstrap", {
+        headers: adminHeaders,
+      });
+      retryPackageAfterTimeout = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id) || null;
+      if (retryPackageAfterTimeout && retryPackageAfterTimeout.assignedCourierId && retryPackageAfterTimeout.assignedCourierId !== firstRetryCourierId) {
+        break;
+      }
+    }
+    if (!retryPackageAfterTimeout || retryPackageAfterTimeout.status !== "assigned") {
+      throw new Error("Retry zamani gelince paket yeniden assigned kalmadi.");
+    }
+    if (retryPackageAfterTimeout.assignedCourierId === firstRetryCourierId) {
+      throw new Error("Retry sonrasi ayni kurye tekrar secildi.");
+    }
+    const retryCourierHeaders = retryPackageAfterTimeout.assignedCourierId === createdCourier.id
+      ? courierHeaders
+      : retryPackageAfterTimeout.assignedCourierId === createdCourier2.id
+        ? courier2Headers
+        : null;
+    if (!retryCourierHeaders) {
+      throw new Error("Retry sonrasi paket beklenen online kuryelerden birine atanmadi.");
+    }
+    await request(`/api/courier/packages/${retryPackageAfterTimeout.id}/status`, {
+      method: "PATCH",
+      headers: retryCourierHeaders,
+      body: JSON.stringify({ status: "accepted_by_courier" }),
+    });
+    await delay(1800);
+    bootstrap = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    const retryAcceptedPackage = bootstrap.packages.find((pkg) => pkg.id === retryPackageAfterTimeout.id);
+    if (!retryAcceptedPackage || retryAcceptedPackage.status !== "accepted_by_courier") {
+      throw new Error("Retry sonrasi kurye kabul akisi calismadi.");
+    }
+    if (retryAcceptedPackage.assignedCourierId !== retryPackageAfterTimeout.assignedCourierId) {
+      throw new Error("Kurye kabul ettikten sonra retry durmadi ve kurye degisti.");
+    }
+    await request(`/api/courier/packages/${retryPackageAfterTimeout.id}/status`, {
+      method: "PATCH",
+      headers: retryCourierHeaders,
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    await request(`/api/courier/packages/${retryPackageAfterTimeout.id}/status`, {
+      method: "PATCH",
+      headers: retryCourierHeaders,
+      body: JSON.stringify({ status: "delivered", paymentStatus: "paid_online" }),
+    });
+    await delay(1200);
+
     const courierState4 = await request("/api/admin/couriers", {
       method: "POST",
       headers: adminHeaders,
@@ -660,8 +729,24 @@ async function run() {
     const availableCouriers = bootstrap.couriers.filter((courier) => courier.status === "online");
     const busyCouriers = bootstrap.couriers.filter((courier) => courier.status === "busy");
     const offlineCouriers = bootstrap.couriers.filter((courier) => courier.status === "offline");
-    if ((availableCouriers.length + busyCouriers.length + offlineCouriers.length) < 3 || busyCouriers.length < 1 || offlineCouriers.length < 1) {
+    if ((availableCouriers.length + busyCouriers.length + offlineCouriers.length) < 3 || availableCouriers.length < 1 || offlineCouriers.length < 1) {
       throw new Error("Admin operasyon ozeti kurye durumlarini beklenen sekilde yansitmadi.");
+    }
+
+    const overrideAddress = `Mersin override teslim noktasi ${Date.now()} no 50`;
+    const overridePackageState = await request("/api/restaurant/packages", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        restaurantId: createdRestaurantRecord.id,
+        deliveryAddress: overrideAddress,
+        packageType: "Override Test",
+        orderAmount: 140,
+      }),
+    });
+    const overridePackage = overridePackageState.packages.find((pkg) => pkg.deliveryAddress === overrideAddress);
+    if (!overridePackage) {
+      throw new Error("Override test paketi olusturulamadi.");
     }
 
     await request(`/api/admin/couriers/${createdCourier3.id}/availability`, {
@@ -669,7 +754,7 @@ async function run() {
       headers: adminHeaders,
       body: JSON.stringify({ available: false }),
     });
-    await request(`/api/admin/packages/${thirdManualPackage.id}/override`, {
+    await request(`/api/admin/packages/${overridePackage.id}/override`, {
       method: "POST",
       headers: adminHeaders,
       body: JSON.stringify({ courierId: createdCourier3.id }),
@@ -686,7 +771,7 @@ async function run() {
       body: JSON.stringify({ available: true }),
     });
 
-    await request(`/api/admin/packages/${thirdManualPackage.id}/override`, {
+    await request(`/api/admin/packages/${overridePackage.id}/override`, {
       method: "POST",
       headers: adminHeaders,
       body: JSON.stringify({ courierId: createdCourier3.id }),
@@ -694,7 +779,7 @@ async function run() {
     bootstrap = await request("/api/admin/bootstrap", {
       headers: adminHeaders,
     });
-    const overriddenPackage = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id);
+    const overriddenPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
     if (!overriddenPackage || overriddenPackage.assignedCourierId !== createdCourier3.id) {
       throw new Error("Admin manuel override beklenen sekilde calismadi.");
     }
@@ -706,7 +791,7 @@ async function run() {
       }),
     });
     const courier3Headers = { Authorization: `Bearer ${courier3Login.token}` };
-    await request(`/api/courier/packages/${thirdManualPackage.id}/status`, {
+    await request(`/api/courier/packages/${overridePackage.id}/status`, {
       method: "PATCH",
       headers: courier3Headers,
       body: JSON.stringify({ status: "failed" }),
@@ -717,7 +802,7 @@ async function run() {
         throw error;
       }
     });
-    await request(`/api/courier/packages/${thirdManualPackage.id}/status`, {
+    await request(`/api/courier/packages/${overridePackage.id}/status`, {
       method: "PATCH",
       headers: courier3Headers,
       body: JSON.stringify({ status: "failed", failureReason: "teknik_sorun" }),
@@ -725,11 +810,11 @@ async function run() {
     bootstrap = await request("/api/admin/bootstrap", {
       headers: adminHeaders,
     });
-    const failedPackage = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id);
+    const failedPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
     if (!failedPackage || failedPackage.status !== "failed" || failedPackage.failureReason !== "teknik_sorun") {
       throw new Error("Kurye reddetme/sorun bildirme akisi beklenen sekilde calismadi.");
     }
-    await request(`/api/admin/packages/${thirdManualPackage.id}/status`, {
+    await request(`/api/admin/packages/${overridePackage.id}/status`, {
       method: "PATCH",
       headers: adminHeaders,
       body: JSON.stringify({ status: "awaiting_assignment" }),
@@ -755,7 +840,7 @@ async function run() {
       body: JSON.stringify({ available: false }),
     });
 
-    await request(`/api/admin/packages/${thirdManualPackage.id}/unassign`, {
+    await request(`/api/admin/packages/${overridePackage.id}/unassign`, {
       method: "POST",
       headers: adminHeaders,
       body: "{}",
@@ -764,7 +849,7 @@ async function run() {
     bootstrap = await request("/api/admin/bootstrap", {
       headers: adminHeaders,
     });
-    const retriedPackage = bootstrap.packages.find((pkg) => pkg.id === thirdManualPackage.id);
+    const retriedPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
     if (!retriedPackage || retriedPackage.status !== "assigned") {
       throw new Error("Unassign sonrasi yeniden atama mantigi calismadi.");
     }

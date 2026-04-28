@@ -49,7 +49,7 @@ const PLATFORM_VERIFICATION_STATUS = {
   FAILED: "failed",
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
-const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 25_000);
+const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
 const PREPARING_STATUS = "preparing";
@@ -136,6 +136,7 @@ const rateBuckets = new Map();
 const liveStreams = new Map();
 let assignmentSweepRunning = false;
 let assignmentSweepQueued = false;
+const assignmentRetryTimers = new Map();
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -212,6 +213,7 @@ db.exec(`
     failure_reason TEXT,
     last_assignment_attempt_at TEXT,
     last_assignment_error TEXT,
+    assignment_tried_courier_ids_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
@@ -472,6 +474,9 @@ if (!packageColumns.includes("customer_address")) {
 if (!packageColumns.includes("platform_status_logs_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN platform_status_logs_json TEXT");
 }
+if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
+  db.exec("ALTER TABLE packages ADD COLUMN assignment_tried_courier_ids_json TEXT");
+}
 
 const shiftPlanColumns = db.prepare("PRAGMA table_info(courier_shift_plans)").all().map((row) => row.name);
 if (!shiftPlanColumns.includes("offer_expires_at")) {
@@ -607,6 +612,13 @@ function trimmed(value) {
 function normalizePlatformName(value) {
   const incoming = trimmed(value).toLowerCase();
   return SUPPORTED_PLATFORMS.find((platform) => platform.toLowerCase() === incoming) || "";
+}
+
+function normalizeIdList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.map((item) => trimmed(item)).filter(Boolean))];
 }
 
 function normalizePlatformInput(value) {
@@ -1969,6 +1981,7 @@ function getPackages(filter = {}) {
     failureReason: row.failure_reason || "",
     lastAssignmentAttemptAt: row.last_assignment_attempt_at,
     lastAssignmentError: row.last_assignment_error || "",
+    assignmentTriedCourierIds: normalizeIdList(parseJson(row.assignment_tried_courier_ids_json, [])),
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
   }));
@@ -2020,6 +2033,7 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     failureReason: row.failure_reason || "",
     lastAssignmentAttemptAt: row.last_assignment_attempt_at,
     lastAssignmentError: row.last_assignment_error || "",
+    assignmentTriedCourierIds: normalizeIdList(parseJson(row.assignment_tried_courier_ids_json, [])),
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
     restaurantName: restaurantMap.get(row.restaurant_id) || "Bilinmeyen Restoran",
@@ -2501,6 +2515,50 @@ function isAssignableOrderStatus(status) {
   return [PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS].includes(normalizeStatus(status));
 }
 
+function clearAssignmentRetry(packageId) {
+  const activeTimer = assignmentRetryTimers.get(packageId);
+  if (activeTimer) {
+    clearTimeout(activeTimer);
+    assignmentRetryTimers.delete(packageId);
+  }
+}
+
+function setPackageTriedCouriers(packageId, courierIds = []) {
+  db.prepare("UPDATE packages SET assignment_tried_courier_ids_json = ?, updated_at = ? WHERE id = ?").run(
+    json(normalizeIdList(courierIds)),
+    nowIso(),
+    packageId
+  );
+}
+
+function appendTriedCourier(packageId, courierId) {
+  const target = db.prepare("SELECT assignment_tried_courier_ids_json FROM packages WHERE id = ?").get(packageId);
+  const nextIds = normalizeIdList([
+    ...normalizeIdList(parseJson(target?.assignment_tried_courier_ids_json, [])),
+    courierId,
+  ]);
+  setPackageTriedCouriers(packageId, nextIds);
+  return nextIds;
+}
+
+function syncAssignmentRetryForPackage(pkg) {
+  if (!pkg?.id) {
+    return;
+  }
+  if (normalizeStatus(pkg.status) !== ASSIGNED_STATUS || !pkg.assignedCourierId) {
+    clearAssignmentRetry(pkg.id);
+    return;
+  }
+
+  clearAssignmentRetry(pkg.id);
+  const timerId = setTimeout(() => {
+    handleAssignmentRetry(pkg.id).catch((error) => {
+      console.error("Assignment retry failed", error);
+    });
+  }, COURIER_OFFER_TIMEOUT_MS);
+  assignmentRetryTimers.set(pkg.id, timerId);
+}
+
 function buildAssignmentFailure(pkg, reason, note) {
   const currentStatus = normalizeStatus(pkg.status);
   const waitingStatus = currentStatus === PREPARING_STATUS ? PREPARING_STATUS : AWAITING_ASSIGNMENT_STATUS;
@@ -2590,8 +2648,8 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     zone: pkg.zone,
     packageLat: pkg.latitude,
     packageLng: pkg.longitude,
+    skippedCourierIds: [...excludedCourierIds],
     couriers: state.couriers
-      .filter((courier) => courier.zone === pkg.zone)
       .map((courier) => ({
         courierId: courier.id,
         status: normalizeCourierStatus(courier.status, courier.available),
@@ -2659,6 +2717,7 @@ function persistPackageAssignment(pkg) {
     nowIso(),
     pkg.id
   );
+  syncAssignmentRetryForPackage(getPackageById(pkg.id));
 }
 
 function updatePackageAssignmentFailure(packageId, reason, note) {
@@ -2676,10 +2735,15 @@ function updatePackageAssignmentFailure(packageId, reason, note) {
     nowIso(),
     packageId
   );
+  clearAssignmentRetry(packageId);
 }
 
 function tryAssignPackageAtomically(pkg, candidate) {
   return withImmediateTransaction(() => {
+    console.log("Assignment started", {
+      packageId: pkg.id,
+      courierId: candidate.courier.id,
+    });
     const freshPackage = db.prepare("SELECT * FROM packages WHERE id = ?").get(pkg.id);
     if (!freshPackage) {
       return { ok: false, reason: "veri eksik", note: "Siparis kaydi bulunamadi." };
@@ -2774,7 +2838,9 @@ function tryAssignPackageAtomically(pkg, candidate) {
     }
 
     db.prepare("UPDATE couriers SET status = ? WHERE id = ?").run(COURIER_BUSY_STATUS, targetCourier.id);
+    appendTriedCourier(pkg.id, targetCourier.id);
     const assignedPackage = getPackageById(pkg.id);
+    syncAssignmentRetryForPackage(assignedPackage);
     console.log("Assignment success", {
       packageId: pkg.id,
       courierId: targetCourier.id,
@@ -2784,6 +2850,71 @@ function tryAssignPackageAtomically(pkg, candidate) {
     notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
     return { ok: true, courierId: targetCourier.id };
   });
+}
+
+async function handleAssignmentRetry(packageId) {
+  clearAssignmentRetry(packageId);
+  const target = getPackageById(packageId);
+  if (!target || normalizeStatus(target.status) !== ASSIGNED_STATUS || !target.assignedCourierId) {
+    return;
+  }
+
+  console.log("Retry triggered", {
+    packageId,
+    assignedCourierId: target.assignedCourierId,
+    triedCourierIds: target.assignmentTriedCourierIds || [],
+  });
+
+  const state = currentState();
+  syncCourierOperationalStatuses(state);
+  const occupiedCourierLoads = new Map();
+  state.packages
+    .filter((pkg) => isCapacityBlockingPackage(pkg))
+    .forEach((pkg) => reserveCourier(occupiedCourierLoads, pkg.assignedCourierId, 1));
+
+  const excludedCourierIds = normalizeIdList([
+    ...(target.assignmentTriedCourierIds || []),
+    target.assignedCourierId,
+  ]);
+  excludedCourierIds.forEach((courierId) => {
+    console.log("Courier skipped (already tried)", { packageId, courierId });
+  });
+
+  const ranked = rankEligibleCouriers(state, target, occupiedCourierLoads, { excludedCourierIds });
+  if (ranked.length === 0) {
+    console.log("Retry assignment: no suitable courier found", { packageId });
+    updatePackageAssignmentFailure(packageId, "mesafe disi", "Retry assignment: no suitable courier found");
+    setPackageTriedCouriers(packageId, []);
+    broadcastLiveEvent({
+      type: "assignment-waiting",
+      restaurantId: target.restaurantId,
+      message: `${target.trackingNo || target.id} paketi yeniden atama sonrasi uygun kurye bulamadi.`,
+    });
+    return;
+  }
+
+  for (const candidate of ranked) {
+    const result = tryAssignPackageAtomically(target, candidate);
+    if (result.ok) {
+      console.log("Retry assignment: new courier assigned", {
+        packageId,
+        courierId: candidate.courier.id,
+      });
+      const assignedPackage = getPackageById(packageId);
+      syncAssignmentRetryForPackage(assignedPackage);
+      broadcastLiveEvent({
+        type: "package-reassign",
+        restaurantId: target.restaurantId,
+        courierId: candidate.courier.id,
+        message: `${target.trackingNo || target.id} paketi yeni kuryeye yeniden atandi.`,
+      });
+      return;
+    }
+  }
+
+  console.log("Retry assignment: no suitable courier found", { packageId });
+  updatePackageAssignmentFailure(packageId, "mesafe disi", "Retry assignment: no suitable courier found");
+  setPackageTriedCouriers(packageId, []);
 }
 
 function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
@@ -2797,7 +2928,9 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
     state,
     pkg,
     occupiedCourierLoads,
-    offerExpired && pkg.assignedCourierId ? { excludedCourierIds: [pkg.assignedCourierId] } : {}
+    offerExpired
+      ? { excludedCourierIds: normalizeIdList([...(pkg.assignmentTriedCourierIds || []), pkg.assignedCourierId]) }
+      : {}
   );
   if (ranked.length === 0) {
     const failure = evaluateAssignmentFailure(state, pkg);
@@ -2821,6 +2954,7 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
           distanceKm: Number(candidate.distance.toFixed(2)),
           lastAssignmentAttemptAt: nowIso(),
           lastAssignmentError: "",
+          assignmentTriedCourierIds: normalizeIdList([...(state.packages[packageIndex].assignmentTriedCourierIds || []), candidate.courier.id]),
         };
       }
       const courierIndex = state.couriers.findIndex((item) => item.id === candidate.courier.id);
@@ -3093,7 +3227,9 @@ function adminAssignPackageToCourier(packageId, courierId) {
       packageId
     );
     db.prepare("UPDATE couriers SET status = ? WHERE id = ?").run(COURIER_BUSY_STATUS, courier.id);
+    appendTriedCourier(packageId, courier.id);
     const assignedPackage = getPackageById(packageId);
+    syncAssignmentRetryForPackage(assignedPackage);
     notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
     return { packageId, courierId: courier.id, courierName: courier.name };
   });
@@ -3125,6 +3261,8 @@ function adminUnassignPackage(packageId) {
       nowIso(),
       packageId
     );
+    clearAssignmentRetry(packageId);
+    setPackageTriedCouriers(packageId, []);
     return { packageId };
   });
 }
@@ -3482,8 +3620,8 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, external_order_no, external_order_id,
       recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
-      distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, assignment_tried_courier_ids_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pkg.id,
     pkg.trackingNo,
@@ -3525,6 +3663,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
     pkg.failureReason || null,
     pkg.lastAssignmentAttemptAt || null,
     pkg.lastAssignmentError || null,
+    json(normalizeIdList(pkg.assignmentTriedCourierIds || [])),
     pkg.createdAt,
     pkg.updatedAt || pkg.createdAt
   );
@@ -3580,6 +3719,7 @@ function updatePackageLifecycle(packageId, updates, current = {}) {
     nowIso(),
     packageId
   );
+  syncAssignmentRetryForPackage(getPackageById(packageId));
 }
 
 function extractPlatformIdentifiers(body) {
@@ -6040,6 +6180,10 @@ setInterval(() => {
     // Retry sweep should not crash the server loop.
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
+
+currentState().packages
+  .filter((pkg) => normalizeStatus(pkg.status) === ASSIGNED_STATUS)
+  .forEach((pkg) => syncAssignmentRetryForPackage(pkg));
 
 server.listen(PORT, () => {
   console.log(`Delivera Express hazir: http://localhost:${PORT}`);
