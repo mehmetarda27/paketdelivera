@@ -49,13 +49,16 @@ const PLATFORM_VERIFICATION_STATUS = {
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 25_000);
+const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
+const PREPARING_STATUS = "preparing";
 const AWAITING_ASSIGNMENT_STATUS = "awaiting_assignment";
 const ASSIGNED_STATUS = "assigned";
 const ACCEPTED_BY_COURIER_STATUS = "accepted_by_courier";
 const ON_ROUTE_STATUS = "on_route";
 const DELIVERED_STATUS = "delivered";
 const FAILED_STATUS = "failed";
+const REJECTED_STATUS = "rejected";
 const CANCELED_STATUS = "cancelled";
 const UNPAID_PAYMENT_STATUS = "unpaid";
 const PAID_ONLINE_PAYMENT_STATUS = "paid_online";
@@ -75,13 +78,16 @@ const COURIER_FAILURE_REASONS = new Set([
 const MAX_ASSIGNMENT_DISTANCE_KM = 5;
 const LIVE_STREAM_HEARTBEAT_MS = 20_000;
 const STATUS_TRANSITIONS = {
+  [PENDING_APPROVAL_STATUS]: [PREPARING_STATUS, REJECTED_STATUS, CANCELED_STATUS],
   [PENDING_STATUS]: [AWAITING_ASSIGNMENT_STATUS, CANCELED_STATUS],
+  [PREPARING_STATUS]: [ASSIGNED_STATUS, FAILED_STATUS, CANCELED_STATUS],
   [AWAITING_ASSIGNMENT_STATUS]: [ASSIGNED_STATUS, FAILED_STATUS, CANCELED_STATUS],
   [ASSIGNED_STATUS]: [AWAITING_ASSIGNMENT_STATUS, ACCEPTED_BY_COURIER_STATUS, FAILED_STATUS, CANCELED_STATUS],
   [ACCEPTED_BY_COURIER_STATUS]: [ON_ROUTE_STATUS, FAILED_STATUS, CANCELED_STATUS],
   [ON_ROUTE_STATUS]: [DELIVERED_STATUS, FAILED_STATUS, CANCELED_STATUS],
   [DELIVERED_STATUS]: [],
   [FAILED_STATUS]: [AWAITING_ASSIGNMENT_STATUS, CANCELED_STATUS],
+  [REJECTED_STATUS]: [],
   [CANCELED_STATUS]: [],
 };
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
@@ -92,8 +98,10 @@ const LEGACY_STATUS_MAP = {
   "Teslim Edildi": DELIVERED_STATUS,
   "Teslim Edilemedi": FAILED_STATUS,
   "Iptal Edildi": CANCELED_STATUS,
+  pending_approval: PENDING_APPROVAL_STATUS,
   waiting: AWAITING_ASSIGNMENT_STATUS,
   pending: PENDING_STATUS,
+  preparing: PREPARING_STATUS,
   awaiting_assignment: AWAITING_ASSIGNMENT_STATUS,
   assigned: ASSIGNED_STATUS,
   accepted_by_courier: ACCEPTED_BY_COURIER_STATUS,
@@ -101,6 +109,7 @@ const LEGACY_STATUS_MAP = {
   on_route: ON_ROUTE_STATUS,
   delivered: DELIVERED_STATUS,
   failed: FAILED_STATUS,
+  rejected: REJECTED_STATUS,
   cancelled: CANCELED_STATUS,
 };
 
@@ -438,6 +447,15 @@ if (!packageColumns.includes("last_assignment_error")) {
 if (!packageColumns.includes("updated_at")) {
   db.exec("ALTER TABLE packages ADD COLUMN updated_at TEXT");
 }
+if (!packageColumns.includes("customer_note")) {
+  db.exec("ALTER TABLE packages ADD COLUMN customer_note TEXT");
+}
+if (!packageColumns.includes("items_json")) {
+  db.exec("ALTER TABLE packages ADD COLUMN items_json TEXT");
+}
+if (!packageColumns.includes("raw_payload_json")) {
+  db.exec("ALTER TABLE packages ADD COLUMN raw_payload_json TEXT");
+}
 
 const shiftPlanColumns = db.prepare("PRAGMA table_info(courier_shift_plans)").all().map((row) => row.name);
 if (!shiftPlanColumns.includes("offer_expires_at")) {
@@ -549,6 +567,11 @@ function trimmed(value) {
 function normalizePlatformName(value) {
   const incoming = trimmed(value).toLowerCase();
   return SUPPORTED_PLATFORMS.find((platform) => platform.toLowerCase() === incoming) || "";
+}
+
+function normalizePlatformInput(value) {
+  const incoming = trimmed(value);
+  return normalizePlatformName(incoming) || normalizePlatformFromSlug(incoming.replace(/_/g, "-"));
 }
 
 function platformSlug(platform) {
@@ -688,10 +711,9 @@ function validateRestaurantDraft(body) {
 
 function validatePlatformAccountDraft(body) {
   const restaurantId = trimmed(body.restaurantId ?? body.restaurant_id);
-  const platform = normalizePlatformName(body.platform);
+  const platform = normalizePlatformInput(body.platform);
   const externalStoreId = trimmed(body.externalStoreId ?? body.external_store_id);
-  const externalMerchantId = trimmed(body.externalMerchantId ?? body.external_merchant_id);
-  const webhookAuthType = trimmed(body.webhookAuthType || PLATFORM_WEBHOOK_AUTH_TYPES.API_KEY).toLowerCase();
+  const webhookSecret = trimmed(body.webhookSecret ?? body.webhook_secret);
 
   if (!restaurantId) {
     throw validationError("restaurant_id zorunludur.");
@@ -705,17 +727,15 @@ function validatePlatformAccountDraft(body) {
     throw validationError("Platform store/vendor kimligi zorunludur.");
   }
 
-  if (!Object.values(PLATFORM_WEBHOOK_AUTH_TYPES).includes(webhookAuthType)) {
-    throw validationError("Gecersiz webhook auth tipi secildi.");
+  if (!webhookSecret) {
+    throw validationError("Webhook secret zorunludur.");
   }
-
-  const settings = typeof body.settings === "object" && body.settings ? body.settings : {};
 
   return {
     restaurantId,
     platform,
     externalStoreId,
-    externalMerchantId,
+    externalMerchantId: trimmed(body.externalMerchantId ?? body.external_merchant_id),
     apiUsername: trimmed(body.apiUsername),
     apiPassword: String(body.apiPassword || ""),
     apiKey: trimmed(body.apiKey),
@@ -723,14 +743,107 @@ function validatePlatformAccountDraft(body) {
     storeFrontCode: trimmed(body.storeFrontCode),
     chainId: trimmed(body.chainId),
     vendorId: trimmed(body.vendorId),
-    webhookAuthType,
-    webhookApiKey: trimmed(body.webhookApiKey),
-    webhookUsername: trimmed(body.webhookUsername),
-    webhookPassword: String(body.webhookPassword || ""),
-    staticToken: trimmed(body.staticToken),
+    webhookAuthType: PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
+    webhookApiKey: "",
+    webhookUsername: "",
+    webhookPassword: "",
+    staticToken: webhookSecret,
+    webhookSecret,
     active: body.active !== false,
-    settings,
+    settings: {},
   };
+}
+
+function normalizeIncomingOrderItems(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items
+    .map((item, index) => {
+      const name = trimmed(item?.name ?? item?.productName ?? item?.title ?? item?.product);
+      const quantity = Number(item?.quantity ?? item?.qty ?? item?.count ?? 1);
+      const price = normalizeMoney(item?.price ?? item?.unitPrice ?? item?.totalPrice ?? 0);
+      return {
+        id: trimmed(item?.id) || `item-${index + 1}`,
+        name: name || `Urun ${index + 1}`,
+        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        price,
+      };
+    })
+    .filter((item) => item.name);
+}
+
+function normalizeOrder(platform, rawBody) {
+  const normalizedPlatform = normalizePlatformInput(platform);
+  const body = rawBody || {};
+  const order = body.order || body.data || body.payload || body;
+  const directItems = body.items || order.items || body.products || order.products;
+  const normalized = {
+    platform: normalizedPlatform,
+    platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id),
+    orderId: trimmed(body.orderId ?? body.order_id),
+    customerName: trimmed(body.customerName ?? body.customer_name),
+    phone: trimmed(body.phone),
+    address: trimmed(body.address),
+    items: normalizeIncomingOrderItems(directItems),
+    totalPrice: normalizeMoney(body.totalPrice ?? body.total_price),
+    paymentMethod: trimmed(body.paymentMethod ?? body.payment_method) || "Online Odeme",
+    customerNote: trimmed(body.customerNote ?? body.customer_note),
+    rawPayload: body,
+  };
+
+  if (normalizedPlatform === "Yemeksepeti") {
+    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.vendorId ?? body.vendor_id ?? order.vendorId ?? order.vendor_id);
+    normalized.orderId ||= trimmed(body.orderId ?? body.external_order_id ?? body.externalOrderId ?? order.orderId ?? order.externalOrderId);
+    normalized.customerName ||= trimmed(body.customerName ?? order.customerName ?? order.customer?.name);
+    normalized.phone ||= trimmed(body.phone ?? order.phone ?? order.customer?.phone);
+    normalized.address ||= trimmed(body.address ?? order.address ?? order.deliveryAddress);
+    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.total_amount ?? order.payment?.amount);
+    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
+    normalized.customerNote ||= trimmed(body.customerNote ?? order.customerNote ?? order.note);
+  } else if (normalizedPlatform === "Trendyol Go") {
+    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.storeFrontCode ?? body.store_front_code ?? body.sellerId ?? order.storeFrontCode);
+    normalized.orderId ||= trimmed(body.orderId ?? body.orderNumber ?? body.order_number ?? order.orderNumber);
+    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.fullName ?? order.customer?.name);
+    normalized.phone ||= trimmed(body.phone ?? order.customer?.phoneNumber ?? order.customer?.phone);
+    normalized.address ||= trimmed(body.address ?? order.deliveryAddress?.address1 ?? order.address);
+    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.payment?.totalPrice);
+    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.payment?.method ?? order.paymentMethod) || normalized.paymentMethod;
+    normalized.customerNote ||= trimmed(body.customerNote ?? order.customerNote ?? order.note);
+  } else if (normalizedPlatform === "GetirYemek") {
+    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.restaurantId ?? body.vendorId ?? order.restaurantId);
+    normalized.orderId ||= trimmed(body.orderId ?? body.id ?? order.id ?? order.orderId);
+    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.name);
+    normalized.phone ||= trimmed(body.phone ?? order.customer?.phone);
+    normalized.address ||= trimmed(body.address ?? order.address);
+    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.totalAmount);
+    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
+    normalized.customerNote ||= trimmed(body.customerNote ?? order.note ?? order.customerNote);
+  } else if (normalizedPlatform === "Migros Yemek") {
+    normalized.platformRestaurantId ||= trimmed(body.platformRestaurantId ?? body.merchantId ?? body.vendorId ?? order.merchantId);
+    normalized.orderId ||= trimmed(body.orderId ?? body.id ?? order.id ?? order.orderNo);
+    normalized.customerName ||= trimmed(body.customerName ?? order.customer?.name);
+    normalized.phone ||= trimmed(body.phone ?? order.customer?.phone);
+    normalized.address ||= trimmed(body.address ?? order.address ?? order.deliveryAddress);
+    normalized.totalPrice ||= normalizeMoney(body.totalPrice ?? order.totalPrice ?? order.amount);
+    normalized.paymentMethod = trimmed(body.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || normalized.paymentMethod;
+    normalized.customerNote ||= trimmed(body.customerNote ?? order.note ?? order.customerNote);
+  }
+
+  if (
+    !normalized.platform ||
+    !normalized.platformRestaurantId ||
+    !normalized.orderId ||
+    !normalized.customerName ||
+    !normalized.phone ||
+    !normalized.address ||
+    normalized.totalPrice <= 0
+  ) {
+    throw validationError("Platform siparis verisi eksik.");
+  }
+
+  return normalized;
 }
 
 function validateAdminLoginDraft(body) {
@@ -809,6 +922,7 @@ function validateCourierLoginDraft(body) {
 function validateIntegrationDraft(body, restaurant) {
   const paymentMethod = trimmed(body.paymentMethod);
   const createdAt = nowIso();
+  const items = Array.isArray(body.items) ? body.items : [];
   const pkg = {
     id: uid("pkg"),
     trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -828,6 +942,9 @@ function validateIntegrationDraft(body, restaurant) {
     latitude: Number(body.latitude ?? body.x ?? restaurant.latitude),
     longitude: Number(body.longitude ?? body.y ?? restaurant.longitude),
     note: trimmed(body.note),
+    customerNote: trimmed(body.customerNote ?? body.customer_note),
+    items,
+    rawPayload: body.rawPayload ?? body.raw_payload ?? null,
     status: trimmed(body.status) ? normalizeStatus(body.status) : PENDING_STATUS,
     assignmentStatus: "pending",
     assignedCourierId: null,
@@ -894,7 +1011,7 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
 }
 
 function suggestedRestaurantPrepMinutes(zone, state = currentState()) {
-  const zonePackages = state.packages.filter((pkg) => pkg.zone === zone && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(pkg.status)));
+  const zonePackages = state.packages.filter((pkg) => pkg.zone === zone && [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(pkg.status)));
   const zoneCouriers = state.couriers.filter((courier) => courier.zone === zone);
   const busyCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_BUSY_STATUS).length;
   const onlineCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS).length;
@@ -942,11 +1059,20 @@ function isActivePackageStatus(status) {
 
 function assignmentStatusForOrder(status) {
   const normalized = normalizeStatus(status);
+  if (normalized === PENDING_APPROVAL_STATUS) {
+    return "pending_approval";
+  }
+  if (normalized === PREPARING_STATUS) {
+    return "waiting_courier";
+  }
   if (normalized === ASSIGNED_STATUS || normalized === ACCEPTED_BY_COURIER_STATUS || normalized === ON_ROUTE_STATUS || normalized === DELIVERED_STATUS) {
     return "assigned";
   }
   if (normalized === FAILED_STATUS) {
     return "failed";
+  }
+  if (normalized === REJECTED_STATUS) {
+    return "rejected";
   }
   if (normalized === CANCELED_STATUS) {
     return "cancelled";
@@ -1783,6 +1909,9 @@ function getPackages(filter = {}) {
     latitude: row.x,
     longitude: row.y,
     note: row.note,
+    customerNote: row.customer_note || "",
+    items: parseJson(row.items_json, []),
+    rawPayload: parseJson(row.raw_payload_json, null),
     status: normalizeStatus(row.status),
     assignmentStatus: row.assignment_status || assignmentStatusForOrder(row.status),
     assignedCourierId: row.assigned_courier_id,
@@ -1824,6 +1953,9 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     latitude: row.x,
     longitude: row.y,
     note: row.note,
+    customerNote: row.customer_note || "",
+    items: parseJson(row.items_json, []),
+    rawPayload: parseJson(row.raw_payload_json, null),
     status: normalizeStatus(row.status),
     assignmentStatus: row.assignment_status || assignmentStatusForOrder(row.status),
     assignedCourierId: row.assigned_courier_id,
@@ -2017,7 +2149,7 @@ function buildRestaurantPerformance(packages) {
 function buildZoneAlerts(zones, packages) {
   return zones.map((zone) => {
     const waiting = packages
-      .filter((pkg) => pkg.zone === zone.name && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(pkg.status))
+      .filter((pkg) => pkg.zone === zone.name && [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(pkg.status))
       .sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
     const oldestWaitingMinutes = waiting[0]
       ? Math.max(0, Math.round((Date.now() - new Date(waiting[0].createdAt).getTime()) / 60000))
@@ -2316,18 +2448,21 @@ function withImmediateTransaction(work) {
 }
 
 function isAssignableOrderStatus(status) {
-  return [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS].includes(normalizeStatus(status));
+  return [PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS].includes(normalizeStatus(status));
 }
 
 function buildAssignmentFailure(pkg, reason, note) {
+  const currentStatus = normalizeStatus(pkg.status);
+  const waitingStatus = currentStatus === PREPARING_STATUS ? PREPARING_STATUS : AWAITING_ASSIGNMENT_STATUS;
+  const waitingAssignmentStatus = currentStatus === PREPARING_STATUS ? "waiting_courier" : "pending";
   return {
     ...pkg,
     assignedCourierId: null,
     assignedCourierName: null,
     assignedAt: null,
     distanceKm: null,
-    status: AWAITING_ASSIGNMENT_STATUS,
-    assignmentStatus: "pending",
+    status: waitingStatus,
+    assignmentStatus: waitingAssignmentStatus,
     lastAssignmentAttemptAt: nowIso(),
     lastAssignmentError: reason,
     assignmentReason: note,
@@ -2460,8 +2595,8 @@ function updatePackageAssignmentFailure(packageId, reason, note) {
         distance_km = NULL, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = ?, updated_at = ?
     WHERE id = ?
   `).run(
-    AWAITING_ASSIGNMENT_STATUS,
-    "pending",
+    PREPARING_STATUS,
+    "waiting_courier",
     note,
     nowIso(),
     reason,
@@ -2535,7 +2670,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
           distance_km = ?, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
       WHERE id = ?
         AND (
-          status IN (?, ?, ?, ?)
+          status IN (?, ?, ?, ?, ?)
           OR (
             status = ?
             AND assigned_at IS NOT NULL
@@ -2553,6 +2688,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
       assignmentAttemptAt,
       assignmentAttemptAt,
       pkg.id,
+      PREPARING_STATUS,
       PENDING_STATUS,
       AWAITING_ASSIGNMENT_STATUS,
       ASSIGNED_STATUS,
@@ -2833,7 +2969,7 @@ function adminAssignPackageToCourier(packageId, courierId) {
     }
 
     const targetStatus = normalizeStatus(target.status);
-    if ([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
+    if ([PENDING_APPROVAL_STATUS, REJECTED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
       throw httpError(400, "Bu durumdaki paket manuel override ile atanamaz.");
     }
 
@@ -2945,7 +3081,7 @@ function rebalancePackages() {
   const candidatePackages = state.packages
     .filter((pkg) => {
       const status = normalizeStatus(pkg.status);
-      return [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(status) || isCourierOfferExpired(pkg);
+      return [PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(status) || isCourierOfferExpired(pkg);
     })
     .sort((left, right) => waitingPackagePriority(left) - waitingPackagePriority(right));
 
@@ -2974,7 +3110,7 @@ function stats(state) {
     totalPlatformAccounts: state.platformAccounts.length,
     activeCouriers: state.couriers.filter((item) => item.status === COURIER_ONLINE_STATUS || item.status === COURIER_BUSY_STATUS).length,
     totalPackages: state.packages.length,
-    waitingPackages: state.packages.filter((item) => [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
+    waitingPackages: state.packages.filter((item) => [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
     assignedPackages: state.packages.filter((item) => item.assignedCourierId).length,
     inTransitPackages: state.packages.filter((item) => [ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(item.status)).length,
     deliveredPackages: state.packages.filter((item) => item.status === DELIVERED_STATUS).length,
@@ -3000,7 +3136,7 @@ function decorateState(filter = {}) {
     courierCount: couriers.filter((item) => item.zone === zone).length,
     activeCourierCount: couriers.filter((item) => item.zone === zone && (item.status === COURIER_ONLINE_STATUS || item.status === COURIER_BUSY_STATUS)).length,
     packageCount: packages.filter((item) => item.zone === zone).length,
-    waitingCount: packages.filter((item) => item.zone === zone && [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
+    waitingCount: packages.filter((item) => item.zone === zone && [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
   }));
   const sanitizedPlatformAccounts = state.platformAccounts.map((account) => sanitizePlatformAccount(account, Boolean(filter.includePlatformSecrets || filter.includeRestaurantSecrets)));
 
@@ -3054,22 +3190,17 @@ function buildIntegrationInfo(req, restaurant) {
     portalUsername: restaurant.username,
     apiKey: restaurant.apiKey,
     webhookSecret: restaurant.webhookSecret,
-    endpoint: `${requestBaseUrl(req)}/api/integrations/orders`,
-    platformWebhookBase: `${requestBaseUrl(req)}/api/platforms`,
-    signatureHeader: "x-delivera-signature",
+    endpoint: `${requestBaseUrl(req)}/api/platform/order`,
+    platformWebhookBase: `${requestBaseUrl(req)}/api/platform/order`,
+    signatureHeader: "x-platform-secret",
     samplePayload: {
-      restaurantId: restaurant.id,
-      sourcePlatform: restaurant.platforms[0] || "Trendyol Go",
-      externalOrderNo: "ORDER-10001",
-      recipient: "Ayse Demir",
+      platform: platformSlug(restaurant.platforms[0] || "Trendyol Go").replace(/-/g, "_"),
+      platformRestaurantId: "TEST-STORE-1",
+      orderId: "TEST-ORDER-1",
+      customerName: "Ayse Demir",
       phone: "5551234567",
       address: "Mersin teslimat adresi",
-      zone: restaurant.zone,
-      eta: "12:45",
-      paymentMethod: "Online Odeme",
-      latitude: restaurant.latitude,
-      longitude: restaurant.longitude,
-      note: "Kapidan ara",
+      totalPrice: 250,
     },
   };
 }
@@ -3271,10 +3402,10 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
   db.prepare(`
     INSERT INTO packages (
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, external_order_no, external_order_id,
-      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, note, status, assignment_status,
+      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pkg.id,
     pkg.trackingNo,
@@ -3296,6 +3427,9 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
     pkg.latitude,
     pkg.longitude,
     pkg.note,
+    pkg.customerNote || null,
+    json(Array.isArray(pkg.items) ? pkg.items : []),
+    json(pkg.rawPayload || null),
     pkg.status,
     pkg.assignmentStatus || assignmentStatusForOrder(pkg.status),
     null,
@@ -3417,11 +3551,11 @@ function mapExternalStatusToInternal(status) {
   const incoming = trimmed(status).toUpperCase();
 
   if (!incoming) {
-    return PENDING_STATUS;
+    return PENDING_APPROVAL_STATUS;
   }
 
   if (["CREATED", "RECEIVED", "NEW", "PREPARING"].includes(incoming)) {
-    return PENDING_STATUS;
+    return PENDING_APPROVAL_STATUS;
   }
 
   if (["ASSIGNED", "COURIER_ASSIGNED"].includes(incoming)) {
@@ -3444,11 +3578,15 @@ function mapExternalStatusToInternal(status) {
     return FAILED_STATUS;
   }
 
+  if (["REJECTED"].includes(incoming)) {
+    return REJECTED_STATUS;
+  }
+
   if (["CANCELLED", "CANCELED"].includes(incoming)) {
     return CANCELED_STATUS;
   }
 
-  return PENDING_STATUS;
+  return PENDING_APPROVAL_STATUS;
 }
 
 function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
@@ -3562,6 +3700,9 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
       shipment.customerNote,
       shipment.customer_note
     ),
+    customerNote: pickFirstValue(shipment.customerNote, shipment.customer_note, shipment.note, shipment.comment),
+    items: normalizeIncomingOrderItems(shipment.items || shipment.products || shipment.lines),
+    rawPayload: body,
     status: mapExternalStatusToInternal(shipment.status),
   };
 }
@@ -3572,7 +3713,9 @@ function upsertPlatformPackage(platform, restaurant, payload) {
   if (!existing) {
     const pkg = validateIntegrationDraft(payload, restaurant);
     createPackageRecord(pkg, "Platform Siparisi");
-    rebalancePackages();
+    if (normalizeStatus(pkg.status) !== PENDING_APPROVAL_STATUS) {
+      rebalancePackages();
+    }
     writeAuditLog({
       actorRole: "integration",
       actorId: restaurant.id,
@@ -3610,7 +3753,9 @@ function upsertPlatformPackage(platform, restaurant, payload) {
       lastAssignmentError: existing.last_assignment_error,
       paymentMethod: existing.payment_method,
     });
-    rebalancePackages();
+    if (incomingStatus !== PENDING_APPROVAL_STATUS && incomingStatus !== REJECTED_STATUS) {
+      rebalancePackages();
+    }
     writeAuditLog({
       actorRole: "integration",
       actorId: restaurant.id,
@@ -3627,6 +3772,92 @@ function upsertPlatformPackage(platform, restaurant, payload) {
   }
 
   return decorateState({ restaurantId: restaurant.id }).packages.find((item) => item.id === existing.id);
+}
+
+function findPlatformRestaurant(platform, platformRestaurantId) {
+  const normalizedPlatform = normalizePlatformInput(platform);
+  const normalizedStoreId = trimmed(platformRestaurantId);
+  if (!normalizedPlatform || !normalizedStoreId) {
+    return null;
+  }
+
+  const account = getPlatformAccounts().find((item) =>
+    item.active &&
+    item.platform === normalizedPlatform &&
+    item.externalStoreId === normalizedStoreId
+  );
+
+  if (!account) {
+    return null;
+  }
+
+  const restaurant = getRestaurants({ restaurantId: account.restaurantId })[0] || null;
+  if (!restaurant) {
+    return null;
+  }
+
+  return { account, restaurant };
+}
+
+function createSimplePlatformPayload(order, restaurant) {
+  return {
+    source: "platform_webhook",
+    sourcePlatform: order.platform,
+    externalOrderNo: order.orderId,
+    externalOrderId: order.orderId,
+    recipient: order.customerName,
+    phone: order.phone,
+    address: order.address,
+    zone: restaurant.zone,
+    eta: `${suggestedRestaurantPrepMinutes(restaurant.zone)} dk`,
+    paymentMethod: order.paymentMethod || "Online Odeme",
+    orderAmount: order.totalPrice,
+    paymentStatus: normalizePaymentStatus("", order.paymentMethod || "Online Odeme"),
+    latitude: restaurant.latitude,
+    longitude: restaurant.longitude,
+    note: order.customerNote || "Platform siparisi",
+    customerNote: order.customerNote || "",
+    items: Array.isArray(order.items) ? order.items : [],
+    rawPayload: order.rawPayload || order,
+    status: PENDING_APPROVAL_STATUS,
+    assignmentStatus: "pending_approval",
+    assignmentReason: "Platform siparisi restoran onayi bekliyor.",
+  };
+}
+
+function handleSimplePlatformOrder(order) {
+  const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
+  if (!match) {
+    return { ok: false, error: "Restaurant not found", statusCode: 404 };
+  }
+
+  const payload = createSimplePlatformPayload({
+    ...order,
+    platform: match.account.platform,
+  }, match.restaurant);
+  const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
+  broadcastLiveEvent({
+    type: "platform-order-pending",
+    restaurantId: match.restaurant.id,
+    message: "Yeni platform siparisi geldi.",
+  });
+
+  return {
+    ok: true,
+    restaurant: match.restaurant,
+    account: match.account,
+    package: created,
+  };
+}
+
+function notifyPlatformOrderRejected(platform, orderId, reason) {
+  return {
+    ok: true,
+    platform,
+    orderId,
+    reason: trimmed(reason) || "Restoran reddetti.",
+    mode: "placeholder",
+  };
 }
 
 function resolvePlatformAccountForWebhook(platform, req, body) {
@@ -3998,27 +4229,13 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const webhookAuthType = draft.webhookAuthType;
-    const webhookApiKey = webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.API_KEY
-      ? (draft.webhookApiKey || createIntegrationSecret("api"))
-      : "";
-    const webhookUsername = webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.BASIC_AUTH
-      ? (draft.webhookUsername || `${platformSlug(draft.platform)}_${draft.restaurantId.slice(-6)}`)
-      : "";
-    const webhookPassword = webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.BASIC_AUTH
-      ? (draft.webhookPassword || createIntegrationSecret("pwd"))
-      : "";
-    const staticToken = webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN
-      ? (draft.staticToken || createIntegrationSecret("token"))
-      : "";
     const now = new Date().toISOString();
-    const verification = await verifyPlatformMerchantCredentials({
-      ...draft,
-      webhookApiKey,
-      webhookUsername,
-      webhookPassword,
-      staticToken,
-    });
+    const verification = {
+      status: PLATFORM_VERIFICATION_STATUS.VERIFIED,
+      note: "Basit webhook akisi hazir.",
+      mode: "basic_webhook_ready",
+    };
+    db.prepare("UPDATE restaurants SET webhook_secret = ? WHERE id = ?").run(draft.webhookSecret, session.restaurant_id);
     const existing = db.prepare(`
       SELECT * FROM platform_accounts
       WHERE restaurant_id = ? AND platform = ? AND external_store_id = ?
@@ -4034,18 +4251,18 @@ async function handleApi(req, res, pathname) {
         WHERE id = ?
       `).run(
         draft.externalMerchantId || null,
-        draft.apiUsername || null,
-        draft.apiPassword || null,
-        draft.apiKey || null,
-        draft.apiSecret || null,
-        draft.storeFrontCode || null,
-        draft.chainId || null,
-        draft.vendorId || null,
-        webhookAuthType,
-        webhookApiKey || null,
-        webhookUsername || null,
-        webhookPassword || null,
-        staticToken || null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
+        null,
+        null,
+        null,
+        draft.webhookSecret,
         json(draft.settings),
         verification.status,
         verification.note,
@@ -4070,18 +4287,18 @@ async function handleApi(req, res, pathname) {
         draft.platform,
         draft.externalStoreId,
         draft.externalMerchantId || null,
-        draft.apiUsername || null,
-        draft.apiPassword || null,
-        draft.apiKey || null,
-        draft.apiSecret || null,
-        draft.storeFrontCode || null,
-        draft.chainId || null,
-        draft.vendorId || null,
-        webhookAuthType,
-        webhookApiKey || null,
-        webhookUsername || null,
-        webhookPassword || null,
-        staticToken || null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
+        null,
+        null,
+        null,
+        draft.webhookSecret,
         null,
         json(draft.settings),
         verification.status,
@@ -4141,29 +4358,34 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const verification = await verifyPlatformMerchantCredentials(account);
-    const now = nowIso();
-    db.prepare(`
-      UPDATE platform_accounts
-      SET verification_status = ?, verification_note = ?, last_verification_at = ?, verified_at = ?, last_validation_mode = ?, updated_at = ?
-      WHERE id = ?
-    `).run(
-      verification.status,
-      verification.note,
-      now,
-      verification.status === PLATFORM_VERIFICATION_STATUS.VERIFIED ? now : null,
-      verification.mode,
-      now,
-      accountId
-    );
+    const result = handleSimplePlatformOrder({
+      platform: account.platform,
+      platformRestaurantId: account.externalStoreId,
+      orderId: `TEST-${Date.now()}`,
+      customerName: "Test Musteri",
+      phone: "05555555555",
+      address: "Mersin Test Adresi",
+      totalPrice: 250,
+      paymentMethod: "Online Odeme",
+      customerNote: "Restoran panel test siparisi",
+      items: [{ id: "test-1", name: "Test Burger", quantity: 1, price: 250 }],
+    });
+    if (!result.ok) {
+      sendJson(res, result.statusCode || 404, { ok: false, error: result.error });
+      return;
+    }
 
     broadcastLiveEvent({
       type: "platform-test",
       restaurantId: session.restaurant_id,
-      message: `${account.platform} baglanti testi tamamlandi.`,
+      message: `${account.platform} test siparisi olusturuldu.`,
     });
     sendJson(res, 200, {
-      verification,
+      verification: {
+        status: "verified",
+        note: "Test platform siparisi olusturuldu.",
+      },
+      package: result.package,
       state: decorateState({
         restaurantId: session.restaurant_id,
         includeRestaurantSecrets: true,
@@ -4308,14 +4530,17 @@ async function handleApi(req, res, pathname) {
     if (action === "confirm") {
       db.prepare(`
         UPDATE packages
-        SET assignment_reason = ?, eta = ?, updated_at = ?
+        SET status = ?, assignment_status = ?, assignment_reason = ?, eta = ?, updated_at = ?
         WHERE id = ?
       `).run(
+        PREPARING_STATUS,
+        "waiting_courier",
         "Restoran siparisi onayladi.",
         `${suggestedRestaurantPrepMinutes(target.zone)} dk`,
         nowIso(),
         packageId
       );
+      rebalancePackages();
       broadcastLiveEvent({
         type: "restaurant-confirmed",
         restaurantId: session.restaurant_id,
@@ -4329,24 +4554,24 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if (action === "ready") {
+    if (action === "reject") {
       db.prepare(`
         UPDATE packages
-        SET status = ?, assignment_status = ?, assignment_reason = ?, eta = ?, updated_at = ?
+        SET status = ?, assignment_status = ?, assignment_reason = ?, last_assignment_error = ?, updated_at = ?
         WHERE id = ?
       `).run(
-        AWAITING_ASSIGNMENT_STATUS,
-        "pending",
-        "Restoran kuryeye hazir verdi.",
-        `${suggestedRestaurantPrepMinutes(target.zone)} dk`,
+        REJECTED_STATUS,
+        "rejected",
+        "Restoran platform siparisini reddetti.",
+        trimmed(body.reason) || "Restoran reddetti.",
         nowIso(),
         packageId
       );
-      rebalancePackages();
+      notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason);
       broadcastLiveEvent({
-        type: "restaurant-ready",
+        type: "platform-order-rejected",
         restaurantId: session.restaurant_id,
-        message: "Siparis kuryeye hazir olarak havuza alindi.",
+        message: "Platform siparisi restoran tarafinda reddedildi.",
       });
       sendJson(res, 200, decorateState({
         restaurantId: session.restaurant_id,
@@ -4602,6 +4827,61 @@ async function handleApi(req, res, pathname) {
     sendJson(res, 201, {
       message: "Siparis alindi ve otomatik atama calisti.",
       package: created,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/platform/order") {
+    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { ok: false, error: "Rate limited" });
+      return;
+    }
+
+    const { raw, json: body } = await readRequestBody(req);
+    const order = normalizeOrder(body.platform, body);
+    const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
+
+    if (!match) {
+      logWebhookAttempt({
+        restaurantId: null,
+        sourcePlatform: order.platform,
+        externalOrderNo: order.orderId,
+        signatureValid: false,
+        responseStatus: 404,
+        requestBody: raw,
+      });
+      sendJson(res, 404, { ok: false, error: "Restaurant not found" });
+      return;
+    }
+
+    const incomingSecret = trimmed(req.headers["x-platform-secret"]);
+    if (!incomingSecret || incomingSecret !== trimmed(match.restaurant.webhookSecret)) {
+      logWebhookAttempt({
+        restaurantId: match.restaurant.id,
+        sourcePlatform: match.account.platform,
+        externalOrderNo: order.orderId,
+        signatureValid: false,
+        responseStatus: 401,
+        requestBody: raw,
+      });
+      sendJson(res, 401, { ok: false, error: "Invalid platform secret" });
+      return;
+    }
+
+    const result = handleSimplePlatformOrder(order);
+    logWebhookAttempt({
+      restaurantId: match.restaurant.id,
+      sourcePlatform: match.account.platform,
+      externalOrderNo: order.orderId,
+      signatureValid: true,
+      responseStatus: result.package?.createdAt === result.package?.updatedAt ? 201 : 200,
+      requestBody: raw,
+    });
+    sendJson(res, result.package?.createdAt === result.package?.updatedAt ? 201 : 200, {
+      ok: true,
+      package: result.package,
     });
     return;
   }
@@ -5058,6 +5338,64 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const adminTestPlatformOrderMatch = pathname.match(/^\/api\/admin\/restaurants\/([^/]+)\/test-platform-order$/);
+  if (req.method === "POST" && adminTestPlatformOrderMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+
+    const restaurantId = adminTestPlatformOrderMatch[1];
+    const restaurant = getRestaurants({ restaurantId })[0];
+    if (!restaurant) {
+      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      return;
+    }
+
+    const account = getPlatformAccounts({ restaurantId }).find((item) => item.active);
+    if (!account) {
+      sendJson(res, 400, { error: "Bu restoran icin aktif platform hesabi yok." });
+      return;
+    }
+
+    const result = handleSimplePlatformOrder({
+      platform: account.platform,
+      platformRestaurantId: account.externalStoreId,
+      orderId: `ADMIN-TEST-${Date.now()}`,
+      customerName: "Admin Test Musteri",
+      phone: "05555555555",
+      address: `${restaurant.zone} admin test siparis adresi`,
+      totalPrice: 250,
+      paymentMethod: "Online Odeme",
+      customerNote: "Admin test platform siparisi",
+      items: [{ id: "admin-test-1", name: "Test Menu", quantity: 1, price: 250 }],
+    });
+    if (!result.ok) {
+      sendJson(res, result.statusCode || 404, { ok: false, error: result.error });
+      return;
+    }
+
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "admin_test_platform_order_sent",
+      restaurantId,
+      packageId: result.package?.id || null,
+      details: {
+        platform: account.platform,
+        externalStoreId: account.externalStoreId,
+      },
+    });
+    sendJson(res, 200, {
+      ok: true,
+      package: result.package,
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/announcements") {
     const adminSession = getAdminSession(req);
     if (!adminSession) {
@@ -5337,7 +5675,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if ([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(normalizeStatus(target.status))) {
+    if ([PENDING_APPROVAL_STATUS, REJECTED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(normalizeStatus(target.status))) {
       sendJson(res, 400, { error: "Bu durumdaki paket yeniden havuza alinamaz." });
       return;
     }
@@ -5450,7 +5788,7 @@ const server = http.createServer(async (req, res) => {
         assignmentRetryMs: ASSIGNMENT_RETRY_INTERVAL_MS,
         operations: {
           totalPackages: state.packages.length,
-          waitingPackages: state.packages.filter((item) => [PENDING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
+          waitingPackages: state.packages.filter((item) => [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
           activeCouriers: state.couriers.filter((item) => item.status === COURIER_ONLINE_STATUS || item.status === COURIER_BUSY_STATUS).length,
         },
         timestamp: new Date().toISOString(),

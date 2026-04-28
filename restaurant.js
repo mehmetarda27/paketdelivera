@@ -196,7 +196,7 @@ function startRestaurantLiveStream() {
     onMessage(event) {
       if (event?.message) {
         showToast(event.message, notificationTone(event.type));
-        if (event.type === "package-created" || event.type === "platform-order" || event.type === "integration-order") {
+        if (event.type === "package-created" || event.type === "platform-order" || event.type === "platform-order-pending" || event.type === "integration-order") {
           playSignal("assignment");
         } else if (event.type === "assignment-waiting") {
           playSignal("critical");
@@ -227,6 +227,140 @@ function renderPlatformChecks() {
       <span>${platform}</span>
     </label>
   `).join("");
+}
+
+function setLabelText(label, text) {
+  if (!label) {
+    return;
+  }
+
+  const textNode = [...label.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+  if (textNode) {
+    textNode.textContent = `\n              ${text}\n              `;
+    return;
+  }
+
+  label.prepend(document.createTextNode(`${text} `));
+}
+
+function simplifyPlatformAccountForm() {
+  const form = restaurantRefs.platformAccountForm;
+  if (!form) {
+    return;
+  }
+
+  const storeInput = form.querySelector('[name="externalStoreId"]');
+  const secretInput = form.querySelector('[name="staticToken"]');
+  const hiddenFieldNames = [
+    "externalMerchantId",
+    "webhookAuthType",
+    "apiUsername",
+    "apiPassword",
+    "apiKey",
+    "apiSecret",
+    "storeFrontCode",
+    "chainId",
+    "vendorId",
+  ];
+
+  hiddenFieldNames.forEach((name) => {
+    const field = form.querySelector(`[name="${name}"]`);
+    const label = field?.closest("label");
+    if (!field || !label) {
+      return;
+    }
+    field.required = false;
+    label.classList.add("hidden");
+  });
+
+  if (storeInput) {
+    setLabelText(storeInput.closest("label"), "Platform Restaurant ID / Store ID / Vendor ID");
+    storeInput.placeholder = "Ornek: TEST-STORE-1";
+  }
+
+  if (secretInput) {
+    const secretLabel = secretInput.closest("label");
+    setLabelText(secretLabel, "Webhook Secret");
+    secretInput.name = "webhookSecret";
+    secretInput.type = "text";
+    secretInput.placeholder = "Webhook icin gizli anahtar";
+    secretInput.required = true;
+    if (storeInput?.closest("label") && secretLabel) {
+      storeInput.closest("label").insertAdjacentElement("afterend", secretLabel);
+    }
+  }
+
+  const authTitle = restaurantRefs.platformSetupAuth?.previousElementSibling;
+  if (authTitle) {
+    authTitle.textContent = "Webhook Secret";
+  }
+  const storeTitle = restaurantRefs.platformSetupStore?.previousElementSibling;
+  if (storeTitle) {
+    storeTitle.textContent = "Platform Restaurant ID";
+  }
+}
+
+function normalizePlatformSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_")
+    .replaceAll("-", "_");
+}
+
+function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
+  const win = window.open("", "_blank", "width=720,height=840");
+  if (!win) {
+    showToast("Yazdirma penceresi acilamadi.", "error");
+    return;
+  }
+
+  const items = Array.isArray(pkg.items) && pkg.items.length
+    ? pkg.items.map((item) => `
+      <tr>
+        <td>${item.name || "-"}</td>
+        <td>${item.quantity || 1}</td>
+        <td>${formatCurrency(item.price || 0)}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="3">Urun bilgisi paylasilmadi.</td></tr>';
+
+  win.document.write(`
+    <html>
+      <head>
+        <title>${pkg.externalOrderNo} Fis</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+          h1 { margin: 0 0 12px; font-size: 24px; }
+          h2 { margin: 18px 0 8px; font-size: 16px; }
+          p { margin: 4px 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          th, td { border-bottom: 1px solid #ddd; padding: 8px 4px; text-align: left; }
+        </style>
+      </head>
+      <body>
+        <h1>${restaurantName}</h1>
+        <p>Platform: ${pkg.sourcePlatform || "-"}</p>
+        <p>Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
+        <p>Musteri: ${pkg.recipient || "-"}</p>
+        <p>Telefon: ${pkg.phone || "-"}</p>
+        <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
+        <h2>Urunler</h2>
+        <table>
+          <thead><tr><th>Urun</th><th>Adet</th><th>Tutar</th></tr></thead>
+          <tbody>${items}</tbody>
+        </table>
+        <h2>Odeme</h2>
+        <p>Odeme Tipi: ${pkg.paymentMethod || "-"}</p>
+        <p>Toplam Tutar: ${formatCurrency(pkg.orderAmount || 0)}</p>
+        <p>Notlar: ${pkg.customerNote || pkg.note || "-"}</p>
+        <p>Tarih Saat: ${formatDate(pkg.createdAt)}</p>
+      </body>
+    </html>
+  `);
+  win.document.close();
+  win.focus();
+  window.setTimeout(() => win.print(), 150);
 }
 
 function getCurrentRestaurant(data) {
@@ -302,20 +436,18 @@ function setIntegrationInfo(data, explicitIntegration = null) {
     portalUsername: restaurant.username,
     apiKey: restaurant.apiKey,
     webhookSecret: restaurant.webhookSecret,
-    endpoint: `${window.location.origin}/api/integrations/orders`,
+    endpoint: `${window.location.origin}/api/platform/order`,
     samplePayload: {
-      restaurantId: restaurant.id,
-      sourcePlatform: restaurant.platforms[0] || "Trendyol Go",
-      externalOrderNo: "ORDER-10001",
-      recipient: "Ayse Demir",
-      phone: "5551234567",
-      address: "Teslimat adresi",
-      zone: restaurant.zone,
-      eta: "12:45",
-      latitude: restaurant.latitude,
-      longitude: restaurant.longitude,
-      paymentMethod: restaurantRefs.samplePaymentMethod.value || "Online Odeme",
-      note: "Kapidan ara",
+      platform: normalizePlatformSlug(restaurant.platforms[0] || "Trendyol Go"),
+      platformRestaurantId: "TEST-STORE-1",
+      orderId: "TEST-ORDER-1",
+      customerName: "Test Musteri",
+      phone: "05555555555",
+      address: "Mersin Test Adresi",
+      totalPrice: 250,
+      items: [{ id: "item-1", name: "Test Menu", quantity: 1, price: 250 }],
+      paymentMethod: "Online Odeme",
+      customerNote: "Kapidan ara",
     },
   };
 
@@ -334,26 +466,19 @@ function setPlatformSetup(data) {
   if (!account) {
     restaurantRefs.platformWebhookUrl.textContent = "Platform hesabini kaydedince webhook URL gorunur";
     restaurantRefs.platformSetupName.textContent = "Henuz kayitli platform yok.";
-    restaurantRefs.platformSetupAuth.textContent = "Auth bilgisi burada gorunur";
-    restaurantRefs.platformSetupStore.textContent = "Store/vendor bilgisi burada gorunur";
+    restaurantRefs.platformSetupAuth.textContent = "Secret bilgisi burada gorunur";
+    restaurantRefs.platformSetupStore.textContent = "Platform restoran bilgisi burada gorunur";
     restaurantRefs.platformSetupHint.textContent = "Webhook kaydi sonrasi otomatik siparis akisina hazir olur.";
     return;
   }
 
-  restaurantRefs.platformWebhookUrl.textContent = `${window.location.origin}/api/platforms/${account.platformSlug}/webhook`;
+  restaurantRefs.platformWebhookUrl.textContent = `${window.location.origin}/api/platform/order`;
   restaurantRefs.platformSetupName.textContent = `${account.platform} - ${account.active ? "aktif" : "pasif"}`;
-  restaurantRefs.platformSetupStore.textContent = `${account.externalStoreId}${account.externalMerchantId ? ` / ${account.externalMerchantId}` : ""}`;
-
-  if (account.webhookAuthType === "basic_auth") {
-    restaurantRefs.platformSetupAuth.textContent = `Basic Auth -> ${account.webhookUsername}:${account.webhookPassword}`;
-  } else if (account.webhookAuthType === "static_token") {
-    restaurantRefs.platformSetupAuth.textContent = `Bearer veya x-webhook-token -> ${account.staticToken}`;
-  } else {
-    restaurantRefs.platformSetupAuth.textContent = `x-api-key -> ${account.webhookApiKey}`;
-  }
+  restaurantRefs.platformSetupStore.textContent = account.externalStoreId || "-";
+  restaurantRefs.platformSetupAuth.textContent = account.staticToken || "-";
 
   restaurantRefs.platformSetupHint.textContent =
-    `${account.verificationStatus === "verified" ? "Merchant dogrulamasi tamamlandi." : account.verificationStatus === "failed" ? "Merchant credential kontrolu basarisiz." : "Merchant credential kontrolu beklemede."} ${account.verificationNote || ""}`;
+    `${account.verificationStatus === "verified" ? "Basit webhook akisi hazir." : "Webhook kurulumu beklemede."} ${account.verificationNote || ""}`;
 }
 
 function renderRestaurantList(restaurants) {
@@ -392,23 +517,18 @@ function renderPlatformAccounts(accounts) {
   accounts.forEach((account) => {
     const card = document.createElement("article");
     card.className = "stack-card";
-    const authText = account.webhookAuthType === "basic_auth"
-      ? `Basic Auth - ${account.webhookUsername}`
-      : account.webhookAuthType === "static_token"
-        ? "Static Token"
-        : "API Key";
     const verificationText = account.verificationStatus === "verified"
-      ? "Merchant verified"
+      ? "Webhook hazir"
       : account.verificationStatus === "failed"
-        ? "Merchant verify failed"
-        : "Merchant verify pending";
+        ? "Webhook kurulum hatasi"
+        : "Webhook kurulum bekliyor";
     card.innerHTML = `
       <div class="stack-top">
         <div>
           <strong>${account.platform}</strong>
-          <p>Store/Vendor: ${account.externalStoreId}</p>
-          <p>Webhook: /api/platforms/${account.platformSlug}/webhook</p>
-          <p>Yetki: ${authText}</p>
+          <p>Platform Restaurant ID: ${account.externalStoreId}</p>
+          <p>Webhook: /api/platform/order</p>
+          <p>Secret Header: x-platform-secret</p>
           <p>${verificationText}${account.verificationNote ? ` - ${account.verificationNote}` : ""}</p>
         </div>
         <span class="soft-badge">${account.active ? "Canli" : "Pasif"}</span>
@@ -531,6 +651,7 @@ function renderActiveOrders(data) {
   restaurantRefs.activeOrders.innerHTML = "";
   const packageList = [...data.packages].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
   const courierById = courierMap(data);
+  const restaurantName = data.restaurants?.[0]?.name || "Delivera Express";
 
   if (packageList.length === 0) {
     restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya webhook siparisi geldiginde burada gorunecek.</div>';
@@ -540,7 +661,13 @@ function renderActiveOrders(data) {
   packageList.forEach((pkg) => {
     const courier = pkg.assignedCourierId ? courierById.get(pkg.assignedCourierId) : null;
     const sourceLabel = pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform;
-    const assignmentBadge = pkg.assignedCourierId ? "Kurye Atandi" : "Atama Bekliyor";
+    const assignmentBadge = pkg.status === "pending_approval"
+      ? "Restoran Onayi Bekliyor"
+      : pkg.assignedCourierId
+        ? "Kurye Atandi"
+        : pkg.status === "preparing"
+          ? "Kurye Araniyor"
+          : "Atama Bekliyor";
     const assignmentTone = pkg.assignedCourierId ? "soft-badge" : "soft-badge status-awaiting-assignment";
     const prepCode = `DLV-${String(pkg.id || "").slice(-4).toUpperCase()}`;
     const isPlatformOrder = pkg.source !== "external_manual" && pkg.source !== "manual";
@@ -576,7 +703,7 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Not</span>
-          <strong>${pkg.note || "-"}</strong>
+          <strong>${pkg.customerNote || pkg.note || "-"}</strong>
         </div>
         <div>
           <span>Odeme</span>
@@ -603,14 +730,15 @@ function renderActiveOrders(data) {
           <strong>${pkg.eta || "5 dk"}</strong>
         </div>
       </div>
+      ${Array.isArray(pkg.items) && pkg.items.length ? `<p>Urunler: ${pkg.items.map((item) => `${item.quantity || 1}x ${item.name}`).join(", ")}</p>` : ""}
       ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
     `;
 
-    if (isPlatformOrder && !pkg.assignedCourierId && ["pending", "awaiting_assignment"].includes(pkg.status)) {
+    if (isPlatformOrder) {
       const actions = document.createElement("div");
       actions.className = "card-actions";
 
-      if (pkg.status === "pending" && !isConfirmed) {
+      if (pkg.status === "pending_approval") {
         const confirmButton = document.createElement("button");
         confirmButton.type = "button";
         confirmButton.className = "ghost-btn";
@@ -626,25 +754,31 @@ function renderActiveOrders(data) {
           showToast("Siparis onaylandi.");
         });
         actions.appendChild(confirmButton);
-      }
 
-      if (pkg.status === "pending") {
-        const readyButton = document.createElement("button");
-        readyButton.type = "button";
-        readyButton.className = "primary-btn";
-        readyButton.textContent = "Kuryeye Hazir Ver";
-        readyButton.addEventListener("click", async () => {
+        const rejectButton = document.createElement("button");
+        rejectButton.type = "button";
+        rejectButton.className = "ghost-btn";
+        rejectButton.textContent = "Siparisi Reddet";
+        rejectButton.addEventListener("click", async () => {
+          const reason = window.prompt("Red nedeni", "Restoran kapasitesi uygun degil") || "Restoran reddetti.";
           const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
             method: "POST",
             headers: restaurantAuthHeaders(),
             retryWithRefresh: refreshRestaurantAccess,
-            body: JSON.stringify({ action: "ready" }),
+            body: JSON.stringify({ action: "reject", reason }),
           });
           hydrateRestaurant(next);
-          showToast("Siparis kurye havuzuna alindi.");
+          showToast("Siparis reddedildi.");
         });
-        actions.appendChild(readyButton);
+        actions.appendChild(rejectButton);
       }
+
+      const printButton = document.createElement("button");
+      printButton.type = "button";
+      printButton.className = "primary-btn";
+      printButton.textContent = "Yazdir";
+      printButton.addEventListener("click", () => openPackagePrintWindow(pkg, restaurantName));
+      actions.appendChild(printButton);
 
       card.appendChild(actions);
     }
@@ -843,16 +977,7 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
       restaurantId: restaurant.id,
       platform: formData.get("platform"),
       externalStoreId: formData.get("externalStoreId"),
-      externalMerchantId: formData.get("externalMerchantId"),
-      webhookAuthType: formData.get("webhookAuthType"),
-      apiUsername: formData.get("apiUsername"),
-      apiPassword: formData.get("apiPassword"),
-      apiKey: formData.get("apiKey"),
-      apiSecret: formData.get("apiSecret"),
-      storeFrontCode: formData.get("storeFrontCode"),
-      chainId: formData.get("chainId"),
-      vendorId: formData.get("vendorId"),
-      staticToken: formData.get("staticToken"),
+      webhookSecret: formData.get("webhookSecret"),
     }),
   });
 
@@ -963,6 +1088,7 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
 
 restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
 restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
+simplifyPlatformAccountForm();
 restaurantRefs.samplePaymentMethod.addEventListener("change", () => {
   if (restaurantState.data) {
     setIntegrationInfo(restaurantState.data);

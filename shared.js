@@ -14,17 +14,20 @@ const PAYMENT_OPTIONS = [
 ];
 
 const STATUS_LABELS = {
+  pending_approval: "Restoran Onayi Bekliyor",
   pending: "Haz\u0131rlan\u0131yor",
+  preparing: "Hazirlaniyor",
   awaiting_assignment: "Atama Bekliyor",
   assigned: "Kuryeye Atand\u0131",
   accepted_by_courier: "Kurye Kabul Etti",
   on_route: "Yolda",
   delivered: "Teslim Edildi",
   failed: "Ba\u015far\u0131s\u0131z",
+  rejected: "Reddedildi",
   cancelled: "\u0130ptal Edildi",
 };
 
-const STATUS_OPTIONS = ["pending", "awaiting_assignment", "assigned", "accepted_by_courier", "on_route", "delivered", "failed", "cancelled"];
+const STATUS_OPTIONS = ["pending_approval", "pending", "preparing", "awaiting_assignment", "assigned", "accepted_by_courier", "on_route", "delivered", "failed", "rejected", "cancelled"];
 
 const PAYMENT_STATUS_LABELS = {
   unpaid: "\u00d6deme Bekliyor",

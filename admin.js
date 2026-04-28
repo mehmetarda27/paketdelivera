@@ -190,7 +190,7 @@ function startAdminLiveStream() {
         showToast(event.message, notificationTone(event.type));
         if (event.type === "assignment-waiting") {
           playSignal("critical");
-        } else if (event.type === "package-assigned") {
+        } else if (event.type === "package-assigned" || event.type === "platform-order-pending") {
           playSignal("assignment");
         } else if (event.type === "package-status") {
           playSignal("ready");
@@ -257,6 +257,9 @@ function renderRestaurantStats(restaurants, stats, packages) {
   adminRefs.restaurantStatsBoard.innerHTML = "";
 
   const selectedRestaurant = restaurants.find((restaurant) => restaurant.id === adminState.selectedRestaurantId) || null;
+  const selectedPlatformAccount = selectedRestaurant
+    ? (adminState.data?.platformAccounts || []).find((account) => account.restaurantId === selectedRestaurant.id && account.active)
+    : null;
   const title = selectedRestaurant ? `${selectedRestaurant.name} Operasyon Ozet` : "Tum Restoranlar Operasyon Ozet";
   const panelTitle = selectedRestaurant ? `${selectedRestaurant.name} Paketleri` : "Platform Kaynakli Tum Paketler";
   adminRefs.selectedRestaurantTitle.textContent = title;
@@ -284,6 +287,17 @@ function renderRestaurantStats(restaurants, stats, packages) {
       label: "Teslim Edilen",
       value: deliveredCount,
       detail: "Filtrelenen listeye gore",
+    },
+    {
+      label: "Test Platform Siparisi",
+      value: selectedRestaurant && selectedPlatformAccount
+        ? `<button class="ghost-btn" type="button" data-test-platform-order="${selectedRestaurant.id}">Test Platform Siparisi Gonder</button>`
+        : "Restoran sec",
+      detail: selectedPlatformAccount
+        ? `${selectedPlatformAccount.platform} / ${selectedPlatformAccount.externalStoreId}`
+        : selectedRestaurant
+          ? "Secili restoran icin aktif platform hesabi yok"
+          : "Bu buton icin restoran filtresi sec",
     },
   ];
 
@@ -453,14 +467,65 @@ function buildCourierOverrideOptions(pkg) {
     });
 }
 
+function openPackagePrintWindow(pkg) {
+  const win = window.open("", "_blank", "width=720,height=840");
+  if (!win) {
+    showToast("Yazdirma penceresi acilamadi.", "error");
+    return;
+  }
+
+  const items = Array.isArray(pkg.items) && pkg.items.length
+    ? pkg.items.map((item) => `
+      <tr>
+        <td>${item.name || "-"}</td>
+        <td>${item.quantity || 1}</td>
+        <td>${formatCurrency(item.price || 0)}</td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="3">Urun bilgisi paylasilmadi.</td></tr>';
+
+  win.document.write(`
+    <html>
+      <head>
+        <title>${pkg.externalOrderNo} Fis</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          th, td { border-bottom: 1px solid #ddd; padding: 8px 4px; text-align: left; }
+        </style>
+      </head>
+      <body>
+        <h1>${pkg.restaurantName || "Delivera Express"}</h1>
+        <p>Platform: ${pkg.sourcePlatform || "-"}</p>
+        <p>Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
+        <p>Musteri: ${pkg.recipient || "-"}</p>
+        <p>Telefon: ${pkg.phone || "-"}</p>
+        <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
+        <table>
+          <thead><tr><th>Urun</th><th>Adet</th><th>Tutar</th></tr></thead>
+          <tbody>${items}</tbody>
+        </table>
+        <p>Toplam: ${formatCurrency(pkg.orderAmount || 0)}</p>
+        <p>Odeme: ${pkg.paymentMethod || "-"}</p>
+        <p>Notlar: ${pkg.customerNote || pkg.note || "-"}</p>
+        <p>Tarih Saat: ${formatDate(pkg.createdAt)}</p>
+      </body>
+    </html>
+  `);
+  win.document.close();
+  win.focus();
+  window.setTimeout(() => win.print(), 150);
+}
+
 function buildPackageCard(pkg) {
   const node = adminRefs.template.content.cloneNode(true);
   const badge = node.querySelector(".status-badge");
   const select = node.querySelector(".status-select");
   const reassignButton = node.querySelector(".reassign-btn");
+  const platformPendingApproval = pkg.status === "pending_approval" || pkg.status === "rejected";
 
   const wrapper = node.querySelector(".package-card");
-  if (!pkg.assignedCourierId && ["pending", "awaiting_assignment"].includes(pkg.status)) {
+  if (!pkg.assignedCourierId && ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status)) {
     wrapper.classList.add("priority-alert-card");
   }
   node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)}`;
@@ -472,7 +537,7 @@ function buildPackageCard(pkg) {
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
   node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
   node.querySelector(".assignment-note").textContent = `${pkg.assignmentReason}${pkg.lastAssignmentError ? ` - Son Hata: ${pkg.lastAssignmentError}` : ""}`;
-  node.querySelector(".note-text").textContent = `${pkg.zone} - ${pkg.address}${pkg.note ? ` - ${pkg.note}` : ""}${pkg.assignedAt ? ` - Atama ${formatDate(pkg.assignedAt)}` : ""}`;
+  node.querySelector(".note-text").textContent = `${pkg.zone} - ${pkg.address}${pkg.customerNote || pkg.note ? ` - ${pkg.customerNote || pkg.note}` : ""}${pkg.assignedAt ? ` - Atama ${formatDate(pkg.assignedAt)}` : ""}`;
 
   badge.textContent = statusLabel(pkg.status);
   badge.className = `status-badge ${statusClassName(pkg.status)}`;
@@ -498,6 +563,7 @@ function buildPackageCard(pkg) {
     });
     hydrateAdmin(data);
   });
+  reassignButton.disabled = platformPendingApproval;
 
   const actions = node.querySelector(".card-actions");
   const courierSelect = document.createElement("select");
@@ -507,12 +573,13 @@ function buildPackageCard(pkg) {
   courierSelect.innerHTML = ['<option value="">Kurye sec</option>']
     .concat(courierOptions.map((option) => `<option value="${option.value}" ${option.disabled ? "disabled" : ""}>${option.label}</option>`))
     .join("");
+  courierSelect.disabled = platformPendingApproval;
 
   const overrideButton = document.createElement("button");
   overrideButton.type = "button";
   overrideButton.className = "ghost-btn";
   overrideButton.textContent = "Kuriyeye Ata";
-  overrideButton.disabled = !hasAssignableCourier;
+  overrideButton.disabled = !hasAssignableCourier || platformPendingApproval;
   overrideButton.addEventListener("click", async () => {
     if (!courierSelect.value) {
       showToast("Bu paket icin uygun online kurye bulunamadi.", "warning");
@@ -540,10 +607,18 @@ function buildPackageCard(pkg) {
     });
     hydrateAdmin(data);
   });
+  unassignButton.disabled = platformPendingApproval;
 
   actions.appendChild(courierSelect);
   actions.appendChild(overrideButton);
   actions.appendChild(unassignButton);
+
+  const printButton = document.createElement("button");
+  printButton.type = "button";
+  printButton.className = "primary-btn";
+  printButton.textContent = "Yazdir";
+  printButton.addEventListener("click", () => openPackagePrintWindow(pkg));
+  actions.appendChild(printButton);
 
   if (!courierOptions.length) {
     const helper = document.createElement("p");
@@ -571,7 +646,7 @@ function renderAdminPackages(packages) {
 
 function renderAwaitingPackages(packages) {
   adminRefs.awaitingPackageList.innerHTML = "";
-  const waiting = packages.filter((pkg) => pkg.status === "pending" || pkg.status === "awaiting_assignment");
+  const waiting = packages.filter((pkg) => ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status));
 
   if (waiting.length === 0) {
     adminRefs.awaitingPackageList.innerHTML = '<div class="empty-state">Atama bekleyen siparis yok.</div>';
@@ -1025,6 +1100,28 @@ adminRefs.searchInput.addEventListener("input", () => {
 adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   adminState.selectedRestaurantId = event.target.value;
   await loadAdminState();
+});
+
+adminRefs.restaurantStatsBoard?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-test-platform-order]");
+  if (!button) {
+    return;
+  }
+
+  const restaurantId = button.dataset.testPlatformOrder;
+  button.disabled = true;
+  try {
+    const data = await api(`/api/admin/restaurants/${restaurantId}/test-platform-order`, {
+      method: "POST",
+      headers: adminHeaders(),
+      retryWithRefresh: refreshAdminAccess,
+      body: JSON.stringify({}),
+    });
+    hydrateAdmin(data);
+    showToast("Test platform siparisi gonderildi.");
+  } finally {
+    button.disabled = false;
+  }
 });
 
 adminRefs.logoutButton?.addEventListener("click", () => {

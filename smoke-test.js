@@ -53,6 +53,10 @@ async function run() {
   const courier2Password = "Kurye123!";
   const courier3Username = `smokekurye${Math.floor(Math.random() * 100000)}`;
   const courier3Password = "Kurye123!";
+  const courier4Username = `smokekurye${Math.floor(Math.random() * 100000)}`;
+  const courier4Password = "Kurye123!";
+  const courier5Username = `smokekurye${Math.floor(Math.random() * 100000)}`;
+  const courier5Password = "Kurye123!";
   const restaurantLatitude = 36.601001;
   const restaurantLongitude = 34.320001;
   const courierLatitude = 36.601051;
@@ -124,7 +128,7 @@ async function run() {
         restaurantId: createdRestaurantRecord.id,
         platform: "Yemeksepeti",
         externalStoreId: `vendor-${Date.now()}`,
-        webhookAuthType: "static_token",
+        webhookSecret: "smoke-platform-secret",
       }),
     });
     const platformAccount = platformState.platformAccounts.find((item) => item.platform === "Yemeksepeti");
@@ -247,46 +251,105 @@ async function run() {
       throw new Error("Atama basarisizlik nedeni kaydedilmedi.");
     }
 
-    const webhookResponse = await request("/api/platforms/yemeksepeti/webhook", {
+    await request("/api/platform/order", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${platformAccount.staticToken}`,
+        "x-platform-secret": "wrong-secret",
       },
       body: JSON.stringify({
-        vendorId: platformAccount.externalStoreId,
-        external_order_id: `YS-${Date.now()}`,
-        customer: {
-          name: "Webhook Musteri",
-          phone: "5550000000",
-        },
-        address: "Mersin Mezitli sahil caddesi webhook no 12",
-        status: "RECEIVED",
-        payment: {
-          method: "Online Odeme",
-          amount: 320,
-        },
+        platform: "yemeksepeti",
+        platformRestaurantId: platformAccount.externalStoreId,
+        orderId: `YS-WRONG-${Date.now()}`,
+        customerName: "Yanlis Secret",
+        phone: "05550000000",
+        address: "Mersin gizli test adresi",
+        totalPrice: 99,
       }),
+    }).then(() => {
+      throw new Error("Yanlis secret ile siparis kabul edildi.");
+    }).catch((error) => {
+      if (!String(error.message).includes("401")) {
+        throw error;
+      }
     });
-    await request("/api/platforms/yemeksepeti/webhook", {
+
+    const webhookResponse = await request("/api/platform/order", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${platformAccount.staticToken}`,
+        "x-platform-secret": "smoke-platform-secret",
       },
       body: JSON.stringify({
-        vendorId: platformAccount.externalStoreId,
-        external_order_id: webhookResponse.package.externalOrderNo,
-        customer: {
-          name: "Webhook Musteri",
-          phone: "5550000000",
-        },
+        platform: "yemeksepeti",
+        platformRestaurantId: platformAccount.externalStoreId,
+        orderId: `YS-${Date.now()}`,
+        customerName: "Webhook Musteri",
+        phone: "5550000000",
         address: "Mersin Mezitli sahil caddesi webhook no 12",
-        status: "RECEIVED",
-        payment: {
-          method: "Online Odeme",
-          amount: 320,
-        },
+        totalPrice: 320,
+        items: [
+          { id: "ys-1", name: "Lahmacun", quantity: 2, price: 120 },
+          { id: "ys-2", name: "Ayran", quantity: 1, price: 80 },
+        ],
+        paymentMethod: "Online Odeme",
+        customerNote: "Zili calma",
       }),
     });
+    if (webhookResponse.package.status !== "pending_approval") {
+      throw new Error("Platform siparisi pending_approval durumunda kaydolmadi.");
+    }
+    if (webhookResponse.package.assignedCourierId) {
+      throw new Error("Platform siparisi restoran onayi olmadan kuryeye atandi.");
+    }
+
+    const duplicateWebhookResponse = await request("/api/platform/order", {
+      method: "POST",
+      headers: {
+        "x-platform-secret": "smoke-platform-secret",
+      },
+      body: JSON.stringify({
+        platform: "yemeksepeti",
+        platformRestaurantId: platformAccount.externalStoreId,
+        orderId: webhookResponse.package.externalOrderNo,
+        customerName: "Webhook Musteri",
+        phone: "5550000000",
+        address: "Mersin Mezitli sahil caddesi webhook no 12",
+        totalPrice: 320,
+      }),
+    });
+    if (duplicateWebhookResponse.package.id !== webhookResponse.package.id) {
+      throw new Error("Duplicate platform siparisi ikinci kez olustu.");
+    }
+
+    const rejectedWebhookResponse = await request("/api/platform/order", {
+      method: "POST",
+      headers: {
+        "x-platform-secret": "smoke-platform-secret",
+      },
+      body: JSON.stringify({
+        platform: "yemeksepeti",
+        platformRestaurantId: platformAccount.externalStoreId,
+        orderId: `YS-REJECT-${Date.now()}`,
+        customerName: "Reddedilecek Musteri",
+        phone: "05554443322",
+        address: "Mersin red test adresi",
+        totalPrice: 120,
+      }),
+    });
+    if (rejectedWebhookResponse.package.status !== "pending_approval") {
+      throw new Error("Reddedilecek platform siparisi pending_approval olmadi.");
+    }
+    const pendingRestaurantBootstrap = await request("/api/restaurant/bootstrap", {
+      headers: restaurantHeaders,
+    });
+    if (!pendingRestaurantBootstrap.packages.some((pkg) => pkg.id === webhookResponse.package.id && pkg.status === "pending_approval")) {
+      throw new Error("Restoran paneli pending_approval platform siparisini gormedi.");
+    }
+    const pendingAdminBootstrap = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    if (!pendingAdminBootstrap.packages.some((pkg) => pkg.id === webhookResponse.package.id && pkg.status === "pending_approval")) {
+      throw new Error("Admin paneli pending_approval platform siparisini gormedi.");
+    }
 
     const courierLogin = await request("/api/courier/login", {
       method: "POST",
@@ -370,6 +433,143 @@ async function run() {
     });
     await delay(1200);
 
+    const courier2Login = await request("/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: courier2Username,
+        password: courier2Password,
+      }),
+    });
+    const courier2Headers = { Authorization: `Bearer ${courier2Login.token}` };
+    await request(`/api/courier/packages/${secondManualPackage.id}/status`, {
+      method: "PATCH",
+      headers: courier2Headers,
+      body: JSON.stringify({ status: "accepted_by_courier" }),
+    });
+    await request(`/api/courier/packages/${secondManualPackage.id}/status`, {
+      method: "PATCH",
+      headers: courier2Headers,
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    await request(`/api/courier/packages/${secondManualPackage.id}/status`, {
+      method: "PATCH",
+      headers: courier2Headers,
+      body: JSON.stringify({ status: "delivered", paymentStatus: "paid_online" }),
+    });
+    await delay(1200);
+
+    const courierState4 = await request("/api/admin/couriers", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "Smoke Kurye 4",
+        username: courier4Username,
+        password: courier4Password,
+        zone: "Erdemli",
+        latitude: courierLatitude + 0.0003,
+        longitude: courierLongitude + 0.0003,
+        available: true,
+      }),
+    });
+    const createdCourier4 = courierState4.couriers.find((item) => item.username === courier4Username);
+    if (!createdCourier4) {
+      throw new Error("Dorduncu kurye olusturulamadi.");
+    }
+    const courierState5 = await request("/api/admin/couriers", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "Smoke Kurye 5",
+        username: courier5Username,
+        password: courier5Password,
+        zone: "Erdemli",
+        latitude: courierLatitude + 0.0004,
+        longitude: courierLongitude + 0.0004,
+        available: true,
+      }),
+    });
+    const createdCourier5 = courierState5.couriers.find((item) => item.username === courier5Username);
+    if (!createdCourier5) {
+      throw new Error("Besinci kurye olusturulamadi.");
+    }
+
+    const rejectedState = await request(`/api/restaurant/packages/${rejectedWebhookResponse.package.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "reject", reason: "Test red" }),
+    });
+    const rejectedPackage = rejectedState.packages.find((pkg) => pkg.id === rejectedWebhookResponse.package.id);
+    if (!rejectedPackage || rejectedPackage.status !== "rejected" || rejectedPackage.assignedCourierId) {
+      throw new Error("Reddedilen platform siparisi kuryeye atanmamasi gerekirken akisa girdi.");
+    }
+
+    const approvedState = await request(`/api/restaurant/packages/${webhookResponse.package.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "confirm" }),
+    });
+    const assignedWebhookAfterDelivery = approvedState.packages.find((pkg) => pkg.id === webhookResponse.package.id);
+    if (!assignedWebhookAfterDelivery) {
+      throw new Error("Onaylanan platform siparisi restoran durumunda bulunamadi.");
+    }
+    if (!["preparing", "assigned"].includes(assignedWebhookAfterDelivery.status)) {
+      throw new Error("Onaylanan platform siparisi preparing veya assigned durumuna gecmedi.");
+    }
+
+    const printSource = fs.readFileSync(path.join(__dirname, "restaurant.js"), "utf8");
+    if (!printSource.includes(".print()")) {
+      throw new Error("Yazdirma ekrani window.print akisini icermiyor.");
+    }
+
+    await delay(1200);
+    const afterDeliveryBootstrap = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    const assignedWebhookPackage = afterDeliveryBootstrap.packages.find((pkg) => pkg.id === assignedWebhookAfterDelivery.id);
+    if (!assignedWebhookPackage?.assignedCourierId) {
+      throw new Error("Platform siparisi bos kurye olmasina ragmen atanmadi.");
+    }
+
+    const courier4Login = await request("/api/courier/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: courier4Username,
+        password: courier4Password,
+      }),
+    });
+    const courier4Headers = { Authorization: `Bearer ${courier4Login.token}` };
+    const courier5Login = await request("/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: courier5Username,
+        password: courier5Password,
+      }),
+    });
+    const courier5Headers = { Authorization: `Bearer ${courier5Login.token}` };
+
+    const platformCourierHeaders = assignedWebhookPackage.assignedCourierId === createdCourier.id
+      ? courierHeaders
+      : assignedWebhookPackage.assignedCourierId === createdCourier2.id
+        ? courier2Headers
+        : assignedWebhookPackage.assignedCourierId === createdCourier4.id
+          ? courier4Headers
+          : assignedWebhookPackage.assignedCourierId === createdCourier5.id
+            ? courier5Headers
+        : null;
+    if (!platformCourierHeaders) {
+      throw new Error("Platform siparisi beklenmeyen kuryeye atandi.");
+    }
+
+    const assignedCourierWorkspace = await request("/api/courier/me", {
+      headers: platformCourierHeaders,
+    });
+    if (!assignedCourierWorkspace.packages.some((pkg) => pkg.id === assignedWebhookAfterDelivery.id)) {
+      throw new Error("Platform siparisi uygun kurye bosalinca kurye paneline dusmedi.");
+    }
+
     const restaurantBootstrap = await request("/api/restaurant/bootstrap", {
       headers: restaurantHeaders,
     });
@@ -387,22 +587,28 @@ async function run() {
     if (!restaurantBootstrap.packages.some((pkg) => pkg.source === "external_manual") || !restaurantBootstrap.packages.some((pkg) => pkg.source !== "external_manual")) {
       throw new Error("Restoran paneli manuel ve webhook siparislerini birlikte gosteremedi.");
     }
+    if (!restaurantBootstrap.packages.some((pkg) => pkg.id === webhookResponse.package.id && ["preparing", "assigned"].includes(pkg.status))) {
+      throw new Error("Restoran paneli onaylanan platform siparisini guncel gostermedi.");
+    }
+    if (!restaurantBootstrap.packages.some((pkg) => pkg.id === rejectedWebhookResponse.package.id && pkg.status === "rejected")) {
+      throw new Error("Restoran paneli reddedilen platform siparisini gormedi.");
+    }
     if (!restaurantBootstrap.packages.some((pkg) => pkg.assignedCourierName === createdCourier.name)) {
       throw new Error("Restoran panelinde atanmis kurye bilgisi gorunmuyor.");
     }
     if (!restaurantBootstrap.packages.every((pkg) => pkg.paymentStatus && pkg.status)) {
       throw new Error("Restoran paneli siparis veya odeme durumunu eksik aldi.");
     }
-    if (!restaurantBootstrap.packages.some((pkg) => pkg.status === "awaiting_assignment")) {
-      throw new Error("Restoran paneli atama bekleyen siparisi ayirt edemedi.");
+    if (!restaurantBootstrap.packages.some((pkg) => pkg.id === thirdManualPackage.id)) {
+      throw new Error("Restoran paneli daha once beklemeye dusen siparisi koruyamadi.");
     }
 
     if (!bootstrap.restaurants.some((restaurant) => restaurant.id === createdRestaurantRecord.id)) {
       throw new Error("Admin bootstrap restoran kaydini dondurmedi.");
     }
 
-    if (!bootstrap.auditLogs.some((log) => log.action === "restaurant_created")) {
-      throw new Error("Audit log akisi beklenen kaydi uretmedi.");
+    if (!bootstrap.auditLogs.some((log) => log.restaurantId === createdRestaurantRecord.id)) {
+      throw new Error("Audit log akisi beklenen tenant kaydini uretmedi.");
     }
 
     if (!webhookResponse.package || webhookResponse.package.sourcePlatform !== "Yemeksepeti") {
