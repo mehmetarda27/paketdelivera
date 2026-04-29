@@ -32,6 +32,18 @@
   ];
   const AUTO_DEBOUNCE_MS = 3000;
   const STATUS_ATTRIBUTE_KEYWORDS = ["status", "durum", "state", "onay", "hazir", "hazır", "kabul"];
+  const ORDER_CONTAINER_SELECTOR = [
+    "section",
+    "article",
+    "li",
+    "div",
+    "[role='listitem']",
+    "[role='article']",
+    "[data-testid]",
+    "[class*='order']",
+    "[class*='siparis']",
+    "[class*='card']",
+  ].join(", ");
   const WATCHER_BLOCK_MESSAGE = "Otomatik izleme desteklenmeyen sayfada kapali";
 
   let observer = null;
@@ -145,6 +157,101 @@
     return normalizeText(statusParts.join("\n"));
   }
 
+  function collectStatusTextForNode(node) {
+    if (!node || !(node instanceof Element)) {
+      return "";
+    }
+    const parts = [];
+    const seen = new Set();
+    const pushStatus = (value) => {
+      const text = normalizeText(value);
+      const simplified = shared.simplifyText(text);
+      if (!text || text.length > 80 || seen.has(simplified)) {
+        return;
+      }
+      seen.add(simplified);
+      parts.push(text);
+    };
+
+    const scopedNodes = node.querySelectorAll("[data-status], [data-state], [aria-label], [title], [class], [id], span, div, p, strong, button, h1, h2, h3");
+    scopedNodes.forEach((child) => {
+      if (!isVisible(child)) {
+        return;
+      }
+      const text = normalizeText(child.innerText || child.textContent || "");
+      if (!text || text.length > 80) {
+        return;
+      }
+      const signature = shared.simplifyText(getAttributeSignature(child));
+      const markedAsStatus = STATUS_ATTRIBUTE_KEYWORDS.some((keyword) => signature.includes(shared.simplifyText(keyword)));
+      const hasSignal = shared.SIGNAL_KEYWORDS.some((keyword) => shared.simplifyText(text).includes(shared.simplifyText(keyword)));
+      if (markedAsStatus || hasSignal) {
+        pushStatus(text);
+      }
+    });
+
+    const ownText = normalizeText(node.innerText || node.textContent || "");
+    if (ownText.length <= 80) {
+      const hasSignal = shared.SIGNAL_KEYWORDS.some((keyword) => shared.simplifyText(ownText).includes(shared.simplifyText(keyword)));
+      if (hasSignal) {
+        pushStatus(ownText);
+      }
+    }
+
+    return normalizeText(parts.join("\n"));
+  }
+
+  function buildCandidateFromText(rawText, statusText, url) {
+    const candidate = shared.analyzeOrderText({
+      rawText,
+      statusText,
+      url,
+    });
+    const hasIdentitySignal = Boolean(candidate.phone || candidate.orderId);
+    const hasDetailSignal = Boolean(candidate.amount || candidate.address);
+    const isCardCandidate = candidate.hasAcceptedSignal && hasIdentitySignal && hasDetailSignal;
+    return {
+      ...candidate,
+      isCardCandidate,
+    };
+  }
+
+  function collectOrderCardCandidates(url) {
+    const nodes = Array.from(document.querySelectorAll(ORDER_CONTAINER_SELECTOR))
+      .filter((node) => isVisible(node))
+      .map((node) => {
+        const rawText = normalizeText(node.innerText || node.textContent || "");
+        if (!rawText || rawText.length < 40) {
+          return null;
+        }
+        const candidate = buildCandidateFromText(rawText, collectStatusTextForNode(node), url);
+        if (!candidate.isCardCandidate || !candidate.autoDedupeKey) {
+          return null;
+        }
+        return {
+          node,
+          rawText,
+          candidate,
+          size: rawText.length,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.size - right.size);
+
+    const dedupeSeen = new Set();
+    const filtered = [];
+    nodes.forEach((entry) => {
+      if (dedupeSeen.has(entry.candidate.autoDedupeKey)) {
+        return;
+      }
+      dedupeSeen.add(entry.candidate.autoDedupeKey);
+      filtered.push(entry);
+    });
+
+    console.log("multi order candidates found:", filtered.length);
+    return filtered.map((entry) => entry.candidate);
+  }
+
   async function getSettings() {
     const storage = getChromeStorage();
     if (!storage) {
@@ -227,7 +334,12 @@
   }
 
   async function updateLastCandidate(settings, candidate) {
-    const preview = candidate.preview.slice(0, 4).join(" | ") || "Siparis sinyali zayif";
+    const preview = Array.isArray(candidate)
+      ? candidate
+        .slice(0, 3)
+        .map((item) => item.preview.slice(0, 2).join(" | ") || item.autoDedupeKey || "Siparis")
+        .join(" || ")
+      : candidate.preview.slice(0, 4).join(" | ") || "Siparis sinyali zayif";
     if (preview === lastCandidatePreview) {
       return;
     }
@@ -254,110 +366,133 @@
     }
 
     const rawText = collectVisibleText();
-    if (!rawText || rawText.length < 40) {
+    const statusText = collectStatusText();
+    const cardCandidates = collectOrderCardCandidates(location.href);
+    const fallbackCandidate = rawText && rawText.length >= 40
+      ? buildCandidateFromText(rawText, statusText, location.href)
+      : null;
+    const candidates = cardCandidates.length > 0
+      ? cardCandidates
+      : (fallbackCandidate ? [fallbackCandidate] : []);
+
+    if (candidates.length === 0) {
       return;
     }
 
-    const statusText = collectStatusText();
-    const analysisSignature = shared.simpleHash(`${shared.simplifyText(statusText)}|${shared.simplifyText(rawText)}`);
+    const analysisSignature = shared.simpleHash(candidates.map((candidate) => `${candidate.autoDedupeKey || "no-key"}|${candidate.acceptedKeyword || ""}|${shared.simplifyText(candidate.rawText)}`).join("||"));
     if (analysisSignature === lastAnalysisSignature) {
       return;
     }
     lastAnalysisSignature = analysisSignature;
 
-    const candidate = shared.analyzeOrderText({
-      rawText,
-      statusText,
-      url: location.href,
-    });
-    console.log("text analyzed", candidate);
-    console.log("accepted signal found", candidate.hasAcceptedSignal);
-    console.log("minimum signals passed", candidate.meetsMinimumSignal);
-    console.log("dedupe key generated", candidate.autoDedupeKey || "(bos)");
+    await updateLastCandidate(settings, candidates);
+    const sentKeys = { ...(settings[STORAGE_KEYS.sentKeys] || {}) };
+    const processedKeys = { ...(settings[STORAGE_KEYS.processedKeys] || {}) };
+    let sentCountValue = Number(settings[STORAGE_KEYS.sentCount] || 0);
+    let duplicateCountValue = Number(settings[STORAGE_KEYS.duplicateCount] || 0);
 
-    if (!candidate.meetsMinimumSignal) {
-      return;
-    }
+    let attemptedPost = false;
+    let ignoredCount = 0;
+    for (const candidate of candidates) {
+      console.log("text analyzed", candidate);
+      console.log("accepted signal found", candidate.hasAcceptedSignal);
+      console.log("minimum signals passed", candidate.meetsMinimumSignal);
+      console.log("dedupe key generated", candidate.autoDedupeKey || "(bos)");
 
-    await updateLastCandidate(settings, candidate);
-    console.log("order candidate found", candidate);
+      if (!candidate.meetsMinimumSignal) {
+        ignoredCount += 1;
+        continue;
+      }
 
-    if (!candidate.hasAcceptedSignal) {
-      console.log("order ignored (not accepted yet)");
-      await writeStatus(settings, "Kabul edilmedi, beklemede", "");
-      return;
-    }
+      console.log("order candidate found", candidate);
 
-    if (!candidate.autoDedupeKey) {
-      await writeStatus(settings, "Minimum veride otomatik unique key uretilemedi", "");
-      return;
-    }
+      if (!candidate.hasAcceptedSignal) {
+        console.log("order ignored (not accepted yet)");
+        ignoredCount += 1;
+        continue;
+      }
 
-    const sentKeys = settings[STORAGE_KEYS.sentKeys] || {};
-    const processedKeys = settings[STORAGE_KEYS.processedKeys] || {};
-    const duplicateCount = Number(settings[STORAGE_KEYS.duplicateCount] || 0);
-    const rawTextBlocked = settings[STORAGE_KEYS.lastRawText] && settings[STORAGE_KEYS.lastRawText] === candidate.rawText;
-    const dedupeBlocked = Boolean(sentKeys[candidate.autoDedupeKey] || processedKeys[candidate.autoDedupeKey] || settings[STORAGE_KEYS.lastDedupeKey] === candidate.autoDedupeKey || rawTextBlocked);
-    console.log("dedupe blocked", dedupeBlocked);
-    if (dedupeBlocked) {
-      console.log("duplicate skipped", candidate.autoDedupeKey);
-      await setStorageIfChanged(settings, {
-        [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
-        [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
-        [STORAGE_KEYS.lastError]: "",
+      if (!candidate.autoDedupeKey) {
+        ignoredCount += 1;
+        continue;
+      }
+
+      const rawTextBlocked = settings[STORAGE_KEYS.lastRawText] && settings[STORAGE_KEYS.lastRawText] === candidate.rawText;
+      const dedupeBlocked = Boolean(
+        sentKeys[candidate.autoDedupeKey] ||
+        processedKeys[candidate.autoDedupeKey] ||
+        settings[STORAGE_KEYS.lastDedupeKey] === candidate.autoDedupeKey ||
+        rawTextBlocked
+      );
+      console.log("dedupe blocked", dedupeBlocked);
+      if (dedupeBlocked) {
+        console.log("duplicate candidate skipped:", candidate.autoDedupeKey);
+        duplicateCountValue += 1;
+        await setStorageIfChanged(settings, {
+          [STORAGE_KEYS.duplicateCount]: duplicateCountValue,
+          [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
+          [STORAGE_KEYS.lastError]: "",
+        });
+        lastStatusWritten = "Tekrar siparis engellendi";
+        lastErrorWritten = "";
+        continue;
+      }
+
+      console.log("posting candidate dedupeKey:", candidate.autoDedupeKey);
+      console.log("order accepted, sending", {
+        dedupeKey: candidate.autoDedupeKey,
+        acceptedSignal: candidate.acceptedKeyword,
       });
-      lastStatusWritten = "Tekrar siparis engellendi";
-      lastErrorWritten = "";
-      return;
-    }
+      console.log("auto post started", candidate.autoDedupeKey);
+      console.log("content auto message sent", {
+        source: "platform_extension_auto",
+        sourcePlatform: getSelectedPlatform(settings),
+        dedupeKey: candidate.autoDedupeKey,
+      });
 
-    console.log("order accepted, sending", {
-      dedupeKey: candidate.autoDedupeKey,
-      acceptedSignal: candidate.acceptedKeyword,
-    });
-    console.log("auto post started", candidate.autoDedupeKey);
-    console.log("content auto message sent", {
-      source: "platform_extension_auto",
-      sourcePlatform: getSelectedPlatform(settings),
-      dedupeKey: candidate.autoDedupeKey,
-    });
+      try {
+        attemptedPost = true;
+        const result = await postToDelivera(candidate, settings);
+        sentKeys[candidate.autoDedupeKey] = new Date().toISOString();
+        processedKeys[candidate.autoDedupeKey] = new Date().toISOString();
+        if (result?.duplicate) {
+          console.log("duplicate candidate skipped:", candidate.autoDedupeKey);
+          duplicateCountValue += 1;
+          await setStorage({
+            [STORAGE_KEYS.sentKeys]: sentKeys,
+            [STORAGE_KEYS.processedKeys]: processedKeys,
+            [STORAGE_KEYS.duplicateCount]: duplicateCountValue,
+            [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
+            [STORAGE_KEYS.lastError]: "",
+            [STORAGE_KEYS.lastRawText]: candidate.rawText,
+            [STORAGE_KEYS.lastDedupeKey]: candidate.autoDedupeKey,
+          });
+          lastStatusWritten = "Tekrar siparis engellendi";
+          lastErrorWritten = "";
+          continue;
+        }
 
-    try {
-      const result = await postToDelivera(candidate, settings);
-      sentKeys[candidate.autoDedupeKey] = new Date().toISOString();
-      processedKeys[candidate.autoDedupeKey] = new Date().toISOString();
-      if (result?.duplicate) {
-        console.log("duplicate skipped", candidate.autoDedupeKey);
+        sentCountValue += 1;
+        console.log("auto post success", result);
         await setStorage({
           [STORAGE_KEYS.sentKeys]: sentKeys,
           [STORAGE_KEYS.processedKeys]: processedKeys,
-          [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
-          [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
+          [STORAGE_KEYS.sentCount]: sentCountValue,
+          [STORAGE_KEYS.lastPostStatus]: "Otomatik gonderim basarili",
           [STORAGE_KEYS.lastError]: "",
           [STORAGE_KEYS.lastRawText]: candidate.rawText,
           [STORAGE_KEYS.lastDedupeKey]: candidate.autoDedupeKey,
         });
-        lastStatusWritten = "Tekrar siparis engellendi";
+        lastStatusWritten = "Otomatik gonderim basarili";
         lastErrorWritten = "";
-        return;
+      } catch (error) {
+        console.log("auto post failed", error.message || error);
+        await writeStatus(settings, "Otomatik gonderim hata verdi", error.message || "Otomatik gonderim basarisiz");
       }
+    }
 
-      const nextCount = Number(settings[STORAGE_KEYS.sentCount] || 0) + 1;
-      console.log("auto post success", result);
-      await setStorage({
-        [STORAGE_KEYS.sentKeys]: sentKeys,
-        [STORAGE_KEYS.processedKeys]: processedKeys,
-        [STORAGE_KEYS.sentCount]: nextCount,
-        [STORAGE_KEYS.lastPostStatus]: "Otomatik gonderim basarili",
-        [STORAGE_KEYS.lastError]: "",
-        [STORAGE_KEYS.lastRawText]: candidate.rawText,
-        [STORAGE_KEYS.lastDedupeKey]: candidate.autoDedupeKey,
-      });
-      lastStatusWritten = "Otomatik gonderim basarili";
-      lastErrorWritten = "";
-    } catch (error) {
-      console.log("auto post failed", error.message || error);
-      await writeStatus(settings, "Otomatik gonderim hata verdi", error.message || "Otomatik gonderim basarisiz");
+    if (!attemptedPost && ignoredCount > 0) {
+      await writeStatus(settings, "Kabul edilmedi, beklemede", "");
     }
   }
 
