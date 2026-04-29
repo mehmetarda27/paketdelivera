@@ -4,6 +4,7 @@
   }
   window.__deliveraQuickPasteInstalled = true;
 
+  const shared = window.DeliveraExtensionShared;
   const STORAGE_KEYS = {
     backendUrl: "deliveraBackendUrl",
     restaurantToken: "deliveraRestaurantToken",
@@ -11,38 +12,45 @@
     autoEnabled: "deliveraAutoEnabled",
     sentKeys: "deliveraSentOrderKeys",
     sentCount: "deliveraSentCount",
+    duplicateCount: "deliveraAutoDuplicateCount",
     lastCandidate: "deliveraAutoLastCandidate",
     lastPostStatus: "deliveraAutoLastStatus",
     lastError: "deliveraAutoLastError",
   };
   const AUTO_DEBOUNCE_MS = 1500;
+  const STATUS_ATTRIBUTE_KEYWORDS = ["status", "durum", "state", "onay", "hazir", "hazır", "kabul"];
+
   let observer = null;
   let debounceId = null;
   let currentAutoEnabled = false;
 
   function normalizeText(value) {
-    return String(value || "")
-      .replace(/\u00a0/g, " ")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    return shared.normalizeText(value);
   }
 
-  function detectPlatformFromUrl(url = location.href) {
-    const lowered = String(url || "").toLowerCase();
-    if (lowered.includes("getir")) {
-      return "Getir";
+  function isVisible(node) {
+    if (!node || !(node instanceof Element)) {
+      return false;
     }
-    if (lowered.includes("trendyol")) {
-      return "Trendyol Yemek";
+    const style = window.getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") {
+      return false;
     }
-    if (lowered.includes("yemeksepeti")) {
-      return "Yemeksepeti";
-    }
-    if (lowered.includes("migros")) {
-      return "Migros Yemek";
-    }
-    return "Diger";
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function getAttributeSignature(node) {
+    return [
+      node.getAttribute("data-status"),
+      node.getAttribute("data-state"),
+      node.getAttribute("aria-label"),
+      node.getAttribute("title"),
+      node.id,
+      typeof node.className === "string" ? node.className : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 
   function collectVisibleText() {
@@ -59,12 +67,7 @@
 
     const candidates = document.querySelectorAll("button, a, [role='button'], [aria-label], [title], article, section, div, span, p, li, h1, h2, h3, h4");
     candidates.forEach((node) => {
-      const style = window.getComputedStyle(node);
-      if (style.display === "none" || style.visibility === "hidden") {
-        return;
-      }
-      const rect = node.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) {
+      if (!isVisible(node)) {
         return;
       }
       pushValue(node.getAttribute("aria-label"));
@@ -75,71 +78,37 @@
     return normalizeText(parts.join("\n"));
   }
 
-  function prioritizeOrderLines(lines) {
-    return lines
-      .filter(Boolean)
-      .map((line) => ({
-        line,
-        score:
-          (/05\d{2}/.test(line) ? 5 : 0) +
-          (/(adres|mahalle|sokak|cadde|no|kat|daire)/i.test(line) ? 4 : 0) +
-          (/(₺|tl|tutar|toplam|odenecek|ödenecek|odeme|ödeme)/i.test(line) ? 3 : 0) +
-          (/(musteri|müşteri|ad|isim|alici|alıcı)/i.test(line) ? 2 : 0) +
-          (/(siparis no|sipariş no|order id|teslimat no)/i.test(line) ? 4 : 0),
-      }))
-      .sort((left, right) => right.score - left.score)
-      .map((item) => item.line);
-  }
-
-  function simpleHash(text) {
-    let hash = 5381;
-    for (let index = 0; index < text.length; index += 1) {
-      hash = ((hash << 5) + hash) + text.charCodeAt(index);
-      hash |= 0;
-    }
-    return `h${Math.abs(hash)}`;
-  }
-
-  function analyzeText(rawText) {
-    const text = normalizeText(rawText);
-    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-    const prioritized = prioritizeOrderLines(lines);
-
-    const phoneMatch = text.match(/(?:\+?90\s*)?(05\d[\d\s-]{8,})/);
-    const amountMatch = text.match(/(?:₺|\btl\b|toplam|tutar|ödenecek|odenecek)\s*[:\-]?\s*([\d\.,]+)/i);
-    const orderIdMatch = text.match(/(?:siparis no|sipariş no|order id|teslimat no)\s*[:\-]?\s*([A-Z0-9\-_]+)/i);
-    const addressLine = prioritized.find((line) => /(adres|mahalle|sokak|cadde|no|kat|daire)/i.test(line)) || "";
-    const hasPhone = Boolean(phoneMatch);
-    const hasAmount = Boolean(amountMatch);
-    const hasAddress = Boolean(addressLine);
-    const hasOrderId = Boolean(orderIdMatch);
-    const meetsSignalThreshold =
-      (hasPhone && hasAmount) ||
-      (hasPhone && hasAddress) ||
-      (hasOrderId && hasAmount);
-
-    const normalizedPhone = phoneMatch ? phoneMatch[1].replace(/[^\d]/g, "").replace(/^90(?=5)/, "") : "";
-    const normalizedAmount = amountMatch?.[1] ? String(amountMatch[1]).replace(/\s+/g, "") : "";
-    const dedupeKey = orderIdMatch?.[1]
-      ? `order:${orderIdMatch[1]}`
-      : normalizedPhone && normalizedAmount
-        ? `phone-amount:${normalizedPhone}:${normalizedAmount}`
-        : normalizedPhone && addressLine
-          ? `phone-address:${normalizedPhone}:${addressLine.slice(0, 40).toLowerCase()}`
-          : `hash:${simpleHash(text)}`;
-
-    const candidate = {
-      rawText: normalizeText([...prioritized, ...lines].join("\n")),
-      preview: prioritized.slice(0, 12),
-      phone: normalizedPhone,
-      amount: normalizedAmount,
-      orderId: orderIdMatch?.[1] || "",
-      address: addressLine,
-      dedupeKey,
-      meetsSignalThreshold,
+  function collectStatusText() {
+    const statusParts = [];
+    const seen = new Set();
+    const pushStatus = (value) => {
+      const text = normalizeText(value);
+      const simplified = shared.simplifyText(text);
+      if (!text || text.length > 80 || seen.has(simplified)) {
+        return;
+      }
+      seen.add(simplified);
+      statusParts.push(text);
     };
-    console.log("text analyzed", candidate);
-    return candidate;
+
+    const candidates = document.querySelectorAll("[data-status], [data-state], [aria-label], [title], [class], [id], span, div, p, strong, button, h1, h2, h3");
+    candidates.forEach((node) => {
+      if (!isVisible(node)) {
+        return;
+      }
+      const text = normalizeText(node.innerText || node.textContent || "");
+      if (!text || text.length > 80) {
+        return;
+      }
+      const signature = shared.simplifyText(getAttributeSignature(node));
+      const markedAsStatus = STATUS_ATTRIBUTE_KEYWORDS.some((keyword) => signature.includes(shared.simplifyText(keyword)));
+      const hasSignal = shared.SIGNAL_KEYWORDS.some((keyword) => shared.simplifyText(text).includes(shared.simplifyText(keyword)));
+      if (markedAsStatus || hasSignal) {
+        pushStatus(text);
+      }
+    });
+
+    return normalizeText(statusParts.join("\n"));
   }
 
   async function getSettings() {
@@ -150,12 +119,29 @@
     return chrome.storage.local.set(values);
   }
 
+  async function setStorageIfChanged(currentSettings, values) {
+    const nextValues = {};
+    Object.entries(values).forEach(([key, value]) => {
+      if (currentSettings[key] !== value) {
+        nextValues[key] = value;
+      }
+    });
+    if (Object.keys(nextValues).length > 0) {
+      await setStorage(nextValues);
+    }
+  }
+
+  function getSelectedPlatform(settings) {
+    const manualPlatform = String(settings[STORAGE_KEYS.platform] || "").trim();
+    return manualPlatform || shared.detectPlatformFromUrl(location.href);
+  }
+
   async function postToDelivera(candidate, settings) {
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim().replace(/\/+$/, "");
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim().replace(/^Bearer\s+/i, "");
-    const platform = settings[STORAGE_KEYS.platform] || detectPlatformFromUrl(location.href);
+    const platform = getSelectedPlatform(settings);
 
-    console.log("auto posting to Delivera", { platform, dedupeKey: candidate.dedupeKey });
+    console.log("auto posting to Delivera", { platform, dedupeKey: candidate.autoDedupeKey });
     const response = await fetch(`${backendUrl}/api/restaurant/packages/quick-paste`, {
       method: "POST",
       headers: {
@@ -166,7 +152,7 @@
         source: "platform_extension_auto",
         sourcePlatform: platform,
         rawText: candidate.rawText,
-        dedupeKey: candidate.dedupeKey,
+        dedupeKey: candidate.autoDedupeKey,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -186,34 +172,82 @@
     if (!autoEnabled || !backendUrl || !token) {
       return;
     }
+    if (!shared.isSupportedAutoPlatform(location.href)) {
+      console.log("unsupported platform for auto watcher");
+      return;
+    }
 
     const rawText = collectVisibleText();
     if (!rawText || rawText.length < 40) {
       return;
     }
 
-    const candidate = analyzeText(rawText);
-    await setStorage({
+    const candidate = shared.analyzeOrderText({
+      rawText,
+      statusText: collectStatusText(),
+      url: location.href,
+    });
+    console.log("text analyzed", candidate);
+    await setStorageIfChanged(settings, {
       [STORAGE_KEYS.lastCandidate]: candidate.preview.slice(0, 4).join(" | ") || "Siparis sinyali zayif",
     });
 
-    if (!candidate.meetsSignalThreshold) {
+    if (!candidate.meetsMinimumSignal) {
       return;
     }
 
     console.log("order candidate found", candidate);
+
+    if (!candidate.hasAcceptedSignal) {
+      console.log("order ignored (not accepted yet)", {
+        pendingSignal: candidate.pendingKeyword || null,
+      });
+      await setStorageIfChanged(settings, {
+        [STORAGE_KEYS.lastPostStatus]: "Kabul edilmedi, beklemede",
+        [STORAGE_KEYS.lastError]: "",
+      });
+      return;
+    }
+
+    if (!candidate.autoDedupeKey) {
+      await setStorageIfChanged(settings, {
+        [STORAGE_KEYS.lastPostStatus]: "Minimum veride otomatik unique key uretilemedi",
+        [STORAGE_KEYS.lastError]: "",
+      });
+      return;
+    }
+
+    console.log("order accepted, sending", {
+      dedupeKey: candidate.autoDedupeKey,
+      acceptedSignal: candidate.acceptedKeyword,
+    });
+
     const sentKeys = settings[STORAGE_KEYS.sentKeys] || {};
-    if (sentKeys[candidate.dedupeKey]) {
-      console.log("duplicate skipped", candidate.dedupeKey);
+    const duplicateCount = Number(settings[STORAGE_KEYS.duplicateCount] || 0);
+    if (sentKeys[candidate.autoDedupeKey]) {
+      console.log("duplicate skipped", candidate.autoDedupeKey);
       await setStorage({
-        [STORAGE_KEYS.lastPostStatus]: "Ayni siparis tekrar gonderilmedi",
+        [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
+        [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
+        [STORAGE_KEYS.lastError]: "",
       });
       return;
     }
 
     try {
-      await postToDelivera(candidate, settings);
-      sentKeys[candidate.dedupeKey] = new Date().toISOString();
+      const result = await postToDelivera(candidate, settings);
+      sentKeys[candidate.autoDedupeKey] = new Date().toISOString();
+      if (result?.duplicate) {
+        console.log("duplicate skipped", candidate.autoDedupeKey);
+        await setStorage({
+          [STORAGE_KEYS.sentKeys]: sentKeys,
+          [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
+          [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
+          [STORAGE_KEYS.lastError]: "",
+        });
+        return;
+      }
+
       const nextCount = Number(settings[STORAGE_KEYS.sentCount] || 0) + 1;
       await setStorage({
         [STORAGE_KEYS.sentKeys]: sentKeys,
@@ -273,7 +307,22 @@
     const enabled = Boolean(settings[STORAGE_KEYS.autoEnabled]);
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim();
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
-    currentAutoEnabled = enabled && Boolean(token) && Boolean(backendUrl);
+    const supported = shared.isSupportedAutoPlatform(location.href);
+    currentAutoEnabled = enabled && Boolean(token) && Boolean(backendUrl) && supported;
+
+    if (enabled && (!token || !backendUrl)) {
+      await setStorageIfChanged(settings, {
+        [STORAGE_KEYS.lastError]: "Backend URL ve token gerekli",
+        [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme baslatilamadi",
+      });
+    } else if (enabled && !supported) {
+      console.log("unsupported platform for auto watcher");
+      await setStorageIfChanged(settings, {
+        [STORAGE_KEYS.lastError]: "Bu sayfa desteklenen platform degil",
+        [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme desteklenmeyen sayfada kapali",
+      });
+    }
+
     if (currentAutoEnabled) {
       startWatcher();
     } else {
@@ -293,8 +342,12 @@
     }
 
     try {
-      const candidate = analyzeText(collectVisibleText());
-      console.log("page text extracted", { length: candidate.rawText.length });
+      const candidate = shared.analyzeOrderText({
+        rawText: collectVisibleText(),
+        statusText: collectStatusText(),
+        url: location.href,
+      });
+      console.log("text analyzed", candidate);
       sendResponse({ ok: true, ...candidate, url: location.href, title: document.title || "" });
     } catch (error) {
       sendResponse({ ok: false, error: error.message || "Metin okunamadi." });

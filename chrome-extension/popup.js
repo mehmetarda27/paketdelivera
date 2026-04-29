@@ -1,4 +1,5 @@
 const DEFAULT_BACKEND_URL = "https://paketdelivera.onrender.com";
+const shared = globalThis.DeliveraExtensionShared;
 const STORAGE_KEYS = {
   backendUrl: "deliveraBackendUrl",
   restaurantToken: "deliveraRestaurantToken",
@@ -8,6 +9,7 @@ const STORAGE_KEYS = {
   lastPostStatus: "deliveraAutoLastStatus",
   lastError: "deliveraAutoLastError",
   sentCount: "deliveraSentCount",
+  duplicateCount: "deliveraAutoDuplicateCount",
 };
 
 const refs = {
@@ -18,10 +20,12 @@ const refs = {
   sendButton: document.getElementById("sendButton"),
   copyButton: document.getElementById("copyButton"),
   statusText: document.getElementById("statusText"),
+  detectedPlatformText: document.getElementById("detectedPlatformText"),
   lastCandidateText: document.getElementById("lastCandidateText"),
   lastPostStatus: document.getElementById("lastPostStatus"),
   lastErrorText: document.getElementById("lastErrorText"),
   sentCountText: document.getElementById("sentCountText"),
+  duplicateCountText: document.getElementById("duplicateCountText"),
 };
 
 console.log("extension popup loaded");
@@ -37,23 +41,6 @@ function normalizeToken(value) {
     return "";
   }
   return token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token;
-}
-
-function detectPlatformFromUrl(url = "") {
-  const lowered = String(url || "").toLowerCase();
-  if (lowered.includes("getir")) {
-    return "Getir";
-  }
-  if (lowered.includes("trendyol")) {
-    return "Trendyol Yemek";
-  }
-  if (lowered.includes("yemeksepeti")) {
-    return "Yemeksepeti";
-  }
-  if (lowered.includes("migros")) {
-    return "Migros Yemek";
-  }
-  return "Diger";
 }
 
 async function getActiveTab() {
@@ -74,35 +61,45 @@ async function saveSettings() {
 }
 
 function renderAutoState(saved = {}) {
-  refs.lastCandidateText.textContent = saved[STORAGE_KEYS.lastCandidate] || "Henüz yok";
-  refs.lastPostStatus.textContent = saved[STORAGE_KEYS.lastPostStatus] || "Henüz yok";
+  refs.lastCandidateText.textContent = saved[STORAGE_KEYS.lastCandidate] || "Henuz yok";
+  refs.lastPostStatus.textContent = saved[STORAGE_KEYS.lastPostStatus] || "Henuz yok";
   refs.lastErrorText.textContent = saved[STORAGE_KEYS.lastError] || "Yok";
   refs.sentCountText.textContent = String(saved[STORAGE_KEYS.sentCount] || 0);
+  refs.duplicateCountText.textContent = String(saved[STORAGE_KEYS.duplicateCount] || 0);
+}
+
+function renderDetectedPlatform(url = "") {
+  const detectedPlatform = shared.detectPlatformFromUrl(url);
+  refs.detectedPlatformText.textContent = detectedPlatform;
+  return detectedPlatform;
 }
 
 async function loadSettings() {
   const saved = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
   const activeTab = await getActiveTab().catch(() => null);
-  const detectedPlatform = detectPlatformFromUrl(activeTab?.url || "");
+  const detectedPlatform = renderDetectedPlatform(activeTab?.url || "");
 
   refs.backendUrl.value = saved[STORAGE_KEYS.backendUrl] || DEFAULT_BACKEND_URL;
   refs.restaurantToken.value = saved[STORAGE_KEYS.restaurantToken] || "";
   refs.platformSelect.value = saved[STORAGE_KEYS.platform] || detectedPlatform;
   refs.autoWatchToggle.checked = Boolean(saved[STORAGE_KEYS.autoEnabled]);
   renderAutoState(saved);
+
+  if (refs.autoWatchToggle.checked && !shared.isSupportedAutoPlatform(activeTab?.url || "")) {
+    setStatus("Bu sayfa desteklenen platform degil", "warn");
+  }
 }
 
-async function extractPageText(tabId) {
+async function extractOrderPayload(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content.js"],
+    files: ["shared.js", "content.js"],
   });
   const response = await chrome.tabs.sendMessage(tabId, { type: "DELIVERA_EXTRACT_ORDER" });
   if (!response?.ok || !response.rawText) {
     throw new Error(response?.error || "Sayfadan siparis metni alinamadi.");
   }
-  console.log("page text extracted", response);
-  return response.rawText;
+  return response;
 }
 
 async function copyText(text) {
@@ -146,14 +143,14 @@ async function handleSend() {
     await saveSettings();
     setStatus("Sayfadaki siparis okunuyor...");
     const tab = await getActiveTab();
-    const rawText = await extractPageText(tab.id);
-    await postToDelivera(rawText, "platform_extension");
+    const extracted = await extractOrderPayload(tab.id);
+    await postToDelivera(extracted.rawText, "platform_extension", extracted.manualDedupeKey);
     setStatus("Delivera'ya gonderildi", "success");
   } catch (error) {
     try {
       const tab = await getActiveTab();
-      const rawText = await extractPageText(tab.id);
-      await copyText(rawText);
+      const extracted = await extractOrderPayload(tab.id);
+      await copyText(extracted.rawText);
       console.log("post failed copied fallback", error);
       setStatus("API'ye gonderilemedi ama metin kopyalandi. Delivera paneline yapistirabilirsin.", "warn");
     } catch (fallbackError) {
@@ -166,8 +163,8 @@ async function handleCopyOnly() {
   try {
     await saveSettings();
     const tab = await getActiveTab();
-    const rawText = await extractPageText(tab.id);
-    await copyText(rawText);
+    const extracted = await extractOrderPayload(tab.id);
+    await copyText(extracted.rawText);
     setStatus("Siparis metni kopyalandi", "success");
   } catch (error) {
     setStatus(error.message || "Metin kopyalanamadi.", "error");
@@ -177,9 +174,27 @@ async function handleCopyOnly() {
 async function handleAutoToggle() {
   const token = normalizeToken(refs.restaurantToken.value);
   const backendUrl = refs.backendUrl.value.trim();
+  const activeTab = await getActiveTab().catch(() => null);
+  const isSupportedPlatform = shared.isSupportedAutoPlatform(activeTab?.url || "");
+  renderDetectedPlatform(activeTab?.url || "");
+
   if (refs.autoWatchToggle.checked && (!token || !backendUrl)) {
     refs.autoWatchToggle.checked = false;
-    setStatus("Otomatik izleme icin token ve backend URL gerekli.", "error");
+    setStatus("Backend URL ve token gerekli", "error");
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.lastError]: "Backend URL ve token gerekli",
+      [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme baslatilamadi",
+    });
+    return;
+  }
+
+  if (refs.autoWatchToggle.checked && !isSupportedPlatform) {
+    refs.autoWatchToggle.checked = false;
+    setStatus("Bu sayfa desteklenen platform degil", "warn");
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.lastError]: "Bu sayfa desteklenen platform degil",
+      [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme desteklenmeyen sayfada kapali",
+    });
     return;
   }
 
@@ -200,6 +215,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     [STORAGE_KEYS.lastPostStatus]: snapshot[STORAGE_KEYS.lastPostStatus] ?? refs.lastPostStatus.textContent,
     [STORAGE_KEYS.lastError]: snapshot[STORAGE_KEYS.lastError] ?? refs.lastErrorText.textContent,
     [STORAGE_KEYS.sentCount]: snapshot[STORAGE_KEYS.sentCount] ?? Number(refs.sentCountText.textContent || 0),
+    [STORAGE_KEYS.duplicateCount]: snapshot[STORAGE_KEYS.duplicateCount] ?? Number(refs.duplicateCountText.textContent || 0),
   });
 });
 

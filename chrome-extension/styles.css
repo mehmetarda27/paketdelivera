@@ -111,6 +111,7 @@ button {
 .stats-grid {
   display: grid;
   gap: 10px;
+  grid-template-columns: 1fr 1fr;
 }
 
 .status-card.compact {
@@ -137,4 +138,10 @@ button {
 
 #statusText[data-tone="error"] {
   color: #ff9b9b;
+}
+
+.status-card p {
+  margin: 0;
+  line-height: 1.45;
+  word-break: break-word;
 }

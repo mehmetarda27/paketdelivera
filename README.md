@@ -263,6 +263,8 @@ Entegrasyon:
 ## Chrome Extension
 
 - Kurulum ve kullanim: [chrome-extension/README.md](C:/Users/LENOVO/Documents/Codex/2026-04-19-kanka-paket-takip-uygulamas-yapacaz-kuriyelere/chrome-extension/README.md)
+- Otomatik izleme yalnizca desteklenen platform panellerinde calisir ve sadece kabul/onay/hazirlaniyor sinyali olan siparisleri `platform_extension_auto` kaynagi ile Delivera'ya yollar.
+- Extension duplicate korumasi, kaydedilen `dedupeKey` listesi ve backend duplicate cevabi ile birlikte ayni siparisi ikinci kez paketlestirmez.
 
 ## Sonraki Adimlar
 

@@ -2,6 +2,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const extensionShared = require("./chrome-extension/shared.js");
 
 const PORT = 3210;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -593,6 +594,69 @@ async function run() {
     });
     if (!extensionQuickPasteDuplicate.duplicate || extensionQuickPasteDuplicate.package.id !== extensionQuickPasteState.package.id) {
       throw new Error("Extension auto dedupe korumasi calismadi.");
+    }
+
+    const pendingCandidate = extensionShared.analyzeOrderText({
+      url: "https://panel.yemeksepeti.com/orders",
+      statusText: "Yeni Siparis",
+      rawText: `Yeni Siparis\nMusteri: Bekleyen Musteri\nTelefon: 05550001122\nAdres: Mersin Erdemli deneme mahallesi no 1\nToplam: 210 TL`,
+    });
+    if (pendingCandidate.hasAcceptedSignal) {
+      throw new Error("Kabul sinyali olmayan siparis yanlislikla accepted algilandi.");
+    }
+    if (pendingCandidate.canAutoSend) {
+      throw new Error("Kabul sinyali olmayan siparis otomatik gonderime uygun sayildi.");
+    }
+
+    const acceptedWithPhoneAmount = extensionShared.analyzeOrderText({
+      url: "https://food.getir.com/restaurant/orders",
+      statusText: "Kabul Edildi",
+      rawText: `Musteri: Kabul Musteri\nTelefon: 05553334455\nToplam: 450 TL\nSiparis notu: Kapiyi calmadan ara`,
+    });
+    if (!acceptedWithPhoneAmount.hasAcceptedSignal || !acceptedWithPhoneAmount.meetsMinimumSignal) {
+      throw new Error("Telefon + tutar kombinasyonu accepted sipariste algilanmadi.");
+    }
+
+    const acceptedWithPhoneAddress = extensionShared.analyzeOrderText({
+      url: "https://trendyol.com/restaurant",
+      statusText: "Preparing",
+      rawText: `Musteri: Adres Musteri\nTelefon: 05554445566\nAdres: Mersin Yenisehir test sokak bina 9 kat 2`,
+    });
+    if (!acceptedWithPhoneAddress.meetsMinimumSignal) {
+      throw new Error("Telefon + adres kombinasyonu accepted sipariste algilanmadi.");
+    }
+    if (!acceptedWithPhoneAddress.autoDedupeKey.startsWith("phone-address:")) {
+      throw new Error("Telefon + adres icin beklenen auto dedupe key uretilmedi.");
+    }
+
+    const acceptedWithOrderAmount = extensionShared.analyzeOrderText({
+      url: "https://migros.com.tr/restaurant",
+      statusText: "Confirmed",
+      rawText: `Siparis No: TY-555\nToplam: 510 TL\nMusteri: Siparis Numarali`,
+    });
+    if (!acceptedWithOrderAmount.meetsMinimumSignal || acceptedWithOrderAmount.autoDedupeKey !== "order:TY-555") {
+      throw new Error("Siparis no + tutar kombinasyonu veya order dedupe key calismadi.");
+    }
+
+    const acceptedWithOrderAddress = extensionShared.analyzeOrderText({
+      url: "https://yemeksepeti.com/panel",
+      statusText: "Onaylandi",
+      rawText: `Teslimat No: ABC-123\nAdres: Mersin Pozcu mahallesi 2010 sokak no 4`,
+    });
+    if (!acceptedWithOrderAddress.meetsMinimumSignal || acceptedWithOrderAddress.autoDedupeKey !== "order:ABC-123") {
+      throw new Error("Siparis no + adres kombinasyonu accepted sipariste algilanmadi.");
+    }
+
+    const manualFallbackCandidate = extensionShared.analyzeOrderText({
+      url: "https://ornek.com/orders",
+      statusText: "Approved",
+      rawText: `Musteri: Hash Gerekli\nToplam: 95 TL`,
+    });
+    if (manualFallbackCandidate.autoDedupeKey) {
+      throw new Error("Yetersiz veri olan sipariste otomatik dedupe key uretilmemeliydi.");
+    }
+    if (!manualFallbackCandidate.manualDedupeKey.startsWith("manual-hash:")) {
+      throw new Error("Manual hash fallback uretilmedi.");
     }
 
     const courierState4 = await request("/api/admin/couriers", {

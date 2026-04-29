@@ -10,7 +10,7 @@
   <main class="popup-shell">
     <div class="popup-head">
       <p class="eyebrow">Delivera Express</p>
-      <h1>Siparişi Delivera'ya Gönder</h1>
+      <h1>Siparisi Delivera'ya Gonder</h1>
     </div>
 
     <label>
@@ -30,48 +30,58 @@
         <option value="Trendyol Yemek">Trendyol Yemek</option>
         <option value="Migros Yemek">Migros Yemek</option>
         <option value="Yemeksepeti">Yemeksepeti</option>
-        <option value="Diger">Diğer</option>
+        <option value="Diger">Diger</option>
       </select>
     </label>
 
     <label class="toggle-card">
       <span>
-        <strong>Otomatik İzleme</strong>
-        <small>Yeni sipariş metni algılanınca otomatik gönder.</small>
+        <strong>Otomatik Izleme</strong>
+        <small>Sadece kabul edilmis veya hazirlanan siparisleri otomatik gonder.</small>
       </span>
       <input id="autoWatchToggle" type="checkbox">
     </label>
 
+    <section class="status-card">
+      <strong>Algilanan Platform</strong>
+      <p id="detectedPlatformText">Henuz yok</p>
+    </section>
+
     <div class="button-stack">
-      <button id="sendButton" class="primary-btn" type="button">Siparişi Delivera'ya Gönder</button>
+      <button id="sendButton" class="primary-btn" type="button">Siparisi Delivera'ya Gonder</button>
       <button id="copyButton" class="ghost-btn" type="button">Sadece Kopyala</button>
     </div>
 
     <section class="status-card">
       <strong>Durum</strong>
-      <p id="statusText">Hazır</p>
+      <p id="statusText">Hazir</p>
     </section>
 
     <section class="status-card">
-      <strong>Son Algılanan Sipariş</strong>
-      <p id="lastCandidateText">Henüz yok</p>
+      <strong>Son Algilanan Siparis Ozeti</strong>
+      <p id="lastCandidateText">Henuz yok</p>
     </section>
 
     <section class="stats-grid">
       <article class="status-card compact">
-        <strong>Son Gönderim</strong>
-        <p id="lastPostStatus">Henüz yok</p>
+        <strong>Son Gonderim Durumu</strong>
+        <p id="lastPostStatus">Henuz yok</p>
       </article>
       <article class="status-card compact">
         <strong>Son Hata</strong>
         <p id="lastErrorText">Yok</p>
       </article>
       <article class="status-card compact">
-        <strong>Gönderilen</strong>
+        <strong>Gonderilen Siparis Sayisi</strong>
         <p id="sentCountText">0</p>
+      </article>
+      <article class="status-card compact">
+        <strong>Duplicate Engellenen Siparis Sayisi</strong>
+        <p id="duplicateCountText">0</p>
       </article>
     </section>
   </main>
+  <script src="./shared.js"></script>
   <script src="./popup.js"></script>
 </body>
 </html>
