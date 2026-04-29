@@ -57,6 +57,32 @@ textarea {
   gap: 10px;
 }
 
+.toggle-card {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: #131c29;
+}
+
+.toggle-card strong,
+.toggle-card small {
+  display: block;
+}
+
+.toggle-card small {
+  margin-top: 4px;
+  color: #9db0c7;
+}
+
+.toggle-card input {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+}
+
 button {
   border: 0;
   border-radius: 12px;
@@ -80,6 +106,15 @@ button {
   border-radius: 14px;
   padding: 12px 14px;
   background: #131c29;
+}
+
+.stats-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.status-card.compact {
+  padding: 10px 12px;
 }
 
 .status-card strong {

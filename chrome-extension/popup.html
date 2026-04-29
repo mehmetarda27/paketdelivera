@@ -34,6 +34,14 @@
       </select>
     </label>
 
+    <label class="toggle-card">
+      <span>
+        <strong>Otomatik İzleme</strong>
+        <small>Yeni sipariş metni algılanınca otomatik gönder.</small>
+      </span>
+      <input id="autoWatchToggle" type="checkbox">
+    </label>
+
     <div class="button-stack">
       <button id="sendButton" class="primary-btn" type="button">Siparişi Delivera'ya Gönder</button>
       <button id="copyButton" class="ghost-btn" type="button">Sadece Kopyala</button>
@@ -42,6 +50,26 @@
     <section class="status-card">
       <strong>Durum</strong>
       <p id="statusText">Hazır</p>
+    </section>
+
+    <section class="status-card">
+      <strong>Son Algılanan Sipariş</strong>
+      <p id="lastCandidateText">Henüz yok</p>
+    </section>
+
+    <section class="stats-grid">
+      <article class="status-card compact">
+        <strong>Son Gönderim</strong>
+        <p id="lastPostStatus">Henüz yok</p>
+      </article>
+      <article class="status-card compact">
+        <strong>Son Hata</strong>
+        <p id="lastErrorText">Yok</p>
+      </article>
+      <article class="status-card compact">
+        <strong>Gönderilen</strong>
+        <p id="sentCountText">0</p>
+      </article>
     </section>
   </main>
   <script src="./popup.js"></script>

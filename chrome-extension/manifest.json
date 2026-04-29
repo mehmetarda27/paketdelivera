@@ -13,6 +13,17 @@
     "https://paketdelivera.onrender.com/*",
     "<all_urls>"
   ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_title": "Delivera Express",
     "default_popup": "popup.html"

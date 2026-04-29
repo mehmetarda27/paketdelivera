@@ -776,7 +776,8 @@ function parseQuickPasteText(rawText) {
 function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
   const createdAt = nowIso();
   const externalOrderId = options.externalOrderId || `MANUAL-${Date.now()}`;
-  const isQuickPasteOrder = normalizePlatformKey(draft.source) === "platform_manual" || normalizePlatformKey(draft.source) === "platform_extension";
+  const normalizedSource = normalizePlatformKey(draft.source);
+  const isQuickPasteOrder = ["platform_manual", "platform_extension", "platform_extension_auto"].includes(normalizedSource);
   const requestedStatus = normalizeStatus(draft.requestedStatus);
   const targetStatus = isQuickPasteOrder && requestedStatus === PREPARING_STATUS
     ? PREPARING_STATUS
@@ -788,7 +789,13 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
     id: uid("pkg"),
     trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
     restaurantId: restaurantRow.id,
-    source: isQuickPasteOrder ? (normalizePlatformKey(draft.source) === "platform_extension" ? "platform_extension" : "platform_manual") : "external_manual",
+    source: isQuickPasteOrder
+      ? (normalizedSource === "platform_extension_auto"
+        ? "platform_extension_auto"
+        : normalizedSource === "platform_extension"
+          ? "platform_extension"
+          : "platform_manual")
+      : "external_manual",
     deliveryAddress: draft.deliveryAddress,
     packageType: draft.packageType,
     sourcePlatform: targetSourcePlatform,
@@ -4959,11 +4966,12 @@ async function handleApi(req, res, pathname) {
       customerAddress: parsed.customerAddress,
       paymentMethod: parsed.paymentMethod || "Panel Kaydi",
       customerNote: parsed.customerNote,
-      source: "platform_extension",
+      source: trimmed(body.source) || "platform_extension",
       sourcePlatform: trimmed(body.sourcePlatform ?? body.source_platform) || "Diger",
       rawText,
       requestedStatus: PREPARING_STATUS,
     };
+    const dedupeKey = trimmed(body.dedupeKey ?? body.dedupe_key);
 
     const errors = validatePackageDraft(draft);
     if (errors.length > 0) {
@@ -4974,7 +4982,25 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const pkg = buildRestaurantPackageRecord(restaurantRow, draft);
+    const duplicate = findDuplicatePackage(session.restaurant_id, draft.source, dedupeKey);
+    if (duplicate) {
+      sendJson(res, 200, {
+        ok: true,
+        package: decorateState({ restaurantId: session.restaurant_id }).packages.find((item) => item.id === duplicate.id) || getPackageById(duplicate.id),
+        parsed,
+        duplicate: true,
+        state: decorateState({
+          restaurantId: session.restaurant_id,
+          includeRestaurantSecrets: true,
+          req,
+        }),
+      });
+      return;
+    }
+
+    const pkg = buildRestaurantPackageRecord(restaurantRow, draft, {
+      externalOrderId: dedupeKey || undefined,
+    });
     createPackageRecord(pkg, pkg.packageType);
     rebalancePackages();
 

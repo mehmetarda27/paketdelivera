@@ -566,19 +566,33 @@ async function run() {
       method: "POST",
       headers: restaurantHeaders,
       body: JSON.stringify({
-        source: "platform_extension",
+        source: "platform_extension_auto",
         sourcePlatform: "Yemeksepeti",
+        dedupeKey: `ext-auto-${Date.now()}`,
         rawText: `Musteri: Extension Musteri\nTelefon: 05554443322\nAdres: ${extensionQuickPasteAddress}\nOdeme: Online Odeme\nToplam: 420 TL\nNot: Kapiyi calmadan ara`,
       }),
     });
     if (!extensionQuickPasteState.ok || !extensionQuickPasteState.package) {
       throw new Error("Extension quick paste endpointi paket dondurmedi.");
     }
-    if (extensionQuickPasteState.package.source !== "platform_extension") {
+    if (extensionQuickPasteState.package.source !== "platform_extension_auto") {
       throw new Error("Extension quick paste source alani yanlis kaydedildi.");
     }
     if (extensionQuickPasteState.package.customerAddress !== extensionQuickPasteAddress) {
       throw new Error("Extension quick paste adres ayiklama basarisiz.");
+    }
+    const extensionQuickPasteDuplicate = await request("/api/restaurant/packages/quick-paste", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        source: "platform_extension_auto",
+        sourcePlatform: "Yemeksepeti",
+        dedupeKey: extensionQuickPasteState.package.externalOrderId,
+        rawText: `Musteri: Extension Musteri\nTelefon: 05554443322\nAdres: ${extensionQuickPasteAddress}\nOdeme: Online Odeme\nToplam: 420 TL`,
+      }),
+    });
+    if (!extensionQuickPasteDuplicate.duplicate || extensionQuickPasteDuplicate.package.id !== extensionQuickPasteState.package.id) {
+      throw new Error("Extension auto dedupe korumasi calismadi.");
     }
 
     const courierState4 = await request("/api/admin/couriers", {

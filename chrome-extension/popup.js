@@ -1,12 +1,27 @@
 const DEFAULT_BACKEND_URL = "https://paketdelivera.onrender.com";
+const STORAGE_KEYS = {
+  backendUrl: "deliveraBackendUrl",
+  restaurantToken: "deliveraRestaurantToken",
+  platform: "deliveraPlatform",
+  autoEnabled: "deliveraAutoEnabled",
+  lastCandidate: "deliveraAutoLastCandidate",
+  lastPostStatus: "deliveraAutoLastStatus",
+  lastError: "deliveraAutoLastError",
+  sentCount: "deliveraSentCount",
+};
 
 const refs = {
   backendUrl: document.getElementById("backendUrl"),
   restaurantToken: document.getElementById("restaurantToken"),
   platformSelect: document.getElementById("platformSelect"),
+  autoWatchToggle: document.getElementById("autoWatchToggle"),
   sendButton: document.getElementById("sendButton"),
   copyButton: document.getElementById("copyButton"),
   statusText: document.getElementById("statusText"),
+  lastCandidateText: document.getElementById("lastCandidateText"),
+  lastPostStatus: document.getElementById("lastPostStatus"),
+  lastErrorText: document.getElementById("lastErrorText"),
+  sentCountText: document.getElementById("sentCountText"),
 };
 
 console.log("extension popup loaded");
@@ -24,23 +39,21 @@ function normalizeToken(value) {
   return token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token;
 }
 
-function saveSettings() {
-  chrome.storage.local.set({
-    deliveraBackendUrl: refs.backendUrl.value.trim() || DEFAULT_BACKEND_URL,
-    deliveraRestaurantToken: refs.restaurantToken.value.trim(),
-    deliveraPlatform: refs.platformSelect.value,
-  });
-}
-
-async function loadSettings() {
-  const saved = await chrome.storage.local.get([
-    "deliveraBackendUrl",
-    "deliveraRestaurantToken",
-    "deliveraPlatform",
-  ]);
-  refs.backendUrl.value = saved.deliveraBackendUrl || DEFAULT_BACKEND_URL;
-  refs.restaurantToken.value = saved.deliveraRestaurantToken || "";
-  refs.platformSelect.value = saved.deliveraPlatform || "Getir";
+function detectPlatformFromUrl(url = "") {
+  const lowered = String(url || "").toLowerCase();
+  if (lowered.includes("getir")) {
+    return "Getir";
+  }
+  if (lowered.includes("trendyol")) {
+    return "Trendyol Yemek";
+  }
+  if (lowered.includes("yemeksepeti")) {
+    return "Yemeksepeti";
+  }
+  if (lowered.includes("migros")) {
+    return "Migros Yemek";
+  }
+  return "Diger";
 }
 
 async function getActiveTab() {
@@ -51,12 +64,39 @@ async function getActiveTab() {
   return tab;
 }
 
+async function saveSettings() {
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.backendUrl]: refs.backendUrl.value.trim() || DEFAULT_BACKEND_URL,
+    [STORAGE_KEYS.restaurantToken]: refs.restaurantToken.value.trim(),
+    [STORAGE_KEYS.platform]: refs.platformSelect.value,
+    [STORAGE_KEYS.autoEnabled]: Boolean(refs.autoWatchToggle.checked),
+  });
+}
+
+function renderAutoState(saved = {}) {
+  refs.lastCandidateText.textContent = saved[STORAGE_KEYS.lastCandidate] || "Henüz yok";
+  refs.lastPostStatus.textContent = saved[STORAGE_KEYS.lastPostStatus] || "Henüz yok";
+  refs.lastErrorText.textContent = saved[STORAGE_KEYS.lastError] || "Yok";
+  refs.sentCountText.textContent = String(saved[STORAGE_KEYS.sentCount] || 0);
+}
+
+async function loadSettings() {
+  const saved = await chrome.storage.local.get(Object.values(STORAGE_KEYS));
+  const activeTab = await getActiveTab().catch(() => null);
+  const detectedPlatform = detectPlatformFromUrl(activeTab?.url || "");
+
+  refs.backendUrl.value = saved[STORAGE_KEYS.backendUrl] || DEFAULT_BACKEND_URL;
+  refs.restaurantToken.value = saved[STORAGE_KEYS.restaurantToken] || "";
+  refs.platformSelect.value = saved[STORAGE_KEYS.platform] || detectedPlatform;
+  refs.autoWatchToggle.checked = Boolean(saved[STORAGE_KEYS.autoEnabled]);
+  renderAutoState(saved);
+}
+
 async function extractPageText(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
     files: ["content.js"],
   });
-
   const response = await chrome.tabs.sendMessage(tabId, { type: "DELIVERA_EXTRACT_ORDER" });
   if (!response?.ok || !response.rawText) {
     throw new Error(response?.error || "Sayfadan siparis metni alinamadi.");
@@ -69,7 +109,7 @@ async function copyText(text) {
   await navigator.clipboard.writeText(text);
 }
 
-async function postToDelivera(rawText) {
+async function postToDelivera(rawText, source = "platform_extension", dedupeKey = "") {
   const backendUrl = (refs.backendUrl.value.trim() || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
   const token = normalizeToken(refs.restaurantToken.value);
   if (!token) {
@@ -77,12 +117,13 @@ async function postToDelivera(rawText) {
   }
 
   const payload = {
-    source: "platform_extension",
+    source,
     sourcePlatform: refs.platformSelect.value,
     rawText,
+    ...(dedupeKey ? { dedupeKey } : {}),
   };
 
-  console.log("posting to Delivera", { backendUrl, payload });
+  console.log(source === "platform_extension_auto" ? "auto posting to Delivera" : "posting to Delivera", { backendUrl, payload });
   const response = await fetch(`${backendUrl}/api/restaurant/packages/quick-paste`, {
     method: "POST",
     headers: {
@@ -96,17 +137,17 @@ async function postToDelivera(rawText) {
   if (!response.ok) {
     throw new Error(data.error || "Delivera gonderimi basarisiz.");
   }
-  console.log("post success", data);
+  console.log(source === "platform_extension_auto" ? "auto post success" : "post success", data);
   return data;
 }
 
 async function handleSend() {
   try {
-    saveSettings();
+    await saveSettings();
     setStatus("Sayfadaki siparis okunuyor...");
     const tab = await getActiveTab();
     const rawText = await extractPageText(tab.id);
-    await postToDelivera(rawText);
+    await postToDelivera(rawText, "platform_extension");
     setStatus("Delivera'ya gonderildi", "success");
   } catch (error) {
     try {
@@ -123,7 +164,7 @@ async function handleSend() {
 
 async function handleCopyOnly() {
   try {
-    saveSettings();
+    await saveSettings();
     const tab = await getActiveTab();
     const rawText = await extractPageText(tab.id);
     await copyText(rawText);
@@ -133,8 +174,38 @@ async function handleCopyOnly() {
   }
 }
 
+async function handleAutoToggle() {
+  const token = normalizeToken(refs.restaurantToken.value);
+  const backendUrl = refs.backendUrl.value.trim();
+  if (refs.autoWatchToggle.checked && (!token || !backendUrl)) {
+    refs.autoWatchToggle.checked = false;
+    setStatus("Otomatik izleme icin token ve backend URL gerekli.", "error");
+    return;
+  }
+
+  await saveSettings();
+  setStatus(refs.autoWatchToggle.checked ? "Otomatik izleme acildi." : "Otomatik izleme kapatildi.", refs.autoWatchToggle.checked ? "success" : "info");
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") {
+    return;
+  }
+  const snapshot = {};
+  Object.keys(changes).forEach((key) => {
+    snapshot[key] = changes[key].newValue;
+  });
+  renderAutoState({
+    [STORAGE_KEYS.lastCandidate]: snapshot[STORAGE_KEYS.lastCandidate] ?? refs.lastCandidateText.textContent,
+    [STORAGE_KEYS.lastPostStatus]: snapshot[STORAGE_KEYS.lastPostStatus] ?? refs.lastPostStatus.textContent,
+    [STORAGE_KEYS.lastError]: snapshot[STORAGE_KEYS.lastError] ?? refs.lastErrorText.textContent,
+    [STORAGE_KEYS.sentCount]: snapshot[STORAGE_KEYS.sentCount] ?? Number(refs.sentCountText.textContent || 0),
+  });
+});
+
 refs.sendButton.addEventListener("click", handleSend);
 refs.copyButton.addEventListener("click", handleCopyOnly);
+refs.autoWatchToggle.addEventListener("change", handleAutoToggle);
 refs.backendUrl.addEventListener("change", saveSettings);
 refs.restaurantToken.addEventListener("change", saveSettings);
 refs.platformSelect.addEventListener("change", saveSettings);
