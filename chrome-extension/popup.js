@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
   restaurantToken: "deliveraRestaurantToken",
   platform: "deliveraPlatform",
   autoEnabled: "deliveraAutoEnabled",
+  testMode: "deliveraTestMode",
   lastCandidate: "deliveraAutoLastCandidate",
   lastPostStatus: "deliveraAutoLastStatus",
   lastError: "deliveraAutoLastError",
@@ -17,10 +18,13 @@ const refs = {
   restaurantToken: document.getElementById("restaurantToken"),
   platformSelect: document.getElementById("platformSelect"),
   autoWatchToggle: document.getElementById("autoWatchToggle"),
+  testModeToggle: document.getElementById("testModeToggle"),
   sendButton: document.getElementById("sendButton"),
   copyButton: document.getElementById("copyButton"),
   statusText: document.getElementById("statusText"),
   detectedPlatformText: document.getElementById("detectedPlatformText"),
+  testModeCard: document.getElementById("testModeCard"),
+  testModeText: document.getElementById("testModeText"),
   lastCandidateText: document.getElementById("lastCandidateText"),
   lastPostStatus: document.getElementById("lastPostStatus"),
   lastErrorText: document.getElementById("lastErrorText"),
@@ -57,7 +61,14 @@ async function saveSettings() {
     [STORAGE_KEYS.restaurantToken]: refs.restaurantToken.value.trim(),
     [STORAGE_KEYS.platform]: refs.platformSelect.value,
     [STORAGE_KEYS.autoEnabled]: Boolean(refs.autoWatchToggle.checked),
+    [STORAGE_KEYS.testMode]: Boolean(refs.testModeToggle.checked),
   });
+}
+
+function renderTestMode(enabled) {
+  refs.testModeToggle.checked = Boolean(enabled);
+  refs.testModeCard.hidden = !enabled;
+  refs.testModeText.textContent = enabled ? "Test modu aktif" : "";
 }
 
 function renderAutoState(saved = {}) {
@@ -83,9 +94,10 @@ async function loadSettings() {
   refs.restaurantToken.value = saved[STORAGE_KEYS.restaurantToken] || "";
   refs.platformSelect.value = saved[STORAGE_KEYS.platform] || detectedPlatform;
   refs.autoWatchToggle.checked = Boolean(saved[STORAGE_KEYS.autoEnabled]);
+  renderTestMode(Boolean(saved[STORAGE_KEYS.testMode]));
   renderAutoState(saved);
 
-  if (refs.autoWatchToggle.checked && !shared.isSupportedAutoPlatform(activeTab?.url || "")) {
+  if (refs.autoWatchToggle.checked && !shared.isAllowedAutoWatchUrl(activeTab?.url || "", refs.testModeToggle.checked)) {
     setStatus("Bu sayfa desteklenen platform degil", "warn");
   }
 }
@@ -175,7 +187,7 @@ async function handleAutoToggle() {
   const token = normalizeToken(refs.restaurantToken.value);
   const backendUrl = refs.backendUrl.value.trim();
   const activeTab = await getActiveTab().catch(() => null);
-  const isSupportedPlatform = shared.isSupportedAutoPlatform(activeTab?.url || "");
+  const isSupportedPlatform = shared.isAllowedAutoWatchUrl(activeTab?.url || "", refs.testModeToggle.checked);
   renderDetectedPlatform(activeTab?.url || "");
 
   if (refs.autoWatchToggle.checked && (!token || !backendUrl)) {
@@ -202,6 +214,18 @@ async function handleAutoToggle() {
   setStatus(refs.autoWatchToggle.checked ? "Otomatik izleme acildi." : "Otomatik izleme kapatildi.", refs.autoWatchToggle.checked ? "success" : "info");
 }
 
+async function handleTestModeToggle() {
+  renderTestMode(refs.testModeToggle.checked);
+  await saveSettings();
+  if (refs.testModeToggle.checked) {
+    setStatus("Test modu aktif", "info");
+    return;
+  }
+  if (refs.autoWatchToggle.checked) {
+    await handleAutoToggle();
+  }
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") {
     return;
@@ -222,6 +246,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 refs.sendButton.addEventListener("click", handleSend);
 refs.copyButton.addEventListener("click", handleCopyOnly);
 refs.autoWatchToggle.addEventListener("change", handleAutoToggle);
+refs.testModeToggle.addEventListener("change", handleTestModeToggle);
 refs.backendUrl.addEventListener("change", saveSettings);
 refs.restaurantToken.addEventListener("change", saveSettings);
 refs.platformSelect.addEventListener("change", saveSettings);

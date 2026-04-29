@@ -42,9 +42,22 @@
       <input id="autoWatchToggle" type="checkbox">
     </label>
 
+    <label class="toggle-card">
+      <span>
+        <strong>Test Modu</strong>
+        <small>file://, localhost ve 127.0.0.1 sayfalarinda auto watcher'i ac.</small>
+      </span>
+      <input id="testModeToggle" type="checkbox">
+    </label>
+
     <section class="status-card">
       <strong>Algilanan Platform</strong>
       <p id="detectedPlatformText">Henuz yok</p>
+    </section>
+
+    <section class="status-card" id="testModeCard" hidden>
+      <strong>Test Durumu</strong>
+      <p id="testModeText">Test modu aktif</p>
     </section>
 
     <div class="button-stack">

@@ -132,6 +132,15 @@
     return detectPlatformFromUrl(url) !== "Diger";
   }
 
+  function isTestAutoPage(url = "") {
+    const value = String(url || "").toLowerCase();
+    return value.startsWith("file://") || value.includes("localhost") || value.includes("127.0.0.1");
+  }
+
+  function isAllowedAutoWatchUrl(url = "", testMode = false) {
+    return isSupportedAutoPlatform(url) || (Boolean(testMode) && isTestAutoPage(url));
+  }
+
   function simpleHash(text) {
     let hash = 5381;
     for (let index = 0; index < text.length; index += 1) {
@@ -310,6 +319,8 @@
     normalizeAddress,
     detectPlatformFromUrl,
     isSupportedAutoPlatform,
+    isTestAutoPage,
+    isAllowedAutoWatchUrl,
     simpleHash,
     analyzeOrderText,
   };

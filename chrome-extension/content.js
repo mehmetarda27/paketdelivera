@@ -10,6 +10,7 @@
     restaurantToken: "deliveraRestaurantToken",
     platform: "deliveraPlatform",
     autoEnabled: "deliveraAutoEnabled",
+    testMode: "deliveraTestMode",
     sentKeys: "deliveraSentOrderKeys",
     sentCount: "deliveraSentCount",
     duplicateCount: "deliveraAutoDuplicateCount",
@@ -168,11 +169,12 @@
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim();
     const autoEnabled = Boolean(settings[STORAGE_KEYS.autoEnabled]);
+    const testMode = Boolean(settings[STORAGE_KEYS.testMode]);
 
     if (!autoEnabled || !backendUrl || !token) {
       return;
     }
-    if (!shared.isSupportedAutoPlatform(location.href)) {
+    if (!shared.isAllowedAutoWatchUrl(location.href, testMode)) {
       console.log("unsupported platform for auto watcher");
       return;
     }
@@ -305,9 +307,10 @@
   async function syncWatcherState() {
     const settings = await getSettings();
     const enabled = Boolean(settings[STORAGE_KEYS.autoEnabled]);
+    const testMode = Boolean(settings[STORAGE_KEYS.testMode]);
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim();
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
-    const supported = shared.isSupportedAutoPlatform(location.href);
+    const supported = shared.isAllowedAutoWatchUrl(location.href, testMode);
     currentAutoEnabled = enabled && Boolean(token) && Boolean(backendUrl) && supported;
 
     if (enabled && (!token || !backendUrl)) {
