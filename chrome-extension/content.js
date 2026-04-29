@@ -197,17 +197,33 @@
     const platform = getSelectedPlatform(freshSettings);
     console.log("auto backendUrl", backendUrl || "(bos)");
     console.log("auto token exists", Boolean(token));
-    return shared.postToDelivera(
-      candidate.rawText,
-      "platform_extension_auto",
-      platform,
-      candidate.autoDedupeKey,
-      {
-        backendUrl,
-        token,
-        mode: "auto",
+
+    return new Promise((resolve, reject) => {
+      if (!hasChromeRuntime() || !chrome.runtime?.sendMessage) {
+        reject(new Error("auto: chrome.runtime.sendMessage kullanilamiyor."));
+        return;
       }
-    );
+      chrome.runtime.sendMessage({
+        type: "DELIVERA_AUTO_POST",
+        payload: {
+          rawText: candidate.rawText,
+          source: "platform_extension_auto",
+          sourcePlatform: platform,
+          dedupeKey: candidate.autoDedupeKey,
+        },
+      }, (response) => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) {
+          reject(new Error(`auto: ${runtimeError.message}`));
+          return;
+        }
+        if (!response?.ok) {
+          reject(new Error(response?.error || "auto: background post failed"));
+          return;
+        }
+        resolve(response.data);
+      });
+    });
   }
 
   async function updateLastCandidate(settings, candidate) {
@@ -300,6 +316,11 @@
       acceptedSignal: candidate.acceptedKeyword,
     });
     console.log("auto post started", candidate.autoDedupeKey);
+    console.log("content auto message sent", {
+      source: "platform_extension_auto",
+      sourcePlatform: getSelectedPlatform(settings),
+      dedupeKey: candidate.autoDedupeKey,
+    });
 
     try {
       const result = await postToDelivera(candidate, settings);

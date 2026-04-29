@@ -220,12 +220,32 @@ async function copyText(text) {
 }
 
 async function postToDelivera(rawText, source = "platform_extension", dedupeKey = "") {
-  const backendUrl = refs.backendUrl.value.trim();
-  const token = shared.normalizeToken(refs.restaurantToken.value);
-  return shared.postToDelivera(rawText, source, refs.platformSelect.value, dedupeKey, {
-    backendUrl,
-    token,
-    mode: source === "platform_extension_auto" ? "auto" : "manual",
+  await saveSettings();
+  return new Promise((resolve, reject) => {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      reject(new Error("chrome.runtime.sendMessage kullanilamiyor."));
+      return;
+    }
+    chrome.runtime.sendMessage({
+      type: "DELIVERA_MANUAL_POST",
+      payload: {
+        rawText,
+        source,
+        sourcePlatform: refs.platformSelect.value,
+        dedupeKey,
+      },
+    }, (response) => {
+      const runtimeError = chrome.runtime?.lastError;
+      if (runtimeError) {
+        reject(new Error(`manual: ${runtimeError.message}`));
+        return;
+      }
+      if (!response?.ok) {
+        reject(new Error(response?.error || "manual: background post failed"));
+        return;
+      }
+      resolve(response.data);
+    });
   });
 }
 
