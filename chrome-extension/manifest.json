@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Delivera Express Quick Push",
+  "version": "1.0.0",
+  "description": "Platform panelinden siparis metnini Delivera Express'e gonderir.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "clipboardWrite",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://paketdelivera.onrender.com/*",
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "Delivera Express",
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,105 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: #101722;
+  color: #f4f7fb;
+}
+
+.popup-shell {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.popup-head h1 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #ffb26e;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #ced8e5;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: #172131;
+  color: #f4f7fb;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 86px;
+}
+
+.button-stack {
+  display: grid;
+  gap: 10px;
+}
+
+button {
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-btn {
+  background: linear-gradient(135deg, #ff8f4d, #ff6b2c);
+  color: #fff;
+}
+
+.ghost-btn {
+  background: #223147;
+  color: #e7eef8;
+}
+
+.status-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #131c29;
+}
+
+.status-card strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+#statusText {
+  margin: 0;
+  color: #d8e3ef;
+}
+
+#statusText[data-tone="success"] {
+  color: #91f0ba;
+}
+
+#statusText[data-tone="warn"] {
+  color: #ffd38c;
+}
+
+#statusText[data-tone="error"] {
+  color: #ff9b9b;
+}

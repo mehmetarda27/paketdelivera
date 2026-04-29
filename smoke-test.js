@@ -533,6 +533,54 @@ async function run() {
     });
     await delay(1200);
 
+    const quickPasteAddress = `Mersin Akdeniz hizli yapistir teslim noktasi ${Date.now()} no 11`;
+    const quickPasteState = await request("/api/restaurant/packages", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        restaurantId: createdRestaurantRecord.id,
+        deliveryAddress: quickPasteAddress,
+        packageType: "Hizli Platform Siparisi",
+        orderAmount: 310,
+        customerName: "Hizli Musteri",
+        phone: "05551112233",
+        customerAddress: quickPasteAddress,
+        paymentMethod: "Nakit",
+        customerNote: "Zile basma",
+        source: "platform_manual",
+        status: "preparing",
+        sourcePlatform: "Hizli Yapistir",
+        rawText: "Musteri: Hizli Musteri\nTelefon: 05551112233\nAdres: " + quickPasteAddress + "\nOdeme: Nakit\nNot: Zile basma",
+      }),
+    });
+    const quickPastePackage = quickPasteState.packages.find((pkg) => pkg.deliveryAddress === quickPasteAddress);
+    if (!quickPastePackage || quickPastePackage.source !== "platform_manual") {
+      throw new Error("Hizli yapistir siparisi platform_manual olarak kaydolmadi.");
+    }
+    if (quickPastePackage.recipient !== "Hizli Musteri" || quickPastePackage.phone !== "05551112233") {
+      throw new Error("Hizli yapistir musteri alanlari kaydolmadi.");
+    }
+
+    const extensionQuickPasteAddress = `Mersin Yenişehir extension teslim noktasi ${Date.now()} no 21`;
+    const extensionQuickPasteState = await request("/api/restaurant/packages/quick-paste", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        source: "platform_extension",
+        sourcePlatform: "Yemeksepeti",
+        rawText: `Musteri: Extension Musteri\nTelefon: 05554443322\nAdres: ${extensionQuickPasteAddress}\nOdeme: Online Odeme\nToplam: 420 TL\nNot: Kapiyi calmadan ara`,
+      }),
+    });
+    if (!extensionQuickPasteState.ok || !extensionQuickPasteState.package) {
+      throw new Error("Extension quick paste endpointi paket dondurmedi.");
+    }
+    if (extensionQuickPasteState.package.source !== "platform_extension") {
+      throw new Error("Extension quick paste source alani yanlis kaydedildi.");
+    }
+    if (extensionQuickPasteState.package.customerAddress !== extensionQuickPasteAddress) {
+      throw new Error("Extension quick paste adres ayiklama basarisiz.");
+    }
+
     const courierState4 = await request("/api/admin/couriers", {
       method: "POST",
       headers: adminHeaders,

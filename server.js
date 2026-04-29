@@ -708,6 +708,131 @@ function validatePackageDraft(payload) {
   return errors;
 }
 
+function normalizeQuickPasteText(value) {
+  return String(value || "")
+    .replace(/\r/g, "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+function findQuickPasteLabeledValue(text, labels = []) {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]\\s*(.+)`, "i"));
+    if (match?.[1]) {
+      const value = match[1].split("\n")[0].trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return "";
+}
+
+function parseQuickPasteText(rawText) {
+  const text = normalizeQuickPasteText(rawText);
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const phoneMatch = text.match(/(?:\+?90\s*)?(05\d[\d\s-]{8,})/);
+  const phone = phoneMatch
+    ? phoneMatch[1].replace(/[^\d]/g, "").replace(/^90(?=5)/, "")
+    : "";
+  const customerName = findQuickPasteLabeledValue(text, ["Musteri", "Müşteri", "Ad Soyad", "Adı Soyadı", "Alici", "Alıcı"]);
+  const paymentMethod = (() => {
+    const labeled = findQuickPasteLabeledValue(text, ["Odeme", "Ödeme", "Odeme Tipi", "Ödeme Tipi"]);
+    if (labeled) {
+      return labeled;
+    }
+    if (/nakit kapida|kapida nakit|nakit/i.test(text)) {
+      return "Nakit";
+    }
+    if (/online|kart|kredi karti|kredi kartı|pos/i.test(text)) {
+      return "Online Odeme";
+    }
+    return "";
+  })();
+  const customerNote = findQuickPasteLabeledValue(text, ["Not", "Aciklama", "Açıklama", "Kurye Notu", "Musteri Notu", "Müşteri Notu"]);
+  const amountMatch = text.match(/(?:toplam|tutar|odeme|ödeme)\s*[:\-]?\s*[₺₸]?\s*([\d\.,]+)/i) || text.match(/[₺₸]\s*([\d\.,]+)/);
+  const orderAmount = amountMatch?.[1]
+    ? Number(String(amountMatch[1]).replace(/\./g, "").replace(",", "."))
+    : 0;
+  const packageType = findQuickPasteLabeledValue(text, ["Paket Tipi", "Urun", "Ürün", "Siparis", "Sipariş"]) || "Hizli Platform Siparisi";
+  const labeledAddress = findQuickPasteLabeledValue(text, ["Adres", "Teslimat Adresi", "Musteri Adresi", "Müşteri Adresi"]);
+  const longAddressLine = lines
+    .filter((line) => line.length >= 18 && !/^(telefon|odeme|ödeme|musteri|müşteri|not|aciklama|açıklama|toplam|tutar)\b/i.test(line))
+    .sort((left, right) => right.length - left.length)[0] || "";
+  const customerAddress = labeledAddress || longAddressLine;
+
+  return {
+    customerName,
+    phone,
+    customerAddress,
+    paymentMethod,
+    customerNote,
+    packageType,
+    orderAmount,
+  };
+}
+
+function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
+  const createdAt = nowIso();
+  const externalOrderId = options.externalOrderId || `MANUAL-${Date.now()}`;
+  const isQuickPasteOrder = normalizePlatformKey(draft.source) === "platform_manual" || normalizePlatformKey(draft.source) === "platform_extension";
+  const requestedStatus = normalizeStatus(draft.requestedStatus);
+  const targetStatus = isQuickPasteOrder && requestedStatus === PREPARING_STATUS
+    ? PREPARING_STATUS
+    : AWAITING_ASSIGNMENT_STATUS;
+  const targetSourcePlatform = draft.sourcePlatform || (isQuickPasteOrder ? "Hizli Yapistir" : "Dis Manuel Paket");
+  const targetPaymentMethod = draft.paymentMethod || "Panel Kaydi";
+
+  return {
+    id: uid("pkg"),
+    trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
+    restaurantId: restaurantRow.id,
+    source: isQuickPasteOrder ? (normalizePlatformKey(draft.source) === "platform_extension" ? "platform_extension" : "platform_manual") : "external_manual",
+    deliveryAddress: draft.deliveryAddress,
+    packageType: draft.packageType,
+    sourcePlatform: targetSourcePlatform,
+    externalOrderNo: externalOrderId,
+    externalOrderId,
+    recipient: draft.customerName || restaurantRow.name,
+    phone: draft.phone || "-",
+    address: draft.deliveryAddress,
+    customerAddress: draft.customerAddress || draft.deliveryAddress,
+    customerLatitude: null,
+    customerLongitude: null,
+    zone: restaurantRow.zone,
+    eta: "Planlanacak",
+    paymentMethod: targetPaymentMethod,
+    orderAmount: draft.orderAmount,
+    paymentStatus: normalizePaymentStatus("", targetPaymentMethod),
+    latitude: restaurantRow.x,
+    longitude: restaurantRow.y,
+    note: isQuickPasteOrder
+      ? `${draft.packageType} hizli siparis yapistir ile olusturuldu.${draft.rawText ? " Ham metin kaydi var." : ""}`
+      : `${draft.packageType} restoran panelinden olusturuldu.`,
+    customerNote: draft.customerNote,
+    rawPayload: draft.rawText ? { quickPasteText: draft.rawText } : null,
+    status: targetStatus,
+    assignmentStatus: "pending",
+    assignedCourierId: null,
+    assignedCourierName: null,
+    assignedAt: null,
+    acceptedAt: null,
+    onRouteAt: null,
+    deliveredAt: null,
+    failedAt: null,
+    distanceKm: null,
+    failureReason: "",
+    lastAssignmentAttemptAt: null,
+    lastAssignmentError: "",
+    assignmentReason: isQuickPasteOrder
+      ? "Hizli siparis kaydi alindi, kurye atamasi deneniyor."
+      : "Yeni manuel paket kaydi alindi.",
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 function validationError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -4745,6 +4870,15 @@ async function handleApi(req, res, pathname) {
       deliveryAddress: trimmed(body.delivery_address ?? body.deliveryAddress),
       packageType: trimmed(body.package_type ?? body.packageType),
       orderAmount: normalizeMoney(body.order_amount ?? body.orderAmount),
+      customerName: trimmed(body.customer_name ?? body.customerName),
+      phone: trimmed(body.phone),
+      customerAddress: trimmed(body.customer_address ?? body.customerAddress ?? body.delivery_address ?? body.deliveryAddress),
+      paymentMethod: trimmed(body.payment_method ?? body.paymentMethod),
+      customerNote: trimmed(body.customer_note ?? body.customerNote),
+      source: trimmed(body.source),
+      sourcePlatform: trimmed(body.source_platform ?? body.sourcePlatform),
+      rawText: trimmed(body.raw_text ?? body.rawText),
+      requestedStatus: trimmed(body.status),
     };
     const errors = validatePackageDraft(draft);
 
@@ -4758,49 +4892,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const createdAt = nowIso();
-    const externalOrderId = `MANUAL-${Date.now()}`;
-    const pkg = {
-      id: uid("pkg"),
-      trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
-      restaurantId: restaurantRow.id,
-      source: "external_manual",
-      deliveryAddress: draft.deliveryAddress,
-      packageType: draft.packageType,
-      sourcePlatform: "Dis Manuel Paket",
-      externalOrderNo: externalOrderId,
-      externalOrderId,
-      recipient: restaurantRow.name,
-      phone: "-",
-      address: draft.deliveryAddress,
-      customerAddress: draft.deliveryAddress,
-      customerLatitude: null,
-      customerLongitude: null,
-      zone: restaurantRow.zone,
-      eta: "Planlanacak",
-      paymentMethod: "Panel Kaydi",
-      orderAmount: draft.orderAmount,
-      paymentStatus: UNPAID_PAYMENT_STATUS,
-      latitude: restaurantRow.x,
-      longitude: restaurantRow.y,
-      note: `${draft.packageType} restoran panelinden olusturuldu.`,
-      status: AWAITING_ASSIGNMENT_STATUS,
-      assignmentStatus: "pending",
-      assignedCourierId: null,
-      assignedCourierName: null,
-      assignedAt: null,
-      acceptedAt: null,
-      onRouteAt: null,
-      deliveredAt: null,
-      failedAt: null,
-      distanceKm: null,
-      failureReason: "",
-      lastAssignmentAttemptAt: null,
-      lastAssignmentError: "",
-      assignmentReason: "Yeni manuel paket kaydi alindi.",
-      createdAt,
-      updatedAt: createdAt,
-    };
+    const pkg = buildRestaurantPackageRecord(restaurantRow, draft);
     createPackageRecord(pkg, pkg.packageType);
 
     rebalancePackages();
@@ -4826,6 +4918,93 @@ async function handleApi(req, res, pathname) {
       includeRestaurantSecrets: true,
       req,
     }));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/packages/quick-paste") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Hizli siparis limiti asildi." });
+      return;
+    }
+
+    const restaurantRow = db.prepare("SELECT * FROM restaurants WHERE id = ?").get(session.restaurant_id);
+    if (!restaurantRow) {
+      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      return;
+    }
+
+    const { json: body } = await readRequestBody(req);
+    const rawText = normalizeQuickPasteText(body.rawText ?? body.raw_text);
+    if (!rawText) {
+      sendJson(res, 400, { error: "rawText zorunludur." });
+      return;
+    }
+
+    const parsed = parseQuickPasteText(rawText);
+    const draft = {
+      restaurantId: session.restaurant_id,
+      deliveryAddress: parsed.customerAddress,
+      packageType: parsed.packageType,
+      orderAmount: normalizeMoney(parsed.orderAmount),
+      customerName: parsed.customerName,
+      phone: parsed.phone,
+      customerAddress: parsed.customerAddress,
+      paymentMethod: parsed.paymentMethod || "Panel Kaydi",
+      customerNote: parsed.customerNote,
+      source: "platform_extension",
+      sourcePlatform: trimmed(body.sourcePlatform ?? body.source_platform) || "Diger",
+      rawText,
+      requestedStatus: PREPARING_STATUS,
+    };
+
+    const errors = validatePackageDraft(draft);
+    if (errors.length > 0) {
+      sendJson(res, 400, {
+        error: errors.join(" "),
+        parsed,
+      });
+      return;
+    }
+
+    const pkg = buildRestaurantPackageRecord(restaurantRow, draft);
+    createPackageRecord(pkg, pkg.packageType);
+    rebalancePackages();
+
+    writeAuditLog({
+      actorRole: "restaurant",
+      actorId: session.restaurant_id,
+      action: "package_created_quick_paste_extension",
+      packageId: pkg.id,
+      restaurantId: session.restaurant_id,
+      details: {
+        externalOrderNo: pkg.externalOrderNo,
+        sourcePlatform: pkg.sourcePlatform,
+      },
+    });
+    broadcastLiveEvent({
+      type: "package-created",
+      restaurantId: session.restaurant_id,
+      message: `${pkg.sourcePlatform} uzantisindan hizli siparis alindi.`,
+    });
+
+    sendJson(res, 201, {
+      ok: true,
+      package: getPackageById(pkg.id),
+      parsed,
+      state: decorateState({
+        restaurantId: session.restaurant_id,
+        includeRestaurantSecrets: true,
+        req,
+      }),
+    });
     return;
   }
 

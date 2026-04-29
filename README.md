@@ -223,6 +223,7 @@ Restoran:
 - `POST /api/restaurant/reset-password`
 - `POST /api/restaurant/platform-accounts`
 - `POST /api/restaurant/packages`
+- `POST /api/restaurant/packages/quick-paste`
 
 Kurye:
 - `POST /api/courier/login`
@@ -258,6 +259,10 @@ Entegrasyon:
 - [OPERATIONS.md](C:/Users/LENOVO/Documents/Codex/2026-04-19-kanka-paket-takip-uygulamas-yapacaz-kuriyelere/OPERATIONS.md)
 - [ecosystem.config.cjs](C:/Users/LENOVO/Documents/Codex/2026-04-19-kanka-paket-takip-uygulamas-yapacaz-kuriyelere/ecosystem.config.cjs)
 - [deploy/nginx/delivera-express.conf](C:/Users/LENOVO/Documents/Codex/2026-04-19-kanka-paket-takip-uygulamas-yapacaz-kuriyelere/deploy/nginx/delivera-express.conf)
+
+## Chrome Extension
+
+- Kurulum ve kullanim: [chrome-extension/README.md](C:/Users/LENOVO/Documents/Codex/2026-04-19-kanka-paket-takip-uygulamas-yapacaz-kuriyelere/chrome-extension/README.md)
 
 ## Sonraki Adimlar
 

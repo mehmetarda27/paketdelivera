@@ -4,6 +4,8 @@ const RESTAURANT_ID_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_KEY = "deliveraRestaurantApiKey";
 const RESTAURANT_WORKSPACE_REFRESH_MS = 12_000;
 
+console.log("restaurant.js loaded");
+
 const restaurantState = {
   data: null,
   token: localStorage.getItem(RESTAURANT_TOKEN_KEY) || "",
@@ -58,6 +60,19 @@ const restaurantRefs = {
   integrationWizardStatus: document.getElementById("integrationWizardStatus"),
   copyWebhookButton: document.getElementById("copyWebhookButton"),
   testIntegrationButton: document.getElementById("testIntegrationButton"),
+  quickPasteButton: document.getElementById("quickPasteButton"),
+  quickPasteModal: document.getElementById("quickPasteModal"),
+  quickPasteClose: document.getElementById("quickPasteClose"),
+  quickPasteRawText: document.getElementById("quickPasteRawText"),
+  quickPasteParseButton: document.getElementById("quickPasteParseButton"),
+  quickPasteCustomerName: document.getElementById("quickPasteCustomerName"),
+  quickPastePhone: document.getElementById("quickPastePhone"),
+  quickPasteAddress: document.getElementById("quickPasteAddress"),
+  quickPastePaymentMethod: document.getElementById("quickPastePaymentMethod"),
+  quickPastePackageType: document.getElementById("quickPastePackageType"),
+  quickPasteOrderAmount: document.getElementById("quickPasteOrderAmount"),
+  quickPasteCustomerNote: document.getElementById("quickPasteCustomerNote"),
+  quickPasteCreateButton: document.getElementById("quickPasteCreateButton"),
 };
 
 function restaurantAuthHeaders() {
@@ -427,6 +442,108 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
   window.setTimeout(() => win.print(), 150);
 }
 
+function setQuickPasteModalVisible(isVisible) {
+  if (!restaurantRefs.quickPasteModal) {
+    return;
+  }
+  restaurantRefs.quickPasteModal.classList.toggle("hidden", !isVisible);
+  restaurantRefs.quickPasteModal.setAttribute("aria-hidden", isVisible ? "false" : "true");
+  if (isVisible) {
+    console.log("quick paste modal opened");
+  }
+}
+
+function normalizedPasteText(value) {
+  return String(value || "")
+    .replace(/\r/g, "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+function findLabeledValue(text, labels = []) {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]\\s*(.+)`, "i"));
+    if (match?.[1]) {
+      const value = match[1].split("\n")[0].trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return "";
+}
+
+function parseQuickPasteOrder(rawText) {
+  const text = normalizedPasteText(rawText);
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const phoneMatch = text.match(/(?:\+?90\s*)?(05\d[\d\s-]{8,})/);
+  const phone = phoneMatch
+    ? phoneMatch[1].replace(/[^\d]/g, "").replace(/^90(?=5)/, "")
+    : "";
+
+  const customerName = findLabeledValue(text, ["Musteri", "Müşteri", "Ad Soyad", "Adı Soyadı", "Alici", "Alıcı"]);
+  const paymentMethod = (() => {
+    const labeled = findLabeledValue(text, ["Odeme", "Ödeme", "Odeme Tipi", "Ödeme Tipi"]);
+    if (labeled) {
+      return labeled;
+    }
+    if (/nakit kapida|kapida nakit|nakit/i.test(text)) {
+      return "Nakit";
+    }
+    if (/online|kart|kredi karti|kredi kartı|pos/i.test(text)) {
+      return "Online Odeme";
+    }
+    return "";
+  })();
+  const customerNote = findLabeledValue(text, ["Not", "Aciklama", "Açıklama", "Kurye Notu", "Musteri Notu", "Müşteri Notu"]);
+  const amountMatch = text.match(/(?:toplam|tutar|odeme|ödeme)\s*[:\-]?\s*[₺₸]?\s*([\d\.,]+)/i) || text.match(/[₺₸]\s*([\d\.,]+)/);
+  const normalizedAmount = amountMatch?.[1]
+    ? Number(String(amountMatch[1]).replace(/\./g, "").replace(",", "."))
+    : null;
+  const packageType = findLabeledValue(text, ["Paket Tipi", "Urun", "Ürün", "Siparis", "Sipariş"]) || "Hizli Platform Siparisi";
+
+  const labeledAddress = findLabeledValue(text, ["Adres", "Teslimat Adresi", "Musteri Adresi", "Müşteri Adresi"]);
+  const longAddressLine = lines
+    .filter((line) => line.length >= 18 && !/^(telefon|odeme|ödeme|musteri|müşteri|not|aciklama|açıklama|toplam|tutar)\b/i.test(line))
+    .sort((left, right) => right.length - left.length)[0] || "";
+  const customerAddress = labeledAddress || longAddressLine;
+
+  return {
+    customerName,
+    phone,
+    customerAddress,
+    paymentMethod,
+    customerNote,
+    packageType,
+    orderAmount: Number.isFinite(normalizedAmount) && normalizedAmount > 0 ? normalizedAmount : "",
+  };
+}
+
+function fillQuickPasteFields(parsed) {
+  if (restaurantRefs.quickPasteCustomerName) {
+    restaurantRefs.quickPasteCustomerName.value = parsed.customerName || "";
+  }
+  if (restaurantRefs.quickPastePhone) {
+    restaurantRefs.quickPastePhone.value = parsed.phone || "";
+  }
+  if (restaurantRefs.quickPasteAddress) {
+    restaurantRefs.quickPasteAddress.value = parsed.customerAddress || "";
+  }
+  if (restaurantRefs.quickPastePaymentMethod) {
+    restaurantRefs.quickPastePaymentMethod.value = parsed.paymentMethod || "";
+  }
+  if (restaurantRefs.quickPasteCustomerNote) {
+    restaurantRefs.quickPasteCustomerNote.value = parsed.customerNote || "";
+  }
+  if (restaurantRefs.quickPastePackageType) {
+    restaurantRefs.quickPastePackageType.value = parsed.packageType || "";
+  }
+  if (restaurantRefs.quickPasteOrderAmount) {
+    restaurantRefs.quickPasteOrderAmount.value = parsed.orderAmount || "";
+  }
+}
+
 function getCurrentRestaurant(data) {
   return data.restaurants.find((item) => item.id === restaurantState.selectedRestaurantId) || data.restaurants[0] || null;
 }
@@ -437,6 +554,16 @@ function getCurrentPlatformAccount(data) {
 
 function activeOrderPackages(packages) {
   return packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+}
+
+function packageSourceLabel(pkg) {
+  if (pkg.source === "platform_manual") {
+    return "Hizli Yapistir";
+  }
+  if (pkg.source === "external_manual" || pkg.source === "manual") {
+    return "Manuel Paket";
+  }
+  return pkg.sourcePlatform;
 }
 
 function courierMap(data) {
@@ -687,7 +814,7 @@ function renderRecentOrders(packages) {
         <div>
           <strong>${pkg.packageType || "Standart Paket"} - ${pkg.externalOrderNo}</strong>
           <p>${pkg.restaurantName} - ${pkg.recipient}</p>
-          <p>Kaynak: ${pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform}</p>
+          <p>Kaynak: ${packageSourceLabel(pkg)}</p>
         </div>
         <span class="soft-badge">${statusLabel(pkg.status)}</span>
       </div>
@@ -727,7 +854,7 @@ function renderActiveOrders(data) {
 
   packageList.forEach((pkg) => {
     const courier = pkg.assignedCourierId ? courierById.get(pkg.assignedCourierId) : null;
-    const sourceLabel = pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform;
+    const sourceLabel = packageSourceLabel(pkg);
     const assignmentBadge = pkg.status === "pending_approval"
       ? "Restoran Onayi Bekliyor"
       : pkg.assignedCourierId
@@ -887,7 +1014,7 @@ function renderOrderHistory(packages) {
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Kaynak</span>
-          <strong>${pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform}</strong>
+          <strong>${packageSourceLabel(pkg)}</strong>
         </div>
         <div>
           <span>Kurye</span>
@@ -1137,6 +1264,94 @@ restaurantRefs.testIntegrationButton?.addEventListener("click", async () => {
   );
 });
 
+restaurantRefs.quickPasteButton?.addEventListener("click", () => {
+  setQuickPasteModalVisible(true);
+});
+
+if (restaurantRefs.quickPasteButton) {
+  console.log("quick paste button found");
+}
+
+restaurantRefs.quickPasteClose?.addEventListener("click", () => {
+  setQuickPasteModalVisible(false);
+});
+
+restaurantRefs.quickPasteModal?.addEventListener("click", (event) => {
+  if (event.target?.dataset?.modalClose === "quick-paste") {
+    setQuickPasteModalVisible(false);
+  }
+});
+
+restaurantRefs.quickPasteParseButton?.addEventListener("click", () => {
+  const parsed = parseQuickPasteOrder(restaurantRefs.quickPasteRawText?.value || "");
+  fillQuickPasteFields(parsed);
+  console.log("quick paste parsed", parsed);
+  showToast("Siparis metni ayiklandi. Eksik alan varsa duzeltebilirsin.");
+});
+
+restaurantRefs.quickPasteCreateButton?.addEventListener("click", async () => {
+  if (!restaurantState.token) {
+    showToast("Once restoran girisi yapmalisin.", "error");
+    return;
+  }
+
+  const currentRestaurant = restaurantState.data?.restaurants?.[0];
+  if (!currentRestaurant) {
+    showToast("Aktif restoran oturumu bulunamadi.", "error");
+    return;
+  }
+
+  const payload = {
+    restaurantId: currentRestaurant.id,
+    deliveryAddress: restaurantRefs.quickPasteAddress?.value || "",
+    packageType: restaurantRefs.quickPastePackageType?.value || "Hizli Platform Siparisi",
+    orderAmount: restaurantRefs.quickPasteOrderAmount?.value || "",
+    customerName: restaurantRefs.quickPasteCustomerName?.value || "",
+    phone: restaurantRefs.quickPastePhone?.value || "",
+    customerAddress: restaurantRefs.quickPasteAddress?.value || "",
+    paymentMethod: restaurantRefs.quickPastePaymentMethod?.value || "Panel Kaydi",
+    customerNote: restaurantRefs.quickPasteCustomerNote?.value || "",
+    source: "platform_manual",
+    status: "preparing",
+    sourcePlatform: "Hizli Yapistir",
+    rawText: restaurantRefs.quickPasteRawText?.value || "",
+  };
+
+  if (!payload.deliveryAddress.trim()) {
+    showToast("Musteri adresi gerekli.", "error");
+    return;
+  }
+  if (!payload.orderAmount || Number(payload.orderAmount) <= 0) {
+    showToast("Tutar bilgisi gerekli.", "error");
+    return;
+  }
+
+  const data = await api("/api/restaurant/packages", {
+    method: "POST",
+    headers: restaurantAuthHeaders(),
+    retryWithRefresh: refreshRestaurantAccess,
+    body: JSON.stringify(payload),
+  });
+  console.log("quick paste submitted", payload);
+
+  hydrateRestaurant(data);
+  setQuickPasteModalVisible(false);
+  if (restaurantRefs.quickPasteRawText) {
+    restaurantRefs.quickPasteRawText.value = "";
+  }
+  fillQuickPasteFields({
+    customerName: "",
+    phone: "",
+    customerAddress: "",
+    paymentMethod: "",
+    customerNote: "",
+    packageType: "",
+    orderAmount: "",
+  });
+  restaurantRefs.summary.textContent = `${currentRestaurant.name} icin hizli siparis olusturuldu ve kurye atamasi denendi.`;
+  showToast("Hizli siparis kaydedildi ve kurye atamasi baslatildi.");
+});
+
 restaurantRefs.logoutButton?.addEventListener("click", () => {
   if (restaurantState.refreshToken) {
     api("/api/restaurant/logout", {
@@ -1205,10 +1420,12 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
 });
 
 restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
-restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
+if (restaurantRefs.samplePaymentMethod) {
+  restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
+}
 applyRestaurantAccessFromQuery();
 simplifyPlatformAccountForm();
-restaurantRefs.samplePaymentMethod.addEventListener("change", () => {
+restaurantRefs.samplePaymentMethod?.addEventListener("change", () => {
   if (restaurantState.data) {
     setIntegrationInfo(restaurantState.data);
   }

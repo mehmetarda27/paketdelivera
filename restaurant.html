@@ -155,6 +155,13 @@
               <h3>Restoran Paketi Oluştur</h3>
             </div>
           </div>
+          <div class="quick-paste-entry">
+            <div>
+              <strong>Hizli Siparis Yapistir</strong>
+              <p>Platform ekranindaki siparisi komple yapistir, sistem musteri ve adres bilgilerini otomatik ayiklamaya calissin.</p>
+            </div>
+            <button id="quickPasteButton" class="primary-btn" type="button">Hizli Siparis Yapistir</button>
+          </div>
           <form id="packageForm" class="form-grid">
             <label>
               Restoran ID
@@ -350,6 +357,58 @@
       </section>
       </section>
     </main>
+  </div>
+  <div id="quickPasteModal" class="modal-shell hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-modal-close="quick-paste"></div>
+    <section class="modal-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="quickPasteTitle">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow accent-coral">Hizli Giris</p>
+          <h3 id="quickPasteTitle">Hizli Siparis Yapistir</h3>
+        </div>
+        <button id="quickPasteClose" class="ghost-btn" type="button">Kapat</button>
+      </div>
+      <div class="form-grid">
+        <label class="full-width">
+          Siparis Metni
+          <textarea id="quickPasteRawText" rows="8" placeholder="Getir / Trendyol / Yemeksepeti / Migros siparis metnini buraya yapistir"></textarea>
+        </label>
+        <div class="badge-row full-width">
+          <button id="quickPasteParseButton" class="ghost-btn" type="button">Otomatik Ayikla</button>
+        </div>
+        <label>
+          Musteri Adi
+          <input id="quickPasteCustomerName" type="text" placeholder="Musteri adi">
+        </label>
+        <label>
+          Telefon
+          <input id="quickPastePhone" type="text" placeholder="05XXXXXXXXX">
+        </label>
+        <label class="full-width">
+          Musteri Adresi
+          <textarea id="quickPasteAddress" rows="4" placeholder="Musteri teslimat adresi"></textarea>
+        </label>
+        <label>
+          Odeme Tipi
+          <input id="quickPastePaymentMethod" type="text" placeholder="Nakit / Online Odeme / Kart">
+        </label>
+        <label>
+          Paket Tipi
+          <input id="quickPastePackageType" type="text" placeholder="Sicak Yemek">
+        </label>
+        <label>
+          Tutar
+          <input id="quickPasteOrderAmount" type="number" step="0.01" min="0.01" placeholder="250.00">
+        </label>
+        <label class="full-width">
+          Musteri Notu
+          <textarea id="quickPasteCustomerNote" rows="3" placeholder="Kapidan ara / zile basma / kata birak"></textarea>
+        </label>
+        <div class="badge-row full-width">
+          <button id="quickPasteCreateButton" class="primary-btn" type="button">Siparisi Olustur ve Kurye Ata</button>
+        </div>
+      </div>
+    </section>
   </div>
   <script src="/shared.js"></script>
   <script src="/restaurant.js"></script>

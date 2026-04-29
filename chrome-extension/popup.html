@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delivera Express</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <div class="popup-head">
+      <p class="eyebrow">Delivera Express</p>
+      <h1>Siparişi Delivera'ya Gönder</h1>
+    </div>
+
+    <label>
+      Backend URL
+      <input id="backendUrl" type="url" value="https://paketdelivera.onrender.com" placeholder="https://paketdelivera.onrender.com">
+    </label>
+
+    <label>
+      Restaurant Token
+      <textarea id="restaurantToken" rows="3" placeholder="Bearer token veya sadece token"></textarea>
+    </label>
+
+    <label>
+      Platform
+      <select id="platformSelect">
+        <option value="Getir">Getir</option>
+        <option value="Trendyol Yemek">Trendyol Yemek</option>
+        <option value="Migros Yemek">Migros Yemek</option>
+        <option value="Yemeksepeti">Yemeksepeti</option>
+        <option value="Diger">Diğer</option>
+      </select>
+    </label>
+
+    <div class="button-stack">
+      <button id="sendButton" class="primary-btn" type="button">Siparişi Delivera'ya Gönder</button>
+      <button id="copyButton" class="ghost-btn" type="button">Sadece Kopyala</button>
+    </div>
+
+    <section class="status-card">
+      <strong>Durum</strong>
+      <p id="statusText">Hazır</p>
+    </section>
+  </main>
+  <script src="./popup.js"></script>
+</body>
+</html>

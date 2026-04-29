@@ -1251,6 +1251,56 @@ code {
   display: none !important;
 }
 
+.modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 14, 24, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.quick-paste-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 157, 66, 0.18);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 157, 66, 0.12), rgba(255, 255, 255, 0.02)),
+    rgba(10, 15, 21, 0.74);
+}
+
+.quick-paste-entry strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #fff6ef;
+}
+
+.quick-paste-entry p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
 .toast-host {
   position: fixed;
   top: 18px;
@@ -1501,6 +1551,11 @@ body.theme-restaurant {
   .role-main,
   .role-sidebar {
     padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  }
+
+  .quick-paste-entry {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .landing-strip,
