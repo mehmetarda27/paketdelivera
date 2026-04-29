@@ -22,6 +22,7 @@ const restaurantRefs = {
   summary: document.getElementById("restaurantSummary"),
   accessForm: document.getElementById("restaurantAccessForm"),
   logoutButton: document.getElementById("restaurantLogoutButton"),
+  copyExtensionTokenButton: document.getElementById("copyExtensionTokenButton"),
   createSection: document.getElementById("restaurantCreateSection"),
   workspace: document.getElementById("restaurantWorkspace"),
   platformAccountForm: document.getElementById("platformAccountForm"),
@@ -103,6 +104,37 @@ function clearRestaurantAccessInfo() {
   localStorage.removeItem(RESTAURANT_API_KEY_KEY);
 }
 
+function scanStorageForToken() {
+  const matches = [];
+  const scan = (storage, storageName) => {
+    if (!storage) {
+      return;
+    }
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      const value = key ? storage.getItem(key) : "";
+      const haystack = `${key || ""} ${value || ""}`.toLowerCase();
+      if (!/(token|auth|jwt|access)/i.test(haystack)) {
+        continue;
+      }
+      matches.push({ key, value, storageName });
+    }
+  };
+
+  scan(window.localStorage, "localStorage");
+  scan(window.sessionStorage, "sessionStorage");
+
+  return matches.sort((left, right) => {
+    if (left.key === RESTAURANT_TOKEN_KEY) {
+      return -1;
+    }
+    if (right.key === RESTAURANT_TOKEN_KEY) {
+      return 1;
+    }
+    return 0;
+  });
+}
+
 function applyRestaurantAccessFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const restaurantId = String(params.get("restaurant_id") || params.get("restaurantId") || "").trim();
@@ -139,6 +171,8 @@ function persistRestaurantAuth(auth) {
   restaurantState.refreshToken = auth.refreshToken;
   localStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
   localStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
+  sessionStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
+  sessionStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
   const currentRestaurant = auth?.state?.restaurants?.[0];
   if (currentRestaurant) {
     persistRestaurantAccessInfo({
@@ -158,6 +192,8 @@ function clearRestaurantAuth() {
   restaurantState.liveStream = null;
   localStorage.removeItem(RESTAURANT_TOKEN_KEY);
   localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
+  sessionStorage.removeItem(RESTAURANT_TOKEN_KEY);
+  sessionStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
   clearRestaurantAccessInfo();
 }
 
@@ -1350,6 +1386,26 @@ restaurantRefs.quickPasteCreateButton?.addEventListener("click", async () => {
   });
   restaurantRefs.summary.textContent = `${currentRestaurant.name} icin hizli siparis olusturuldu ve kurye atamasi denendi.`;
   showToast("Hizli siparis kaydedildi ve kurye atamasi baslatildi.");
+});
+
+restaurantRefs.copyExtensionTokenButton?.addEventListener("click", async () => {
+  const matches = scanStorageForToken().filter((item) => String(item.value || "").trim());
+  const candidate = matches[0];
+
+  if (!candidate?.value) {
+    restaurantRefs.summary.textContent = "Token bulunamadi, lutfen tekrar giris yap";
+    showToast("Token bulunamadi, lutfen tekrar giris yap", "error");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(candidate.value);
+    restaurantRefs.summary.textContent = `${candidate.storageName} icindeki ${candidate.key} panoya kopyalandi.`;
+    showToast("Extension token panoya kopyalandi.");
+  } catch {
+    restaurantRefs.summary.textContent = "Token kopyalanamadi, clipboard iznini kontrol et.";
+    showToast("Token kopyalanamadi, clipboard iznini kontrol et.", "error");
+  }
 });
 
 restaurantRefs.logoutButton?.addEventListener("click", () => {

@@ -14,7 +14,7 @@
 2. Delivera extension popup'unu ac.
 3. `Backend URL` gir:
    - `https://paketdelivera.onrender.com`
-4. Restoran panel login sonrasi aldigin `Restaurant Token` bilgisini gir.
+4. Restaurant Token alanina restoran panelindeki `deliveraRestaurantToken` degerini yapistir.
 5. Platformu sec.
 6. `Siparişi Delivera'ya Gönder` butonuna bas.
 
