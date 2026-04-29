@@ -5,12 +5,15 @@ const STORAGE_KEYS = {
   restaurantToken: "deliveraRestaurantToken",
   platform: "deliveraPlatform",
   autoEnabled: "deliveraAutoEnabled",
+  autoWatcherEnabled: "autoWatcherEnabled",
   testMode: "deliveraTestMode",
   lastCandidate: "deliveraAutoLastCandidate",
   lastPostStatus: "deliveraAutoLastStatus",
   lastError: "deliveraAutoLastError",
   sentCount: "deliveraSentCount",
   duplicateCount: "deliveraAutoDuplicateCount",
+  lastRawText: "deliveraAutoLastRawText",
+  lastDedupeKey: "deliveraAutoLastDedupeKey",
 };
 const WATCHER_BLOCK_MESSAGE = "Otomatik izleme desteklenmeyen sayfada kapali";
 const TEST_MODE_ACTIVE_MESSAGE = "Otomatik izleme acildi";
@@ -23,6 +26,7 @@ const refs = {
   testModeToggle: document.getElementById("testModeToggle"),
   sendButton: document.getElementById("sendButton"),
   copyButton: document.getElementById("copyButton"),
+  clearAutoCacheButton: document.getElementById("clearAutoCacheButton"),
   statusText: document.getElementById("statusText"),
   detectedPlatformText: document.getElementById("detectedPlatformText"),
   testModeCard: document.getElementById("testModeCard"),
@@ -105,11 +109,13 @@ async function saveStorageIfChanged(values) {
 }
 
 async function saveSettings() {
+  const autoEnabled = Boolean(refs.autoWatchToggle.checked);
   await saveStorageIfChanged({
     [STORAGE_KEYS.backendUrl]: refs.backendUrl.value.trim() || DEFAULT_BACKEND_URL,
     [STORAGE_KEYS.restaurantToken]: refs.restaurantToken.value.trim(),
     [STORAGE_KEYS.platform]: refs.platformSelect.value,
-    [STORAGE_KEYS.autoEnabled]: Boolean(refs.autoWatchToggle.checked),
+    [STORAGE_KEYS.autoEnabled]: autoEnabled,
+    [STORAGE_KEYS.autoWatcherEnabled]: autoEnabled,
     [STORAGE_KEYS.testMode]: Boolean(refs.testModeToggle.checked),
   });
 }
@@ -168,6 +174,27 @@ async function reconcilePageState(activeTab, saved) {
   if (Object.keys(nextState).length > 0) {
     await saveStorageIfChanged(nextState);
   }
+}
+
+async function clearAutoWatcherCache() {
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.sentCount,
+    STORAGE_KEYS.duplicateCount,
+    STORAGE_KEYS.lastRawText,
+    STORAGE_KEYS.lastDedupeKey,
+  ]);
+  await saveStorageIfChanged({
+    [STORAGE_KEYS.sentCount]: 0,
+    [STORAGE_KEYS.duplicateCount]: 0,
+    [STORAGE_KEYS.lastCandidate]: "Henuz yok",
+    [STORAGE_KEYS.lastPostStatus]: "Test gonderim gecmisi temizlendi",
+    [STORAGE_KEYS.lastError]: "",
+  });
+  await chrome.storage.local.set({
+    deliveraSentOrderKeys: {},
+    deliveraProcessedOrderKeys: {},
+  });
+  setStatus("Test gonderim gecmisi temizlendi", "success");
 }
 
 async function loadSettings() {
@@ -434,6 +461,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 refs.sendButton.addEventListener("click", handleSend);
 refs.copyButton.addEventListener("click", handleCopyOnly);
+refs.clearAutoCacheButton.addEventListener("click", clearAutoWatcherCache);
 refs.autoWatchToggle.addEventListener("change", handleAutoToggle);
 refs.testModeToggle.addEventListener("change", handleTestModeToggle);
 refs.backendUrl.addEventListener("change", saveSettings);

@@ -10,19 +10,24 @@
     restaurantToken: "deliveraRestaurantToken",
     platform: "deliveraPlatform",
     autoEnabled: "deliveraAutoEnabled",
+    autoWatcherEnabled: "autoWatcherEnabled",
     testMode: "deliveraTestMode",
     sentKeys: "deliveraSentOrderKeys",
+    processedKeys: "deliveraProcessedOrderKeys",
     sentCount: "deliveraSentCount",
     duplicateCount: "deliveraAutoDuplicateCount",
     lastCandidate: "deliveraAutoLastCandidate",
     lastPostStatus: "deliveraAutoLastStatus",
     lastError: "deliveraAutoLastError",
+    lastRawText: "deliveraAutoLastRawText",
+    lastDedupeKey: "deliveraAutoLastDedupeKey",
   };
   const CONTROL_STORAGE_KEYS = [
     STORAGE_KEYS.backendUrl,
     STORAGE_KEYS.restaurantToken,
     STORAGE_KEYS.platform,
     STORAGE_KEYS.autoEnabled,
+    STORAGE_KEYS.autoWatcherEnabled,
     STORAGE_KEYS.testMode,
   ];
   const AUTO_DEBOUNCE_MS = 3000;
@@ -257,9 +262,13 @@
     const settings = await getSettings();
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim();
-    const autoEnabled = Boolean(settings[STORAGE_KEYS.autoEnabled]);
+    const autoEnabled = Boolean(settings[STORAGE_KEYS.autoEnabled] ?? settings[STORAGE_KEYS.autoWatcherEnabled]);
     const testMode = Boolean(settings[STORAGE_KEYS.testMode]);
     const allowed = shared.isAllowedAutoWatchUrl(location.href, testMode);
+    console.log("auto watcher enabled value", autoEnabled);
+    console.log("test mode value", testMode);
+    console.log("current url", location.href);
+    console.log("is supported auto page result", allowed);
 
     if (!autoEnabled || !backendUrl || !token || !allowed) {
       return;
@@ -283,6 +292,9 @@
       url: location.href,
     });
     console.log("text analyzed", candidate);
+    console.log("accepted signal found", candidate.hasAcceptedSignal);
+    console.log("minimum signals passed", candidate.meetsMinimumSignal);
+    console.log("dedupe key generated", candidate.autoDedupeKey || "(bos)");
 
     if (!candidate.meetsMinimumSignal) {
       return;
@@ -303,8 +315,12 @@
     }
 
     const sentKeys = settings[STORAGE_KEYS.sentKeys] || {};
+    const processedKeys = settings[STORAGE_KEYS.processedKeys] || {};
     const duplicateCount = Number(settings[STORAGE_KEYS.duplicateCount] || 0);
-    if (sentKeys[candidate.autoDedupeKey]) {
+    const rawTextBlocked = settings[STORAGE_KEYS.lastRawText] && settings[STORAGE_KEYS.lastRawText] === candidate.rawText;
+    const dedupeBlocked = Boolean(sentKeys[candidate.autoDedupeKey] || processedKeys[candidate.autoDedupeKey] || settings[STORAGE_KEYS.lastDedupeKey] === candidate.autoDedupeKey || rawTextBlocked);
+    console.log("dedupe blocked", dedupeBlocked);
+    if (dedupeBlocked) {
       console.log("duplicate skipped", candidate.autoDedupeKey);
       await setStorageIfChanged(settings, {
         [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
@@ -320,17 +336,22 @@
       dedupeKey: candidate.autoDedupeKey,
       acceptedSignal: candidate.acceptedKeyword,
     });
+    console.log("auto post started", candidate.autoDedupeKey);
 
     try {
       const result = await postToDelivera(candidate, settings);
       sentKeys[candidate.autoDedupeKey] = new Date().toISOString();
+      processedKeys[candidate.autoDedupeKey] = new Date().toISOString();
       if (result?.duplicate) {
         console.log("duplicate skipped", candidate.autoDedupeKey);
         await setStorage({
           [STORAGE_KEYS.sentKeys]: sentKeys,
+          [STORAGE_KEYS.processedKeys]: processedKeys,
           [STORAGE_KEYS.duplicateCount]: duplicateCount + 1,
           [STORAGE_KEYS.lastPostStatus]: "Tekrar siparis engellendi",
           [STORAGE_KEYS.lastError]: "",
+          [STORAGE_KEYS.lastRawText]: candidate.rawText,
+          [STORAGE_KEYS.lastDedupeKey]: candidate.autoDedupeKey,
         });
         lastStatusWritten = "Tekrar siparis engellendi";
         lastErrorWritten = "";
@@ -341,9 +362,12 @@
       console.log("auto post success", result);
       await setStorage({
         [STORAGE_KEYS.sentKeys]: sentKeys,
+        [STORAGE_KEYS.processedKeys]: processedKeys,
         [STORAGE_KEYS.sentCount]: nextCount,
         [STORAGE_KEYS.lastPostStatus]: "Otomatik gonderim basarili",
         [STORAGE_KEYS.lastError]: "",
+        [STORAGE_KEYS.lastRawText]: candidate.rawText,
+        [STORAGE_KEYS.lastDedupeKey]: candidate.autoDedupeKey,
       });
       lastStatusWritten = "Otomatik gonderim basarili";
       lastErrorWritten = "";
@@ -376,7 +400,8 @@
       characterData: true,
     });
     console.log("watcher started");
-    scheduleAnalyze();
+    console.log("initial analyze triggered");
+    handleAutoAnalyze().catch(() => {});
   }
 
   function stopWatcher() {
@@ -393,15 +418,16 @@
 
   async function syncWatcherState() {
     const settings = await getSettings();
-    const enabled = Boolean(settings[STORAGE_KEYS.autoEnabled]);
+    const enabled = Boolean(settings[STORAGE_KEYS.autoEnabled] ?? settings[STORAGE_KEYS.autoWatcherEnabled]);
     const testMode = Boolean(settings[STORAGE_KEYS.testMode]);
     const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim();
     const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
     const supported = shared.isAllowedAutoWatchUrl(location.href, testMode);
 
+    console.log("auto watcher enabled value", enabled);
     console.log("current url", location.href);
     console.log("testMode value", testMode);
-    console.log("supported platform result", supported);
+    console.log("is supported auto page result", supported);
 
     currentAutoEnabled = enabled && Boolean(token) && Boolean(backendUrl) && supported;
 
