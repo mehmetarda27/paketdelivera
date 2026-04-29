@@ -42,6 +42,22 @@
   let lastStatusWritten = "";
   let lastErrorWritten = "";
 
+  function getChromeStorage() {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      return chrome.storage.local;
+    }
+    console.log("chrome.storage not available in this context");
+    return null;
+  }
+
+  function hasChromeStorageOnChanged() {
+    return typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged;
+  }
+
+  function hasChromeRuntime() {
+    return typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage;
+  }
+
   function normalizeText(value) {
     return shared.normalizeText(value);
   }
@@ -130,11 +146,19 @@
   }
 
   async function getSettings() {
-    return chrome.storage.local.get(Object.values(STORAGE_KEYS));
+    const storage = getChromeStorage();
+    if (!storage) {
+      return {};
+    }
+    return storage.get(Object.values(STORAGE_KEYS));
   }
 
   async function setStorage(values) {
-    return chrome.storage.local.set(values);
+    const storage = getChromeStorage();
+    if (!storage) {
+      return;
+    }
+    return storage.set(values);
   }
 
   async function setStorageIfChanged(currentSettings, values) {
@@ -387,34 +411,40 @@
     }
   }
 
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") {
-      return;
-    }
-    const hasControlChange = CONTROL_STORAGE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(changes, key));
-    if (hasControlChange) {
-      syncWatcherState().catch(() => {});
-    }
-  });
+  if (hasChromeStorageOnChanged()) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") {
+        return;
+      }
+      const hasControlChange = CONTROL_STORAGE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(changes, key));
+      if (hasControlChange) {
+        syncWatcherState().catch(() => {});
+      }
+    });
+  } else {
+    console.log("chrome.storage not available in this context");
+  }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "DELIVERA_EXTRACT_ORDER") {
-      return false;
-    }
+  if (hasChromeRuntime()) {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message?.type !== "DELIVERA_EXTRACT_ORDER") {
+        return false;
+      }
 
-    try {
-      const candidate = shared.analyzeOrderText({
-        rawText: collectVisibleText(),
-        statusText: collectStatusText(),
-        url: location.href,
-      });
-      console.log("text analyzed", candidate);
-      sendResponse({ ok: true, ...candidate, url: location.href, title: document.title || "" });
-    } catch (error) {
-      sendResponse({ ok: false, error: error.message || "Metin okunamadi." });
-    }
-    return true;
-  });
+      try {
+        const candidate = shared.analyzeOrderText({
+          rawText: collectVisibleText(),
+          statusText: collectStatusText(),
+          url: location.href,
+        });
+        console.log("text analyzed", candidate);
+        sendResponse({ ok: true, ...candidate, url: location.href, title: document.title || "" });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message || "Metin okunamadi." });
+      }
+      return true;
+    });
+  }
 
   syncWatcherState().catch(() => {});
 })();
