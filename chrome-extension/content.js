@@ -324,6 +324,11 @@
         [STORAGE_KEYS.lastError]: "Bu sayfa desteklenen platform degil",
         [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme desteklenmeyen sayfada kapali",
       });
+    } else if (enabled && supported) {
+      await setStorageIfChanged(settings, {
+        [STORAGE_KEYS.lastError]: "",
+        [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme acildi.",
+      });
     }
 
     if (currentAutoEnabled) {

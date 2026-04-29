@@ -215,9 +215,17 @@ async function handleAutoToggle() {
 }
 
 async function handleTestModeToggle() {
+  const activeTab = await getActiveTab().catch(() => null);
+  const isAllowedInCurrentPage = shared.isAllowedAutoWatchUrl(activeTab?.url || "", refs.testModeToggle.checked);
   renderTestMode(refs.testModeToggle.checked);
   await saveSettings();
   if (refs.testModeToggle.checked) {
+    if (refs.autoWatchToggle.checked && isAllowedInCurrentPage) {
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.lastError]: "",
+        [STORAGE_KEYS.lastPostStatus]: "Otomatik izleme acildi.",
+      });
+    }
     setStatus("Test modu aktif", "info");
     return;
   }
