@@ -141,6 +141,44 @@
     return isSupportedAutoPlatform(url) || (Boolean(testMode) && isTestAutoPage(url));
   }
 
+  function buildQuickPasteUrl(backendUrl = "") {
+    return `${String(backendUrl || "").trim().replace(/\/+$/, "")}/api/restaurant/packages/quick-paste`;
+  }
+
+  function shortenText(value, maxLength = 180) {
+    const normalized = flattenText(value);
+    if (!normalized) {
+      return "";
+    }
+    if (normalized.length <= maxLength) {
+      return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+  }
+
+  function buildFetchErrorDetails(details = {}) {
+    const backendUrl = String(details.backendUrl || "").trim();
+    const endpoint = "/api/restaurant/packages/quick-paste";
+    const requestUrl = String(details.requestUrl || buildQuickPasteUrl(backendUrl));
+    const token = String(details.token || "").trim();
+    const status = details.status ? `status=${details.status}` : "status=yok";
+    const responseBody = shortenText(details.responseBody || "", 160);
+    const exceptionMessage = details.exceptionMessage || details.message || "Bilinmeyen fetch hatasi";
+    const lines = [
+      `backendUrl=${backendUrl || "(bos)"}`,
+      `endpoint=${endpoint}`,
+      `requestUrl=${requestUrl || "(bos)"}`,
+      `tokenVarMi=${token ? "evet" : "hayir"}`,
+      status,
+    ];
+    if (responseBody) {
+      lines.push(`response=${responseBody}`);
+    }
+    lines.push("not=CORS veya network hatasi olabilir");
+    lines.push(`exception=${exceptionMessage}`);
+    return lines.join(" | ");
+  }
+
   function simpleHash(text) {
     let hash = 5381;
     for (let index = 0; index < text.length; index += 1) {
@@ -321,6 +359,9 @@
     isSupportedAutoPlatform,
     isTestAutoPage,
     isAllowedAutoWatchUrl,
+    buildQuickPasteUrl,
+    shortenText,
+    buildFetchErrorDetails,
     simpleHash,
     analyzeOrderText,
   };
