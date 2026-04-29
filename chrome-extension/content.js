@@ -166,85 +166,24 @@
     return manualPlatform || shared.detectPlatformFromUrl(location.href);
   }
 
-  async function readResponseBodySafe(response) {
-    try {
-      return await response.text();
-    } catch {
-      return "";
-    }
-  }
-
-  function buildFetchErrorDetails(backendUrl, token, requestUrl, responseBody, status, error) {
-    const detail = shared.buildFetchErrorDetails({
-      backendUrl,
-      requestUrl,
-      token,
-      status,
-      responseBody,
-      exceptionMessage: error?.message || String(error || ""),
-    });
-    console.log("fetch error details", detail);
-    return detail;
-  }
-
   async function postToDelivera(candidate, settings) {
-    const backendUrl = String(settings[STORAGE_KEYS.backendUrl] || "").trim();
-    const token = String(settings[STORAGE_KEYS.restaurantToken] || "").trim().replace(/^Bearer\s+/i, "");
-    const platform = getSelectedPlatform(settings);
-
-    if (!backendUrl) {
-      throw new Error("Backend URL gerekli");
-    }
-    if (!token) {
-      throw new Error("Restaurant Token gerekli");
-    }
-
-    const requestUrl = shared.buildQuickPasteUrl(backendUrl);
-    const payload = {
-      source: "platform_extension_auto",
-      sourcePlatform: platform,
-      rawText: candidate.rawText,
-      dedupeKey: candidate.autoDedupeKey,
-    };
-
-    console.log("auto posting to Delivera", { platform, dedupeKey: candidate.autoDedupeKey });
-    console.log("post url", requestUrl);
-
-    try {
-      const response = await fetch(requestUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      const responseBody = await readResponseBodySafe(response);
-      let data = {};
-      try {
-        data = responseBody ? JSON.parse(responseBody) : {};
-      } catch {
-        data = {};
+    const freshSettings = await getSettings();
+    const backendUrl = String(freshSettings[STORAGE_KEYS.backendUrl] || "").trim();
+    const token = shared.normalizeToken(freshSettings[STORAGE_KEYS.restaurantToken] || "");
+    const platform = getSelectedPlatform(freshSettings);
+    console.log("auto backendUrl", backendUrl || "(bos)");
+    console.log("auto token exists", Boolean(token));
+    return shared.postToDelivera(
+      candidate.rawText,
+      "platform_extension_auto",
+      platform,
+      candidate.autoDedupeKey,
+      {
+        backendUrl,
+        token,
+        mode: "auto",
       }
-      if (!response.ok) {
-        throw new Error(buildFetchErrorDetails(
-          backendUrl,
-          token,
-          requestUrl,
-          responseBody || data.error || "",
-          response.status,
-          new Error(data.error || `HTTP ${response.status}`)
-        ));
-      }
-      console.log("post success", data);
-      return data;
-    } catch (error) {
-      const detail = error?.message?.includes("backendUrl=")
-        ? error.message
-        : buildFetchErrorDetails(backendUrl, token, requestUrl, "", "", error);
-      console.log("post failed", detail);
-      throw new Error(detail);
-    }
+    );
   }
 
   async function updateLastCandidate(settings, candidate) {

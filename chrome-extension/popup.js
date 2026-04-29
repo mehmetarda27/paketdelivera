@@ -75,14 +75,6 @@ function setStatus(message, tone = "info") {
   }
 }
 
-function normalizeToken(value) {
-  const token = String(value || "").trim();
-  if (!token) {
-    return "";
-  }
-  return token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token;
-}
-
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) {
@@ -227,89 +219,14 @@ async function copyText(text) {
   await navigator.clipboard.writeText(text);
 }
 
-async function readResponseBodySafe(response) {
-  try {
-    return await response.text();
-  } catch {
-    return "";
-  }
-}
-
-function buildPopupFetchError({ backendUrl, requestUrl, token, status, responseBody, error }) {
-  const detail = shared.buildFetchErrorDetails({
-    backendUrl,
-    requestUrl,
-    token,
-    status,
-    responseBody,
-    exceptionMessage: error?.message || String(error || ""),
-  });
-  console.log("fetch error details", detail);
-  return detail;
-}
-
 async function postToDelivera(rawText, source = "platform_extension", dedupeKey = "") {
   const backendUrl = refs.backendUrl.value.trim();
-  const token = normalizeToken(refs.restaurantToken.value);
-  if (!backendUrl) {
-    throw new Error("Backend URL gerekli");
-  }
-  if (!token) {
-    throw new Error("Restaurant Token gerekli");
-  }
-
-  const requestUrl = shared.buildQuickPasteUrl(backendUrl);
-  const payload = {
-    source,
-    sourcePlatform: refs.platformSelect.value,
-    rawText,
-    ...(dedupeKey ? { dedupeKey } : {}),
-  };
-
-  console.log(source === "platform_extension_auto" ? "auto posting to Delivera" : "manual posting to Delivera", payload);
-  console.log("post url", requestUrl);
-
-  try {
-    const response = await fetch(requestUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const responseBody = await readResponseBodySafe(response);
-    let data = {};
-    try {
-      data = responseBody ? JSON.parse(responseBody) : {};
-    } catch {
-      data = {};
-    }
-    if (!response.ok) {
-      throw new Error(buildPopupFetchError({
-        backendUrl,
-        requestUrl,
-        token,
-        status: response.status,
-        responseBody: responseBody || data.error || "",
-        error: new Error(data.error || `HTTP ${response.status}`),
-      }));
-    }
-    console.log("post success", data);
-    return data;
-  } catch (error) {
-    const enrichedMessage = error?.message?.includes("backendUrl=")
-      ? error.message
-      : buildPopupFetchError({
-          backendUrl,
-          requestUrl,
-          token,
-          responseBody: "",
-          error,
-        });
-    console.log("post failed", enrichedMessage);
-    throw new Error(enrichedMessage);
-  }
+  const token = shared.normalizeToken(refs.restaurantToken.value);
+  return shared.postToDelivera(rawText, source, refs.platformSelect.value, dedupeKey, {
+    backendUrl,
+    token,
+    mode: source === "platform_extension_auto" ? "auto" : "manual",
+  });
 }
 
 async function handleSend() {
@@ -356,7 +273,7 @@ async function handleCopyOnly() {
 }
 
 async function handleAutoToggle() {
-  const token = normalizeToken(refs.restaurantToken.value);
+  const token = shared.normalizeToken(refs.restaurantToken.value);
   const backendUrl = refs.backendUrl.value.trim();
   const activeTab = await getActiveTab().catch(() => null);
   const currentUrl = activeTab?.url || "";

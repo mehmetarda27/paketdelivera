@@ -145,6 +145,14 @@
     return `${String(backendUrl || "").trim().replace(/\/+$/, "")}/api/restaurant/packages/quick-paste`;
   }
 
+  function normalizeToken(value) {
+    const token = String(value || "").trim();
+    if (!token) {
+      return "";
+    }
+    return token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token;
+  }
+
   function shortenText(value, maxLength = 180) {
     const normalized = flattenText(value);
     if (!normalized) {
@@ -177,6 +185,83 @@
     lines.push("not=CORS veya network hatasi olabilir");
     lines.push(`exception=${exceptionMessage}`);
     return lines.join(" | ");
+  }
+
+  async function readResponseBodySafe(response) {
+    try {
+      return await response.text();
+    } catch {
+      return "";
+    }
+  }
+
+  async function postToDelivera(rawText, source, sourcePlatform, dedupeKey = "", options = {}) {
+    const backendUrl = String(options.backendUrl || "").trim();
+    const token = normalizeToken(options.token || "");
+    const requestUrl = buildQuickPasteUrl(backendUrl);
+    const mode = options.mode || "manual";
+
+    if (!backendUrl) {
+      throw new Error("Backend URL gerekli");
+    }
+    if (!token) {
+      throw new Error("Restaurant Token gerekli");
+    }
+
+    const payload = {
+      source,
+      sourcePlatform: sourcePlatform || "Diger",
+      rawText,
+      ...(dedupeKey ? { dedupeKey } : {}),
+    };
+
+    console.log(mode === "auto" ? "auto posting to Delivera" : "manual posting to Delivera", payload);
+    console.log("post url", requestUrl);
+    console.log(`${mode} backendUrl`, backendUrl);
+    console.log(`${mode} token exists`, Boolean(token));
+
+    try {
+      const response = await fetch(requestUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const responseBody = await readResponseBodySafe(response);
+      let data = {};
+      try {
+        data = responseBody ? JSON.parse(responseBody) : {};
+      } catch {
+        data = {};
+      }
+      if (!response.ok) {
+        throw new Error(buildFetchErrorDetails({
+          backendUrl,
+          requestUrl,
+          token,
+          status: response.status,
+          responseBody: responseBody || data.error || "",
+          exceptionMessage: `${mode}: ${data.error || `HTTP ${response.status}`}`,
+        }));
+      }
+      console.log("post success", { mode, data });
+      return data;
+    } catch (error) {
+      const detail = error?.message?.includes("backendUrl=")
+        ? error.message
+        : buildFetchErrorDetails({
+            backendUrl,
+            requestUrl,
+            token,
+            responseBody: "",
+            exceptionMessage: `${mode}: ${error?.message || String(error || "")}`,
+          });
+      console.log("post failed", detail);
+      console.log("fetch error details", detail);
+      throw new Error(detail);
+    }
   }
 
   function simpleHash(text) {
@@ -360,8 +445,10 @@
     isTestAutoPage,
     isAllowedAutoWatchUrl,
     buildQuickPasteUrl,
+    normalizeToken,
     shortenText,
     buildFetchErrorDetails,
+    postToDelivera,
     simpleHash,
     analyzeOrderText,
   };
