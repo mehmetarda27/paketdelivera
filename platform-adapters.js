@@ -241,6 +241,23 @@ const platformAdapters = {
       rawPayload: rawBody,
     };
   }),
+  pos: createAdapter("pos", (rawBody) => {
+    const order = rawBody.order || rawBody;
+    return {
+      ...baseNormalizeOrder("pos", rawBody),
+      platformRestaurantId: trimmed(rawBody.platformRestaurantId ?? order.posStoreId ?? order.storeId ?? order.restaurantId),
+      orderId: trimmed(rawBody.orderId ?? order.receiptNo ?? order.ticketNo ?? order.id),
+      customerName: trimmed(rawBody.customerName ?? order.customerName ?? order.customer?.name) || "POS Musteri",
+      phone: trimmed(rawBody.phone ?? order.phone ?? order.customer?.phone) || "Gizli Numara",
+      address: trimmed(rawBody.address ?? order.address ?? order.deliveryAddress) || "POS siparis adresi",
+      totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.amount ?? order.total),
+      paymentMethod: trimmed(rawBody.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || "POS",
+      customerNote: trimmed(rawBody.customerNote ?? order.note ?? order.customerNote),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address ?? order.deliveryAddress),
+      items: normalizeItems(rawBody.items ?? order.items ?? order.lines),
+      rawPayload: rawBody,
+    };
+  }),
 };
 
 function getPlatformAdapter(platform) {

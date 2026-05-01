@@ -5,6 +5,13 @@ const crypto = require("crypto");
 const { URL } = require("url");
 const { DatabaseSync } = require("node:sqlite");
 const { getPlatformAdapter, normalizePlatformKey } = require("./platform-adapters");
+const platformConnectors = {
+  "Trendyol Go": require("./connectors/trendyol"),
+  GetirYemek: require("./connectors/getir"),
+  "Migros Yemek": require("./connectors/migros"),
+  Yemeksepeti: require("./connectors/yemeksepeti"),
+  POS: require("./connectors/pos"),
+};
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = path.resolve(process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
@@ -31,12 +38,13 @@ const RATE_LIMITS = {
 };
 
 const DEFAULT_ZONES = ["Akdeniz", "Yenisehir", "Mezitli", "Toroslar", "Tarsus", "Erdemli"];
-const SUPPORTED_PLATFORMS = ["Trendyol Go", "GetirYemek", "Yemeksepeti", "Migros Yemek"];
+const SUPPORTED_PLATFORMS = ["Trendyol Go", "GetirYemek", "Yemeksepeti", "Migros Yemek", "POS"];
 const PLATFORM_SLUGS = {
   "Trendyol Go": "trendyol-go",
   GetirYemek: "getiryemek",
   Yemeksepeti: "yemeksepeti",
   "Migros Yemek": "migros-yemek",
+  POS: "pos",
 };
 const PLATFORM_WEBHOOK_AUTH_TYPES = {
   API_KEY: "api_key",
@@ -91,6 +99,8 @@ const STATUS_TRANSITIONS = {
   [REJECTED_STATUS]: [],
   [CANCELED_STATUS]: [],
 };
+const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 10_000);
+const PLATFORM_ORDER_STATUSES = new Set(["pending_approval", "approved", "assigned", "completed", "cancelled"]);
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
 const LEGACY_STATUS_MAP = {
   "Kurye Bekleniyor": AWAITING_ASSIGNMENT_STATUS,
@@ -296,12 +306,14 @@ db.exec(`
     id TEXT PRIMARY KEY,
     restaurant_id TEXT NOT NULL,
     platform TEXT NOT NULL,
+    external_id TEXT,
     external_store_id TEXT NOT NULL,
     external_merchant_id TEXT,
     api_username TEXT,
     api_password TEXT,
     api_key TEXT,
     api_secret TEXT,
+    token TEXT,
     store_front_code TEXT,
     chain_id TEXT,
     vendor_id TEXT,
@@ -310,6 +322,11 @@ db.exec(`
     webhook_username TEXT,
     webhook_password TEXT,
     static_token TEXT,
+    webhook_secret TEXT,
+    integration_reference_code TEXT,
+    pos_secret_key TEXT,
+    is_active INTEGER,
+    last_sync_at TEXT,
     webhook_id TEXT,
     settings_json TEXT NOT NULL,
     verification_status TEXT NOT NULL DEFAULT 'pending',
@@ -320,6 +337,24 @@ db.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS platform_orders (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    platform_order_id TEXT NOT NULL,
+    restaurant_id TEXT NOT NULL,
+    customer_name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    address TEXT NOT NULL,
+    total_price REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_approval',
+    raw_payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(platform, platform_order_id, restaurant_id),
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
   );
 
@@ -546,6 +581,9 @@ if (!restaurantColumns.includes("password_salt")) {
 }
 
 const platformAccountColumns = db.prepare("PRAGMA table_info(platform_accounts)").all().map((row) => row.name);
+if (!platformAccountColumns.includes("external_id")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN external_id TEXT");
+}
 if (!platformAccountColumns.includes("verification_status")) {
   db.exec("ALTER TABLE platform_accounts ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'pending'");
 }
@@ -579,6 +617,26 @@ if (!platformAccountColumns.includes("auth_type")) {
 if (!platformAccountColumns.includes("webhook_secret")) {
   db.exec("ALTER TABLE platform_accounts ADD COLUMN webhook_secret TEXT");
 }
+if (!platformAccountColumns.includes("token")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN token TEXT");
+}
+if (!platformAccountColumns.includes("integration_reference_code")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN integration_reference_code TEXT");
+}
+if (!platformAccountColumns.includes("pos_secret_key")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN pos_secret_key TEXT");
+}
+if (!platformAccountColumns.includes("is_active")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN is_active INTEGER");
+}
+if (!platformAccountColumns.includes("last_sync_at")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN last_sync_at TEXT");
+}
+
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_orders_unique
+  ON platform_orders (platform, platform_order_id, restaurant_id);
+`);
 
 const zoneInsert = db.prepare("INSERT OR IGNORE INTO zones (name) VALUES (?)");
 DEFAULT_ZONES.forEach((zone) => zoneInsert.run(zone));
@@ -918,23 +976,25 @@ function validatePlatformAccountDraft(body) {
     throw validationError("Platform store/vendor kimligi zorunludur.");
   }
 
-  if (!webhookSecret) {
-    throw validationError("Webhook secret zorunludur.");
-  }
+  const normalizedWebhookSecret = webhookSecret || createWebhookSecret();
 
   return {
     restaurantId,
     platform,
     externalStoreId,
+    externalId: externalStoreId,
     externalMerchantId: trimmed(body.externalMerchantId ?? body.external_merchant_id),
     apiUsername: trimmed(body.apiUsername),
     apiPassword: String(body.apiPassword || ""),
     apiKey: trimmed(body.apiKey),
     apiSecret: trimmed(body.apiSecret),
-    accessToken: trimmed(body.accessToken),
+    accessToken: trimmed(body.accessToken ?? body.token),
+    token: trimmed(body.token ?? body.accessToken),
     refreshToken: trimmed(body.refreshToken),
     tokenExpiresAt: trimmed(body.tokenExpiresAt),
     callbackUrl: trimmed(body.callbackUrl),
+    integrationReferenceCode: trimmed(body.integrationReferenceCode ?? body.integration_reference_code),
+    posSecretKey: trimmed(body.posSecretKey ?? body.pos_secret_key),
     storeFrontCode: trimmed(body.storeFrontCode),
     chainId: trimmed(body.chainId),
     vendorId: trimmed(body.vendorId),
@@ -943,8 +1003,8 @@ function validatePlatformAccountDraft(body) {
     webhookApiKey: "",
     webhookUsername: "",
     webhookPassword: "",
-    staticToken: webhookSecret,
-    webhookSecret,
+    staticToken: normalizedWebhookSecret,
+    webhookSecret: normalizedWebhookSecret,
     active: body.active !== false,
     settings: {},
   };
@@ -1386,25 +1446,42 @@ function sanitizeRestaurant(restaurant, includeSecrets = false) {
   return publicRestaurant;
 }
 
+function maskSecret(value) {
+  const secret = trimmed(value);
+  if (!secret) {
+    return "";
+  }
+  if (secret.length <= 6) {
+    return "****";
+  }
+  return `${secret.slice(0, 2)}****${secret.slice(-2)}`;
+}
+
 function sanitizePlatformAccount(account, includeSecrets = false) {
   const safeAccount = {
     id: account.id,
     restaurantId: account.restaurantId,
     platform: account.platform,
     platformSlug: platformSlug(account.platform),
+    externalId: account.externalId,
     externalStoreId: account.externalStoreId,
     externalMerchantId: account.externalMerchantId,
     apiUsername: account.apiUsername,
-    apiKey: account.apiKey,
+    hasApiKey: Boolean(account.apiKey),
+    hasApiSecret: Boolean(account.apiSecret),
+    hasToken: Boolean(account.token || account.accessToken),
+    hasPosSecretKey: Boolean(account.posSecretKey),
     storeFrontCode: account.storeFrontCode,
     chainId: account.chainId,
     vendorId: account.vendorId,
+    integrationReferenceCode: account.integrationReferenceCode,
     webhookAuthType: account.webhookAuthType,
     authType: account.authType || account.webhookAuthType,
     callbackUrl: account.callbackUrl || "",
     webhookId: account.webhookId,
     settings: account.settings,
     active: account.active,
+    lastSyncAt: account.lastSyncAt,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
@@ -1415,16 +1492,13 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
 
   return {
     ...safeAccount,
-    apiPassword: account.apiPassword,
-    apiSecret: account.apiSecret,
-    accessToken: account.accessToken,
-    refreshToken: account.refreshToken,
+    hasApiPassword: Boolean(account.apiPassword),
     tokenExpiresAt: account.tokenExpiresAt,
-    webhookApiKey: account.webhookApiKey,
     webhookUsername: account.webhookUsername,
-    webhookPassword: account.webhookPassword,
-    staticToken: account.staticToken,
-    webhookSecret: account.webhookSecret,
+    hasWebhookPassword: Boolean(account.webhookPassword),
+    hasStaticToken: Boolean(account.staticToken),
+    hasWebhookSecret: Boolean(account.webhookSecret),
+    hasRefreshToken: Boolean(account.refreshToken),
     verificationStatus: account.verificationStatus,
     verificationNote: account.verificationNote,
     lastVerificationAt: account.lastVerificationAt,
@@ -1830,16 +1904,20 @@ function getPlatformAccounts(filter = {}) {
     id: row.id,
     restaurantId: row.restaurant_id,
     platform: row.platform,
+    externalId: row.external_id || row.external_store_id,
     externalStoreId: row.external_store_id,
     externalMerchantId: row.external_merchant_id,
     apiUsername: row.api_username,
     apiPassword: row.api_password,
     apiKey: row.api_key,
     apiSecret: row.api_secret,
-    accessToken: row.access_token,
+    token: row.token || row.access_token,
+    accessToken: row.access_token || row.token,
     refreshToken: row.refresh_token,
     tokenExpiresAt: row.token_expires_at,
     callbackUrl: row.callback_url,
+    integrationReferenceCode: row.integration_reference_code || "",
+    posSecretKey: row.pos_secret_key || "",
     authType: row.auth_type || row.webhook_auth_type,
     storeFrontCode: row.store_front_code,
     chainId: row.chain_id,
@@ -1857,10 +1935,113 @@ function getPlatformAccounts(filter = {}) {
     lastVerificationAt: row.last_verification_at,
     verifiedAt: row.verified_at,
     lastValidationMode: row.last_validation_mode,
-    active: Boolean(row.active),
+    active: row.is_active === null || row.is_active === undefined ? Boolean(row.active) : Boolean(row.is_active),
+    lastSyncAt: row.last_sync_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+function getPlatformOrders(filter = {}) {
+  const rows = filter.restaurantId
+    ? db.prepare("SELECT * FROM platform_orders WHERE restaurant_id = ? ORDER BY datetime(created_at) DESC LIMIT 100").all(filter.restaurantId)
+    : db.prepare("SELECT * FROM platform_orders ORDER BY datetime(created_at) DESC LIMIT 100").all();
+
+  return rows.map((row) => ({
+    id: row.id,
+    platform: row.platform,
+    platformOrderId: row.platform_order_id,
+    restaurantId: row.restaurant_id,
+    customerName: row.customer_name,
+    phone: row.phone,
+    address: row.address,
+    totalPrice: Number(row.total_price || 0),
+    note: row.note || "",
+    status: row.status,
+    rawPayload: parseJson(row.raw_payload, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function normalizePlatformOrderStatus(status) {
+  const normalized = trimmed(status) || "pending_approval";
+  return PLATFORM_ORDER_STATUSES.has(normalized) ? normalized : "pending_approval";
+}
+
+function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approval") {
+  const platform = normalizePlatformInput(order.platform) || order.platform;
+  const platformOrderId = trimmed(order.orderId || order.platformOrderId || order.externalOrderNo);
+  if (!platform || !platformOrderId || !restaurantId) {
+    return null;
+  }
+
+  const stamp = nowIso();
+  const existing = db.prepare(`
+    SELECT id FROM platform_orders
+    WHERE platform = ? AND platform_order_id = ? AND restaurant_id = ?
+  `).get(platform, platformOrderId, restaurantId);
+
+  if (existing) {
+    db.prepare(`
+      UPDATE platform_orders
+      SET customer_name = ?, phone = ?, address = ?, total_price = ?, note = ?, status = ?, raw_payload = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      trimmed(order.customerName) || "Musteri",
+      trimmed(order.phone) || "Gizli Numara",
+      trimmed(order.address || order.customerAddress) || "Adres yok",
+      normalizeMoney(order.totalPrice ?? order.orderAmount),
+      trimmed(order.customerNote || order.note),
+      normalizePlatformOrderStatus(status),
+      json(order.rawPayload || order),
+      stamp,
+      existing.id
+    );
+    return existing.id;
+  }
+
+  const id = uid("po");
+  db.prepare(`
+    INSERT INTO platform_orders (
+      id, platform, platform_order_id, restaurant_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    platform,
+    platformOrderId,
+    restaurantId,
+    trimmed(order.customerName) || "Musteri",
+    trimmed(order.phone) || "Gizli Numara",
+    trimmed(order.address || order.customerAddress) || "Adres yok",
+    normalizeMoney(order.totalPrice ?? order.orderAmount),
+    trimmed(order.customerNote || order.note),
+    normalizePlatformOrderStatus(status),
+    json(order.rawPayload || order),
+    stamp,
+    stamp
+  );
+  return id;
+}
+
+function updatePlatformOrderStatus(platform, platformOrderId, restaurantId, status) {
+  if (!platform || !platformOrderId || !restaurantId) {
+    return;
+  }
+  db.prepare(`
+    UPDATE platform_orders
+    SET status = ?, updated_at = ?
+    WHERE platform = ? AND platform_order_id = ? AND restaurant_id = ?
+  `).run(normalizePlatformOrderStatus(status), nowIso(), platform, platformOrderId, restaurantId);
+}
+
+function updatePlatformOrderStatusByPackage(pkg, status) {
+  updatePlatformOrderStatus(
+    pkg?.source_platform || pkg?.sourcePlatform,
+    pkg?.external_order_id || pkg?.externalOrderId || pkg?.external_order_no || pkg?.externalOrderNo,
+    pkg?.restaurant_id || pkg?.restaurantId,
+    status
+  );
 }
 
 function readRequestBody(req) {
@@ -2376,17 +2557,17 @@ function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
     currentPlatform: current?.platform || "",
     verificationStatus: current?.verificationStatus || PLATFORM_VERIFICATION_STATUS.PENDING,
     webhookUrl: current
-      ? `${requestBaseUrl(req)}/api/platforms/${current.platformSlug}/webhook`
-      : "Platform hesabini kaydedince webhook URL hazir olur.",
+      ? "API polling aktif: /integration/order/sellers/{sellerId}/orders"
+      : "Platform hesabini kaydedince API polling testi hazir olur.",
     steps: [
       { id: "select_platform", title: "Adim 1", label: "Platform sec", done: Boolean(current?.platform) },
       { id: "credentials", title: "Adim 2", label: "Gerekli bilgileri gir", done: Boolean(current?.externalStoreId) },
-      { id: "copy_webhook", title: "Adim 3", label: "Webhook kopyala", done: Boolean(current?.id) },
+      { id: "test_api", title: "Adim 3", label: "API baglantisini test et", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
       { id: "test", title: "Adim 4", label: "Baglantiyi test et", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
       { id: "success", title: "Adim 5", label: "Baglanti basarili", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
     ],
     helpText: restaurant
-      ? `${restaurant.name} icin platform sec, kimlik bilgilerini kaydet, webhook adresini platform paneline gir ve test et.`
+      ? `${restaurant.name} icin platform sec, kimlik bilgilerini kaydet ve API baglantisini test et.`
       : "Restoran oturumu acildiginda entegrasyon sihirbazi aktif olur.",
   };
 }
@@ -2567,6 +2748,7 @@ function currentState(filter = {}) {
     couriers: getCouriers(),
     packages: getPackages(filter),
     platformAccounts: getPlatformAccounts(filter),
+    platformOrders: getPlatformOrders(filter),
     webhookLogs: getWebhookLogs(20, filter),
   };
 }
@@ -2849,6 +3031,9 @@ function persistPackageAssignment(pkg) {
     nowIso(),
     pkg.id
   );
+  if (pkg.assignedCourierId) {
+    updatePlatformOrderStatusByPackage(pkg, "assigned");
+  }
   syncAssignmentRetryForPackage(getPackageById(pkg.id));
 }
 
@@ -3493,6 +3678,7 @@ function decorateState(filter = {}) {
     zoneAlerts: buildZoneAlerts(zones, packages),
     restaurants: state.restaurants.map((restaurant) => sanitizeRestaurant(restaurant, Boolean(filter.includeRestaurantSecrets))),
     platformAccounts: sanitizedPlatformAccounts,
+    platformOrders: state.platformOrders,
     couriers,
     packages,
     courierDailyReports: getCourierDailyReports(50),
@@ -3513,6 +3699,7 @@ function decorateState(filter = {}) {
 }
 
 function logWebhookAttempt(entry) {
+  const safeRequestBody = redactSecretsFromText(entry.requestBody);
   db.prepare(`
     INSERT INTO webhook_logs (
       restaurant_id, source_platform, external_order_no, signature_valid, response_status, request_body, created_at
@@ -3523,12 +3710,53 @@ function logWebhookAttempt(entry) {
     entry.externalOrderNo || null,
     entry.signatureValid ? 1 : 0,
     entry.responseStatus,
-    entry.requestBody,
+    safeRequestBody,
     new Date().toISOString()
   );
 
   const line = `[${new Date().toISOString()}] status=${entry.responseStatus} signature=${entry.signatureValid ? "valid" : "invalid"} restaurant=${entry.restaurantId || "-"} platform=${entry.sourcePlatform || "-"} order=${entry.externalOrderNo || "-"}${"\n"}`;
   fs.appendFileSync(WEBHOOK_LOG_FILE, line);
+}
+
+function logPlatformConnectionTest(account, result) {
+  const status = result?.status === "timeout" ? 408 : Number(result?.status || 0) || 500;
+  logWebhookAttempt({
+    restaurantId: account?.restaurantId,
+    sourcePlatform: account?.platform,
+    externalOrderNo: "connection-test",
+    signatureValid: Boolean(result?.ok),
+    responseStatus: status,
+    requestBody: json({
+      type: "platform_connection_test",
+      platform: account?.platform,
+      externalStoreId: account?.externalStoreId,
+      status: result?.status || null,
+      ok: Boolean(result?.ok),
+      message: result?.message || "",
+    }),
+  });
+}
+
+function platformConnectionHttpStatus(result) {
+  if (result?.ok) return 200;
+  if (result?.status === 401) return 401;
+  if (result?.status === 403) return 403;
+  if (result?.status === 404) return 404;
+  if (result?.status === "timeout") return 408;
+  return 400;
+}
+
+function isCreatedPlatformOrder(rawOrder) {
+  const order = rawOrder?.order || rawOrder || {};
+  const status = trimmed(
+    order.status ??
+    order.orderStatus ??
+    order.order_status ??
+    order.packageStatus ??
+    order.package_status ??
+    rawOrder?.status
+  ).toLowerCase();
+  return status === "created";
 }
 
 function buildIntegrationInfo(req, restaurant) {
@@ -3551,6 +3779,34 @@ function buildIntegrationInfo(req, restaurant) {
       totalPrice: 250,
     },
   };
+}
+
+function redactSecretsFromText(value) {
+  const text = String(value || "");
+  if (!text) {
+    return "";
+  }
+  try {
+    const data = JSON.parse(text);
+    const redact = (item) => {
+      if (Array.isArray(item)) {
+        return item.map(redact);
+      }
+      if (item && typeof item === "object") {
+        return Object.fromEntries(Object.entries(item).map(([key, val]) => {
+          const lower = key.toLowerCase();
+          if (lower.includes("secret") || lower.includes("token") || lower.includes("password") || lower.includes("apikey") || lower.includes("api_key")) {
+            return [key, "***"];
+          }
+          return [key, redact(val)];
+        }));
+      }
+      return item;
+    };
+    return JSON.stringify(redact(data));
+  } catch {
+    return text.replace(/("(?:api_?key|api_?secret|token|secret|password)"\s*:\s*")[^"]+(")/gi, "$1***$2");
+  }
 }
 
 function platformVerifyEnvKey(platform) {
@@ -4065,6 +4321,16 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
 
 function upsertPlatformPackage(platform, restaurant, payload) {
   const existing = findDuplicatePackage(restaurant.id, "platform_webhook", payload.externalOrderId || payload.externalOrderNo);
+  upsertPlatformOrderRecord({
+    platform,
+    orderId: payload.externalOrderId || payload.externalOrderNo,
+    customerName: payload.recipient,
+    phone: payload.phone,
+    address: payload.address,
+    totalPrice: payload.orderAmount,
+    note: payload.customerNote || payload.note,
+    rawPayload: payload.rawPayload || payload,
+  }, restaurant.id, payload.status === CANCELED_STATUS ? "cancelled" : "pending_approval");
 
   if (!existing) {
     const pkg = validateIntegrationDraft(payload, restaurant);
@@ -4194,6 +4460,7 @@ function handleSimplePlatformOrder(order) {
     ...order,
     platform: match.account.platform,
   }, match.restaurant);
+  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, "pending_approval");
   const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
   broadcastLiveEvent({
     type: "platform-order-pending",
@@ -4207,6 +4474,80 @@ function handleSimplePlatformOrder(order) {
     account: match.account,
     package: created,
   };
+}
+
+function connectorForPlatform(platform) {
+  return platformConnectors[normalizePlatformInput(platform) || platform] || null;
+}
+
+async function pollPlatformAccount(account) {
+  const connector = connectorForPlatform(account.platform);
+  if (!connector || typeof connector.fetchOrders !== "function") {
+    return { ok: false, skipped: true, reason: "connector yok" };
+  }
+  if (account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
+    return { ok: false, skipped: true, reason: "API baglanti testi basarili olmadan polling calismaz." };
+  }
+
+  const rawOrders = await connector.fetchOrders(account);
+  const createdOrders = rawOrders.filter(isCreatedPlatformOrder);
+  let createdCount = 0;
+  for (const rawOrder of createdOrders) {
+    const normalized = connector.normalizeOrder({
+      ...rawOrder,
+      platform: account.platform,
+      platformRestaurantId: rawOrder?.platformRestaurantId || rawOrder?.platform_restaurant_id || account.externalStoreId,
+    });
+    const order = normalizeOrder(account.platform, {
+      ...normalized,
+      platform: account.platform,
+      platformRestaurantId: normalized.platformRestaurantId || account.externalStoreId,
+    });
+    const existing = db.prepare(`
+      SELECT id FROM platform_orders
+      WHERE platform = ? AND platform_order_id = ? AND restaurant_id = ?
+    `).get(account.platform, order.orderId, account.restaurantId);
+    const result = handleSimplePlatformOrder(order);
+    if (result.ok && !existing) {
+      createdCount += 1;
+      if (typeof connector.acknowledgeOrder === "function") {
+        await connector.acknowledgeOrder(order);
+      }
+    }
+  }
+
+  db.prepare("UPDATE platform_accounts SET last_sync_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), account.id);
+  return { ok: true, createdCount, fetchedCount: rawOrders.length, createdStatusCount: createdOrders.length };
+}
+
+let platformPollingRunning = false;
+
+async function pollPlatformAccounts() {
+  if (platformPollingRunning) {
+    return;
+  }
+  platformPollingRunning = true;
+  try {
+    const accounts = getPlatformAccounts().filter((account) => account.active);
+    for (const account of accounts) {
+      try {
+        await pollPlatformAccount(account);
+      } catch (error) {
+        db.prepare(`
+          UPDATE platform_accounts
+          SET verification_status = ?, verification_note = ?, updated_at = ?
+          WHERE id = ?
+        `).run(
+          PLATFORM_VERIFICATION_STATUS.PENDING,
+          `Polling tamamlanamadi: ${error.message}`,
+          nowIso(),
+          account.id
+        );
+      }
+    }
+  } finally {
+    platformPollingRunning = false;
+  }
 }
 
 function getPackageById(packageId) {
@@ -4672,9 +5013,9 @@ async function handleApi(req, res, pathname) {
 
     const now = new Date().toISOString();
     const verification = {
-      status: PLATFORM_VERIFICATION_STATUS.VERIFIED,
-      note: "Basit webhook akisi hazir.",
-      mode: "basic_webhook_ready",
+      status: PLATFORM_VERIFICATION_STATUS.PENDING,
+      note: "API baglanti testi bekliyor.",
+      mode: "api_polling_pending_test",
     };
     db.prepare("UPDATE restaurants SET webhook_secret = ? WHERE id = ?").run(draft.webhookSecret, session.restaurant_id);
     const existing = db.prepare(`
@@ -4685,21 +5026,24 @@ async function handleApi(req, res, pathname) {
     if (existing) {
       db.prepare(`
         UPDATE platform_accounts
-        SET external_merchant_id = ?, api_username = ?, api_password = ?, api_key = ?, api_secret = ?,
+        SET external_id = ?, external_merchant_id = ?, api_username = ?, api_password = ?, api_key = ?, api_secret = ?, token = ?,
             store_front_code = ?, chain_id = ?, vendor_id = ?, webhook_auth_type = ?, webhook_api_key = ?,
             webhook_username = ?, webhook_password = ?, static_token = ?, access_token = ?, refresh_token = ?, token_expires_at = ?,
-            callback_url = ?, auth_type = ?, webhook_secret = ?, settings_json = ?, verification_status = ?,
-            verification_note = ?, last_verification_at = ?, verified_at = ?, last_validation_mode = ?, active = ?, updated_at = ?
+            callback_url = ?, auth_type = ?, webhook_secret = ?, integration_reference_code = ?, pos_secret_key = ?,
+            is_active = ?, settings_json = ?, verification_status = ?, verification_note = ?, last_verification_at = ?,
+            verified_at = ?, last_validation_mode = ?, active = ?, updated_at = ?
         WHERE id = ?
       `).run(
+        draft.externalId || draft.externalStoreId,
         draft.externalMerchantId || null,
-        null,
-        null,
+        draft.apiUsername || null,
+        draft.apiPassword || null,
         draft.apiKey || null,
         draft.apiSecret || null,
-        null,
-        null,
-        null,
+        draft.token || null,
+        draft.storeFrontCode || null,
+        draft.chainId || null,
+        draft.vendorId || null,
         PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
         null,
         null,
@@ -4711,6 +5055,9 @@ async function handleApi(req, res, pathname) {
         draft.callbackUrl || null,
         draft.authType,
         draft.webhookSecret,
+        draft.integrationReferenceCode || null,
+        draft.posSecretKey || null,
+        draft.active ? 1 : 0,
         json(draft.settings),
         verification.status,
         verification.note,
@@ -4724,25 +5071,28 @@ async function handleApi(req, res, pathname) {
     } else {
       db.prepare(`
         INSERT INTO platform_accounts (
-          id, restaurant_id, platform, external_store_id, external_merchant_id, api_username, api_password,
-          api_key, api_secret, store_front_code, chain_id, vendor_id, webhook_auth_type, webhook_api_key,
+          id, restaurant_id, platform, external_id, external_store_id, external_merchant_id, api_username, api_password,
+          api_key, api_secret, token, store_front_code, chain_id, vendor_id, webhook_auth_type, webhook_api_key,
           webhook_username, webhook_password, static_token, access_token, refresh_token, token_expires_at,
-          callback_url, auth_type, webhook_secret, webhook_id, settings_json, verification_status,
-          verification_note, last_verification_at, verified_at, last_validation_mode, active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          callback_url, auth_type, webhook_secret, integration_reference_code, pos_secret_key, is_active, webhook_id,
+          settings_json, verification_status, verification_note, last_verification_at, verified_at, last_validation_mode,
+          active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         uid("pla"),
         session.restaurant_id,
         draft.platform,
+        draft.externalId || draft.externalStoreId,
         draft.externalStoreId,
         draft.externalMerchantId || null,
-        null,
-        null,
+        draft.apiUsername || null,
+        draft.apiPassword || null,
         draft.apiKey || null,
         draft.apiSecret || null,
-        null,
-        null,
-        null,
+        draft.token || null,
+        draft.storeFrontCode || null,
+        draft.chainId || null,
+        draft.vendorId || null,
         PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN,
         null,
         null,
@@ -4754,6 +5104,9 @@ async function handleApi(req, res, pathname) {
         draft.callbackUrl || null,
         draft.authType,
         draft.webhookSecret,
+        draft.integrationReferenceCode || null,
+        draft.posSecretKey || null,
+        draft.active ? 1 : 0,
         null,
         json(draft.settings),
         verification.status,
@@ -4848,6 +5201,105 @@ async function handleApi(req, res, pathname) {
         req,
       }),
     });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts/test-connection") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === trimmed(body.accountId || body.account_id));
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    const connector = connectorForPlatform(account.platform);
+    const result = connector?.testConnection
+      ? await connector.testConnection(account)
+      : { ok: false, status: 404, message: "Connector bulunamadi." };
+    logPlatformConnectionTest(account, result);
+    markPlatformAccountVerification(account.id, {
+      status: result.ok ? PLATFORM_VERIFICATION_STATUS.VERIFIED : PLATFORM_VERIFICATION_STATUS.FAILED,
+      mode: "connector_test",
+      note: result.message || `HTTP ${result.status}`,
+    });
+    sendJson(res, platformConnectionHttpStatus(result), {
+      ok: result.ok,
+      status: result.status,
+      message: result.message || `HTTP ${result.status}`,
+      error: result.ok ? undefined : (result.message || `HTTP ${result.status}`),
+      verification: {
+        status: result.ok ? "verified" : "failed",
+        note: result.message || `HTTP ${result.status}`,
+      },
+      state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts/sync") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === trimmed(body.accountId || body.account_id));
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    const result = await pollPlatformAccount(account);
+    sendJson(res, result.ok ? 200 : 400, {
+      ok: result.ok,
+      error: result.ok ? undefined : result.reason,
+      result,
+      state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/platform-orders/manual") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const restaurant = getRestaurants({ restaurantId: session.restaurant_id })[0];
+    if (!restaurant) {
+      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      return;
+    }
+    const platform = normalizePlatformInput(body.platform) || "POS";
+    const externalStoreId = trimmed(body.platformRestaurantId || body.externalStoreId) ||
+      getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.platform === platform)?.externalStoreId ||
+      `manual-${session.restaurant_id}`;
+    const order = normalizeOrder(platform, {
+      platform,
+      platformRestaurantId: externalStoreId,
+      orderId: trimmed(body.orderId) || `MANUAL-${Date.now()}`,
+      customerName: body.customerName,
+      phone: body.phone,
+      address: body.address,
+      totalPrice: body.totalPrice,
+      paymentMethod: body.paymentMethod || "Panel Kaydi",
+      customerNote: body.note,
+      rawPayload: body,
+    });
+    let account = findPlatformRestaurant(platform, externalStoreId);
+    if (!account) {
+      upsertPlatformOrderRecord(order, restaurant.id, "pending_approval");
+      const payload = createSimplePlatformPayload(order, restaurant);
+      const created = upsertPlatformPackage(platform, restaurant, payload);
+      sendJson(res, 201, { ok: true, package: created, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
+      return;
+    }
+    const result = handleSimplePlatformOrder(order);
+    sendJson(res, 201, { ok: true, package: result.package, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
     return;
   }
 
@@ -5071,6 +5523,7 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
+      updatePlatformOrderStatusByPackage(target, "approved");
       const confirmedPackage = getPackageById(packageId);
       notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
       notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
@@ -5116,6 +5569,7 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
+      updatePlatformOrderStatusByPackage(target, "cancelled");
       const rejectedPackage = getPackageById(packageId);
       notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
       broadcastLiveEvent({
@@ -5407,7 +5861,9 @@ async function handleApi(req, res, pathname) {
     }
 
     const adapter = getPlatformAdapter(normalizePlatformKey(match.account.platform));
-    if (!adapter.verifyWebhook(req, match.account) || trimmed(req.headers["x-platform-secret"]) !== trimmed(match.restaurant.webhookSecret)) {
+    const incomingPlatformSecret = trimmed(req.headers["x-platform-secret"]);
+    const acceptsLegacyRestaurantSecret = incomingPlatformSecret && incomingPlatformSecret === trimmed(match.restaurant.webhookSecret);
+    if (!adapter.verifyWebhook(req, match.account) && !acceptsLegacyRestaurantSecret) {
       logWebhookAttempt({
         restaurantId: match.restaurant.id,
         sourcePlatform: match.account.platform,
@@ -5787,6 +6243,7 @@ async function handleApi(req, res, pathname) {
     rebalancePackages();
     if (nextStatus === DELIVERED_STATUS) {
       const deliveredPackage = getPackageById(packageId);
+      updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
       notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
     }
 
@@ -6185,6 +6642,7 @@ async function handleApi(req, res, pathname) {
     rebalancePackages();
     if (nextStatus === DELIVERED_STATUS) {
       const deliveredPackage = getPackageById(statusMatch[1]);
+      updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
       notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
     }
     writeAuditLog({
@@ -6385,6 +6843,12 @@ setInterval(() => {
     // Retry sweep should not crash the server loop.
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
+
+setInterval(() => {
+  pollPlatformAccounts().catch((error) => {
+    console.error("Platform polling failed", { message: error.message });
+  });
+}, PLATFORM_POLL_INTERVAL_MS).unref();
 
 currentState().packages
   .filter((pkg) => normalizeStatus(pkg.status) === ASSIGNED_STATUS)

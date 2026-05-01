@@ -137,8 +137,8 @@ async function run() {
     if (!platformAccount) {
       throw new Error("Platform hesabi olusmadi.");
     }
-    if (platformAccount.staticToken !== "smoke-platform-secret") {
-      throw new Error("Static Token webhook secret olarak map edilmedi.");
+    if (!platformAccount.hasStaticToken || platformAccount.staticToken) {
+      throw new Error("Static Token frontend yanitinda gizlenmedi.");
     }
 
     const courierState = await request("/api/admin/couriers", {

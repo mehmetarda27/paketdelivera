@@ -3,6 +3,7 @@ const PLATFORM_OPTIONS = [
   "GetirYemek",
   "Yemeksepeti",
   "Migros Yemek",
+  "POS",
 ];
 
 const PAYMENT_OPTIONS = [
