@@ -5216,6 +5216,11 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
       return;
     }
+    const restaurant = getRestaurants({ restaurantId: session.restaurant_id })[0];
+    if (!restaurant) {
+      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      return;
+    }
     const connector = connectorForPlatform(account.platform);
     const result = connector?.testConnection
       ? await connector.testConnection(account)

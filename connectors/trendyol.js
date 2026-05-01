@@ -9,7 +9,7 @@ function trimmed(value) {
 }
 
 function sellerId(account) {
-  return trimmed(account?.externalStoreId || account?.sellerId);
+  return trimmed(account?.externalId || account?.sellerId || account?.externalStoreId);
 }
 
 function ordersEndpoint(account, params = {}) {
