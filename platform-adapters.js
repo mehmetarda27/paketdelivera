@@ -245,20 +245,35 @@ const platformAdapters = {
     const order = rawBody.order || rawBody;
     return {
       ...baseNormalizeOrder("pos", rawBody),
-      platformRestaurantId: trimmed(rawBody.platformRestaurantId ?? order.posStoreId ?? order.storeId ?? order.restaurantId),
-      orderId: trimmed(rawBody.orderId ?? order.receiptNo ?? order.ticketNo ?? order.id),
-      customerName: trimmed(rawBody.customerName ?? order.customerName ?? order.customer?.name) || "POS Musteri",
-      phone: trimmed(rawBody.phone ?? order.phone ?? order.customer?.phone) || "Gizli Numara",
-      address: trimmed(rawBody.address ?? order.address ?? order.deliveryAddress) || "POS siparis adresi",
-      totalPrice: normalizeMoney(rawBody.totalPrice ?? order.totalPrice ?? order.amount ?? order.total),
-      paymentMethod: trimmed(rawBody.paymentMethod ?? order.paymentMethod ?? order.payment?.method) || "POS",
-      customerNote: trimmed(rawBody.customerNote ?? order.note ?? order.customerNote),
-      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address ?? order.deliveryAddress),
-      items: normalizeItems(rawBody.items ?? order.items ?? order.lines),
+      platformRestaurantId: trimmed(
+        rawBody.platformRestaurantId ??
+        rawBody.platform_restaurant_id ??
+        order.platformRestaurantId ??
+        order.platform_restaurant_id ??
+        order.posStoreId ??
+        order.pos_store_id ??
+        order.storeId ??
+        order.store_id ??
+        order.merchantId ??
+        order.merchant_id ??
+        order.branchId ??
+        order.branch_id
+      ),
+      orderId: trimmed(rawBody.orderId ?? rawBody.order_id ?? rawBody.externalOrderId ?? rawBody.external_order_id ?? order.orderId ?? order.order_id ?? order.externalOrderId ?? order.external_order_id ?? order.receiptNo ?? order.receipt_no ?? order.ticketNo ?? order.ticket_no ?? order.id),
+      customerName: trimmed(rawBody.customerName ?? rawBody.customer_name ?? order.customerName ?? order.customer_name ?? order.customer?.name) || "POS Musteri",
+      phone: trimmed(rawBody.phone ?? rawBody.customerPhone ?? rawBody.customer_phone ?? order.phone ?? order.customerPhone ?? order.customer_phone ?? order.customer?.phone) || "Gizli Numara",
+      address: trimmed(rawBody.address ?? rawBody.deliveryAddress ?? rawBody.delivery_address ?? order.address ?? order.deliveryAddress ?? order.delivery_address) || "POS siparis adresi",
+      totalPrice: normalizeMoney(rawBody.totalPrice ?? rawBody.total_price ?? order.totalPrice ?? order.total_price ?? order.amount ?? order.total),
+      paymentMethod: trimmed(rawBody.paymentMethod ?? rawBody.payment_method ?? order.paymentMethod ?? order.payment_method ?? order.payment?.method) || "POS",
+      customerNote: trimmed(rawBody.customerNote ?? rawBody.customer_note ?? order.note ?? order.customerNote ?? order.customer_note),
+      customerAddress: trimmed(rawBody.customerAddress ?? rawBody.customer_address ?? order.address ?? order.deliveryAddress ?? order.delivery_address),
+      items: normalizeItems(rawBody.items ?? order.items ?? order.lines ?? order.products),
       rawPayload: rawBody,
     };
   }),
 };
+
+platformAdapters.adisyo = platformAdapters.pos;
 
 function getPlatformAdapter(platform) {
   const key = normalizePlatformKey(platform);

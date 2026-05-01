@@ -3790,7 +3790,7 @@ function platformAccountMissingCredentials(account) {
     return !(account?.apiKey && account?.apiSecret && (account?.externalMerchantId || account?.externalStoreId || account?.externalId));
   }
   if (platform === "POS") {
-    return !(account?.apiKey || account?.apiSecret || account?.posSecretKey || account?.token || account?.accessToken);
+    return !(account?.apiKey || account?.apiSecret || account?.webhookSecret || account?.posSecretKey || account?.token || account?.accessToken);
   }
   return !(account?.apiKey || account?.apiSecret || account?.token || account?.accessToken || account?.apiUsername || account?.apiPassword);
 }
@@ -3806,6 +3806,25 @@ function isCreatedPlatformOrder(rawOrder) {
     rawOrder?.status
   ).toLowerCase();
   return status === "created";
+}
+
+function isPollableCreatedPlatformOrder(platform, rawOrder) {
+  const normalizedPlatform = normalizePlatformInput(platform);
+  if (normalizedPlatform !== "POS") {
+    return isCreatedPlatformOrder(rawOrder);
+  }
+
+  const order = rawOrder?.order || rawOrder || {};
+  const status = trimmed(
+    order.status ??
+    order.orderStatus ??
+    order.order_status ??
+    order.packageStatus ??
+    order.package_status ??
+    rawOrder?.status
+  ).toLowerCase();
+
+  return !status || ["created", "new", "pending", "open"].includes(status);
 }
 
 function buildIntegrationInfo(req, restaurant) {
@@ -4534,10 +4553,11 @@ async function pollPlatformAccount(account) {
   if (!connector || typeof connector.fetchOrders !== "function") {
     return { ok: false, skipped: true, reason: "connector yok" };
   }
+  const isPosAccount = normalizePlatformInput(account.platform) === "POS";
   if (platformAccountMissingCredentials(account)) {
     return { ok: false, skipped: true, optional: true, reason: "API bilgileri eksik, manuel paket sistemi kullanilabilir." };
   }
-  if (account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
+  if (!isPosAccount && account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
     return { ok: false, skipped: true, reason: "API baglanti testi basarili olmadan polling calismaz." };
   }
 
@@ -4545,6 +4565,14 @@ async function pollPlatformAccount(account) {
   try {
     rawOrders = await connector.fetchOrders(account);
   } catch (error) {
+    if (error.code === "POS_ENDPOINT_MISSING") {
+      console.warn("POS polling skipped", {
+        accountId: account.id,
+        platformRestaurantId: account.externalStoreId,
+        reason: "API endpoint eksik",
+      });
+      return { ok: false, skipped: true, optional: true, reason: "API endpoint eksik. Adisyo/POS polling endpoint tanimli degil." };
+    }
     console.error("Platform polling connector failed", {
       platform: account.platform,
       accountId: account.id,
@@ -4552,7 +4580,7 @@ async function pollPlatformAccount(account) {
     });
     return { ok: false, skipped: true, reason: "Platform polling tamamlanamadi, manuel paket sistemi kullanilabilir." };
   }
-  const createdOrders = rawOrders.filter(isCreatedPlatformOrder);
+  const createdOrders = rawOrders.filter((rawOrder) => isPollableCreatedPlatformOrder(account.platform, rawOrder));
   let createdCount = 0;
   for (const rawOrder of createdOrders) {
     const normalized = connector.normalizeOrder({
@@ -4572,6 +4600,15 @@ async function pollPlatformAccount(account) {
     const result = handleSimplePlatformOrder(order);
     if (result.ok && !existing) {
       createdCount += 1;
+      console.log("Sipariş DB’ye kaydedildi", {
+        platform: account.platform,
+        accountId: account.id,
+        restaurantId: account.restaurantId,
+        platformRestaurantId: order.platformRestaurantId,
+        orderId: order.orderId,
+        packageId: result.package?.id || null,
+        status: result.package?.status || PENDING_APPROVAL_STATUS,
+      });
       if (typeof connector.acknowledgeOrder === "function") {
         await connector.acknowledgeOrder(order);
       }
@@ -5303,8 +5340,13 @@ async function handleApi(req, res, pathname) {
       }
     }
     logPlatformConnectionTest(account, result);
+    const verificationStatus = result.ok
+      ? PLATFORM_VERIFICATION_STATUS.VERIFIED
+      : (result.optional || result.manualAvailable)
+        ? PLATFORM_VERIFICATION_STATUS.PENDING
+        : PLATFORM_VERIFICATION_STATUS.FAILED;
     markPlatformAccountVerification(account.id, {
-      status: result.ok ? PLATFORM_VERIFICATION_STATUS.VERIFIED : PLATFORM_VERIFICATION_STATUS.FAILED,
+      status: verificationStatus,
       mode: "connector_test",
       note: result.message || `HTTP ${result.status}`,
     });
@@ -5314,7 +5356,7 @@ async function handleApi(req, res, pathname) {
       message: result.message || `HTTP ${result.status}`,
       error: result.ok ? undefined : (result.message || `HTTP ${result.status}`),
       verification: {
-        status: result.ok ? "verified" : "failed",
+        status: verificationStatus,
         note: result.message || `HTTP ${result.status}`,
       },
       state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
@@ -5610,6 +5652,11 @@ async function handleApi(req, res, pathname) {
         notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
         notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
       }
+      console.log("Assignment triggered", {
+        packageId,
+        sourcePlatform: target.source_platform || null,
+        restaurantId: session.restaurant_id,
+      });
       console.log("Assignment triggered after approval", {
         packageId,
         previousStatus: target.status,
@@ -5626,6 +5673,20 @@ async function handleApi(req, res, pathname) {
         assignedCourierId: packageAfterAssignmentAttempt?.assignedCourierId || null,
         lastAssignmentError: packageAfterAssignmentAttempt?.lastAssignmentError || "",
       });
+      if (packageAfterAssignmentAttempt?.assignedCourierId) {
+        console.log("Assignment success", {
+          packageId,
+          courierId: packageAfterAssignmentAttempt.assignedCourierId,
+          status: packageAfterAssignmentAttempt.status,
+        });
+      } else {
+        console.log("Assignment failed", {
+          packageId,
+          status: packageAfterAssignmentAttempt?.status || null,
+          assignmentStatus: packageAfterAssignmentAttempt?.assignmentStatus || null,
+          reason: packageAfterAssignmentAttempt?.lastAssignmentError || "uygun kurye yok",
+        });
+      }
       broadcastLiveEvent({
         type: "restaurant-confirmed",
         restaurantId: session.restaurant_id,
