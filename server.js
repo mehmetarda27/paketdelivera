@@ -763,6 +763,15 @@ function validatePackageDraft(payload) {
     errors.push("Paket tutari 0'dan buyuk olmali.");
   }
 
+  if (!trimmed(payload.customerName) || trimmed(payload.customerName).length < 2) {
+    errors.push("Musteri adi zorunludur.");
+  }
+
+  const phoneDigits = trimmed(payload.phone).replace(/\D/g, "");
+  if (phoneDigits.length < 10) {
+    errors.push("Telefon numarasi en az 10 haneli olmali.");
+  }
+
   return errors;
 }
 
@@ -836,10 +845,6 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
   const externalOrderId = options.externalOrderId || `MANUAL-${Date.now()}`;
   const normalizedSource = normalizePlatformKey(draft.source);
   const isQuickPasteOrder = ["platform_manual", "platform_extension", "platform_extension_auto"].includes(normalizedSource);
-  const requestedStatus = normalizeStatus(draft.requestedStatus);
-  const targetStatus = isQuickPasteOrder && requestedStatus === PREPARING_STATUS
-    ? PREPARING_STATUS
-    : AWAITING_ASSIGNMENT_STATUS;
   const targetSourcePlatform = draft.sourcePlatform || (isQuickPasteOrder ? "Hizli Yapistir" : "Dis Manuel Paket");
   const targetPaymentMethod = draft.paymentMethod || "Panel Kaydi";
 
@@ -877,8 +882,8 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
       : `${draft.packageType} restoran panelinden olusturuldu.`,
     customerNote: draft.customerNote,
     rawPayload: draft.rawText ? { quickPasteText: draft.rawText } : null,
-    status: targetStatus,
-    assignmentStatus: "pending",
+    status: PENDING_APPROVAL_STATUS,
+    assignmentStatus: "pending_approval",
     assignedCourierId: null,
     assignedCourierName: null,
     assignedAt: null,
@@ -891,8 +896,8 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
     lastAssignmentAttemptAt: null,
     lastAssignmentError: "",
     assignmentReason: isQuickPasteOrder
-      ? "Hizli siparis kaydi alindi, kurye atamasi deneniyor."
-      : "Yeni manuel paket kaydi alindi.",
+      ? "Hizli siparis kaydi alindi, restoran onayi bekliyor."
+      : "Yeni manuel paket kaydi alindi, restoran onayi bekliyor.",
     createdAt,
     updatedAt: createdAt,
   };
@@ -1439,11 +1444,21 @@ function sanitizeCourier(courier) {
 function sanitizeRestaurant(restaurant, includeSecrets = false) {
   const { passwordHash, passwordSalt, ...safeRestaurant } = restaurant;
   if (includeSecrets) {
-    return safeRestaurant;
+    return {
+      ...safeRestaurant,
+      apiKey: restaurant.apiKey ? "Kayitli" : "",
+      webhookSecret: restaurant.webhookSecret ? "Kayitli" : "",
+      hasApiKey: Boolean(restaurant.apiKey),
+      hasWebhookSecret: Boolean(restaurant.webhookSecret),
+    };
   }
 
   const { apiKey, webhookSecret, ...publicRestaurant } = safeRestaurant;
-  return publicRestaurant;
+  return {
+    ...publicRestaurant,
+    hasApiKey: Boolean(apiKey),
+    hasWebhookSecret: Boolean(webhookSecret),
+  };
 }
 
 function maskSecret(value) {
@@ -2036,12 +2051,20 @@ function updatePlatformOrderStatus(platform, platformOrderId, restaurantId, stat
 }
 
 function updatePlatformOrderStatusByPackage(pkg, status) {
+  if (!isPlatformBackedPackage(pkg)) {
+    return;
+  }
   updatePlatformOrderStatus(
     pkg?.source_platform || pkg?.sourcePlatform,
     pkg?.external_order_id || pkg?.externalOrderId || pkg?.external_order_no || pkg?.externalOrderNo,
     pkg?.restaurant_id || pkg?.restaurantId,
     status
   );
+}
+
+function isPlatformBackedPackage(pkg) {
+  const source = normalizeOrderSource(pkg?.source, pkg?.source_platform || pkg?.sourcePlatform);
+  return source !== "external_manual" && source !== "manual";
 }
 
 function readRequestBody(req) {
@@ -3164,7 +3187,9 @@ function tryAssignPackageAtomically(pkg, candidate) {
       courierStatus,
       distanceKm: Number(candidate.distance.toFixed(3)),
     });
-    notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
+    if (isPlatformBackedPackage(freshPackage)) {
+      notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
+    }
     return { ok: true, courierId: targetCourier.id };
   });
 }
@@ -3547,7 +3572,9 @@ function adminAssignPackageToCourier(packageId, courierId) {
     appendTriedCourier(packageId, courier.id);
     const assignedPackage = getPackageById(packageId);
     syncAssignmentRetryForPackage(assignedPackage);
-    notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
+    if (isPlatformBackedPackage(target)) {
+      notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
+    }
     return { packageId, courierId: courier.id, courierName: courier.name };
   });
 }
@@ -3739,11 +3766,33 @@ function logPlatformConnectionTest(account, result) {
 
 function platformConnectionHttpStatus(result) {
   if (result?.ok) return 200;
+  if (result?.optional || result?.manualAvailable || result?.status === 200) return 200;
   if (result?.status === 401) return 401;
   if (result?.status === 403) return 403;
   if (result?.status === 404) return 404;
   if (result?.status === "timeout") return 408;
   return 400;
+}
+
+function optionalIntegrationResult(message = "API bilgileri eksik, manuel paket sistemi kullanilabilir.") {
+  return {
+    ok: false,
+    optional: true,
+    manualAvailable: true,
+    status: 200,
+    message,
+  };
+}
+
+function platformAccountMissingCredentials(account) {
+  const platform = normalizePlatformInput(account?.platform);
+  if (platform === "Trendyol Go") {
+    return !(account?.apiKey && account?.apiSecret && (account?.externalMerchantId || account?.externalStoreId || account?.externalId));
+  }
+  if (platform === "POS") {
+    return !(account?.apiKey || account?.apiSecret || account?.posSecretKey || account?.token || account?.accessToken);
+  }
+  return !(account?.apiKey || account?.apiSecret || account?.token || account?.accessToken || account?.apiUsername || account?.apiPassword);
 }
 
 function isCreatedPlatformOrder(rawOrder) {
@@ -3764,8 +3813,8 @@ function buildIntegrationInfo(req, restaurant) {
     restaurantId: restaurant.id,
     restaurantName: restaurant.name,
     portalUsername: restaurant.username,
-    apiKey: restaurant.apiKey,
-    webhookSecret: restaurant.webhookSecret,
+    apiKey: restaurant.apiKey ? "Kayitli" : "",
+    webhookSecret: restaurant.webhookSecret ? "Kayitli" : "",
     endpoint: `${requestBaseUrl(req)}/api/platform/order`,
     platformWebhookBase: `${requestBaseUrl(req)}/api/platform/order`,
     signatureHeader: "x-platform-secret",
@@ -4485,11 +4534,24 @@ async function pollPlatformAccount(account) {
   if (!connector || typeof connector.fetchOrders !== "function") {
     return { ok: false, skipped: true, reason: "connector yok" };
   }
+  if (platformAccountMissingCredentials(account)) {
+    return { ok: false, skipped: true, optional: true, reason: "API bilgileri eksik, manuel paket sistemi kullanilabilir." };
+  }
   if (account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
     return { ok: false, skipped: true, reason: "API baglanti testi basarili olmadan polling calismaz." };
   }
 
-  const rawOrders = await connector.fetchOrders(account);
+  let rawOrders = [];
+  try {
+    rawOrders = await connector.fetchOrders(account);
+  } catch (error) {
+    console.error("Platform polling connector failed", {
+      platform: account.platform,
+      accountId: account.id,
+      message: error.message,
+    });
+    return { ok: false, skipped: true, reason: "Platform polling tamamlanamadi, manuel paket sistemi kullanilabilir." };
+  }
   const createdOrders = rawOrders.filter(isCreatedPlatformOrder);
   let createdCount = 0;
   for (const rawOrder of createdOrders) {
@@ -5222,9 +5284,24 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const connector = connectorForPlatform(account.platform);
-    const result = connector?.testConnection
-      ? await connector.testConnection(account)
-      : { ok: false, status: 404, message: "Connector bulunamadi." };
+    let result = connector?.testConnection
+      ? null
+      : optionalIntegrationResult("Connector bulunamadi, manuel paket sistemi kullanilabilir.");
+    if (!result && platformAccountMissingCredentials(account)) {
+      result = optionalIntegrationResult();
+    }
+    if (!result) {
+      try {
+        result = await connector.testConnection(account);
+      } catch (error) {
+        console.error("Platform connection test failed", {
+          platform: account.platform,
+          accountId: account.id,
+          message: error.message,
+        });
+        result = optionalIntegrationResult("API baglanti testi tamamlanamadi, manuel paket sistemi kullanilabilir.");
+      }
+    }
     logPlatformConnectionTest(account, result);
     markPlatformAccountVerification(account.id, {
       status: result.ok ? PLATFORM_VERIFICATION_STATUS.VERIFIED : PLATFORM_VERIFICATION_STATUS.FAILED,
@@ -5258,7 +5335,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const result = await pollPlatformAccount(account);
-    sendJson(res, result.ok ? 200 : 400, {
+    sendJson(res, result.ok || result.optional || result.skipped ? 200 : 400, {
       ok: result.ok,
       error: result.ok ? undefined : result.reason,
       result,
@@ -5510,10 +5587,7 @@ async function handleApi(req, res, pathname) {
     }
 
     const source = normalizeOrderSource(target.source, target.source_platform);
-    if (source === "external_manual" || source === "manual") {
-      sendJson(res, 400, { error: "Bu aksiyon sadece platform siparisleri icin kullanilir." });
-      return;
-    }
+    const isPlatformBackedOrder = source !== "external_manual" && source !== "manual";
 
     if (action === "confirm") {
       db.prepare(`
@@ -5528,10 +5602,14 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
-      updatePlatformOrderStatusByPackage(target, "approved");
+      if (isPlatformBackedOrder) {
+        updatePlatformOrderStatusByPackage(target, "approved");
+      }
       const confirmedPackage = getPackageById(packageId);
-      notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
-      notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
+      if (isPlatformBackedOrder) {
+        notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
+        notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
+      }
       console.log("Assignment triggered after approval", {
         packageId,
         previousStatus: target.status,
@@ -5551,7 +5629,7 @@ async function handleApi(req, res, pathname) {
       broadcastLiveEvent({
         type: "restaurant-confirmed",
         restaurantId: session.restaurant_id,
-        message: "Platform siparisi restoran tarafinda onaylandi.",
+        message: isPlatformBackedOrder ? "Platform siparisi restoran tarafinda onaylandi." : "Manuel paket restoran tarafinda onaylandi.",
       });
       sendJson(res, 200, decorateState({
         restaurantId: session.restaurant_id,
@@ -5574,13 +5652,17 @@ async function handleApi(req, res, pathname) {
         nowIso(),
         packageId
       );
-      updatePlatformOrderStatusByPackage(target, "cancelled");
+      if (isPlatformBackedOrder) {
+        updatePlatformOrderStatusByPackage(target, "cancelled");
+      }
       const rejectedPackage = getPackageById(packageId);
-      notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
+      if (isPlatformBackedOrder) {
+        notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
+      }
       broadcastLiveEvent({
         type: "platform-order-rejected",
         restaurantId: session.restaurant_id,
-        message: "Platform siparisi restoran tarafinda reddedildi.",
+        message: isPlatformBackedOrder ? "Platform siparisi restoran tarafinda reddedildi." : "Manuel paket restoran tarafinda reddedildi.",
       });
       sendJson(res, 200, decorateState({
         restaurantId: session.restaurant_id,
@@ -6249,7 +6331,9 @@ async function handleApi(req, res, pathname) {
     if (nextStatus === DELIVERED_STATUS) {
       const deliveredPackage = getPackageById(packageId);
       updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
-      notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+      if (isPlatformBackedPackage(target)) {
+        notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+      }
     }
 
     const workspace = buildCourierWorkspace(session.courier_id);
@@ -6648,7 +6732,9 @@ async function handleApi(req, res, pathname) {
     if (nextStatus === DELIVERED_STATUS) {
       const deliveredPackage = getPackageById(statusMatch[1]);
       updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
-      notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+      if (isPlatformBackedPackage(target)) {
+        notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+      }
     }
     writeAuditLog({
       actorRole: "admin",

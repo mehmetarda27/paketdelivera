@@ -173,12 +173,24 @@
               <textarea name="deliveryAddress" rows="4" placeholder="Mersin teslimat adresini detaylı gir" required></textarea>
             </label>
             <label>
+              Musteri Adi
+              <input name="customerName" type="text" placeholder="Ad Soyad" required>
+            </label>
+            <label>
+              Telefon
+              <input name="phone" type="tel" placeholder="05xx xxx xx xx" required>
+            </label>
+            <label>
               Paket Tipi
               <input name="packageType" type="text" placeholder="Sıcak Yemek" required>
             </label>
             <label>
               Paket Tutarı
               <input name="orderAmount" type="number" step="0.01" min="0.01" placeholder="250.00" required>
+            </label>
+            <label class="full-width">
+              Not
+              <textarea name="customerNote" rows="2" placeholder="Kurye veya musteri notu"></textarea>
             </label>
             <button class="primary-btn" type="submit">Paket Oluştur</button>
           </form>

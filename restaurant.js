@@ -970,7 +970,7 @@ function renderActiveOrders(data) {
       ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
     `;
 
-    if (isPlatformOrder) {
+    if (pkg.status === "pending_approval" || isPlatformOrder) {
       const actions = document.createElement("div");
       actions.className = "card-actions";
 
@@ -980,14 +980,18 @@ function renderActiveOrders(data) {
         confirmButton.className = "ghost-btn";
         confirmButton.textContent = "Siparisi Onayla";
         confirmButton.addEventListener("click", async () => {
-          const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
-            method: "POST",
-            headers: restaurantAuthHeaders(),
-            retryWithRefresh: refreshRestaurantAccess,
-            body: JSON.stringify({ action: "confirm" }),
-          });
-          hydrateRestaurant(next);
-          showToast("Siparis onaylandi.");
+          try {
+            const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
+              method: "POST",
+              headers: restaurantAuthHeaders(),
+              retryWithRefresh: refreshRestaurantAccess,
+              body: JSON.stringify({ action: "confirm" }),
+            });
+            hydrateRestaurant(next);
+            showToast("Siparis onaylandi.");
+          } catch (error) {
+            showToast(error.message || "Siparis onaylanamadi.", "error");
+          }
         });
         actions.appendChild(confirmButton);
 
@@ -997,14 +1001,18 @@ function renderActiveOrders(data) {
         rejectButton.textContent = "Siparisi Reddet";
         rejectButton.addEventListener("click", async () => {
           const reason = window.prompt("Red nedeni", "Restoran kapasitesi uygun degil") || "Restoran reddetti.";
-          const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
-            method: "POST",
-            headers: restaurantAuthHeaders(),
-            retryWithRefresh: refreshRestaurantAccess,
-            body: JSON.stringify({ action: "reject", reason }),
-          });
-          hydrateRestaurant(next);
-          showToast("Siparis reddedildi.");
+          try {
+            const next = await api(`/api/restaurant/packages/${pkg.id}/action`, {
+              method: "POST",
+              headers: restaurantAuthHeaders(),
+              retryWithRefresh: refreshRestaurantAccess,
+              body: JSON.stringify({ action: "reject", reason }),
+            });
+            hydrateRestaurant(next);
+            showToast("Siparis reddedildi.");
+          } catch (error) {
+            showToast(error.message || "Siparis reddedilemedi.", "error");
+          }
         });
         actions.appendChild(rejectButton);
       }
@@ -1303,17 +1311,21 @@ restaurantRefs.testIntegrationButton?.addEventListener("click", async () => {
     showToast("Test icin once platform hesabi kaydet.", "error");
     return;
   }
-  const response = await api("/api/restaurant/platform-accounts/test-connection", {
-    method: "POST",
-    headers: restaurantAuthHeaders(),
-    retryWithRefresh: refreshRestaurantAccess,
-    body: JSON.stringify({ accountId }),
-  });
-  hydrateRestaurant(response.state);
-  showToast(
-    response.verification.status === "verified" ? "Baglanti basarili." : "Baglanti kontrol edildi.",
-    response.verification.status === "verified" ? "success" : "error"
-  );
+  try {
+    const response = await api("/api/restaurant/platform-accounts/test-connection", {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+      body: JSON.stringify({ accountId }),
+    });
+    hydrateRestaurant(response.state);
+    showToast(
+      response.verification.status === "verified" ? "Baglanti basarili." : "API bilgileri eksik, manuel paket sistemi kullanilabilir.",
+      response.verification.status === "verified" ? "success" : "error"
+    );
+  } catch (error) {
+    showToast(error.message || "API bilgileri eksik, manuel paket sistemi kullanilabilir.", "error");
+  }
 });
 
 restaurantRefs.platformAccountList?.addEventListener("click", async (event) => {
@@ -1334,7 +1346,10 @@ restaurantRefs.platformAccountList?.addEventListener("click", async (event) => {
       body: JSON.stringify({ accountId }),
     });
     hydrateRestaurant(response.state || response);
-    showToast(testConnectionButton ? "Baglanti kontrol edildi." : "Siparis cekme calisti.");
+    showToast(
+      response.message || response.error || response.result?.reason || (testConnectionButton ? "Baglanti kontrol edildi." : "Siparis cekme kontrol edildi."),
+      response.ok ? "success" : "error"
+    );
   } catch (error) {
     showToast(error.message || "Platform islemi tamamlanamadi.", "error");
   }
@@ -1526,22 +1541,31 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
   }
 
   const formData = new FormData(restaurantRefs.packageForm);
-  const data = await api("/api/restaurant/packages", {
-    method: "POST",
-    headers: restaurantAuthHeaders(),
-    retryWithRefresh: refreshRestaurantAccess,
-    body: JSON.stringify({
-      restaurantId: currentRestaurant.id,
-      deliveryAddress: formData.get("deliveryAddress"),
-      packageType: formData.get("packageType"),
-      orderAmount: formData.get("orderAmount"),
-    }),
-  });
+  try {
+    const data = await api("/api/restaurant/packages", {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+      body: JSON.stringify({
+        restaurantId: currentRestaurant.id,
+        deliveryAddress: formData.get("deliveryAddress"),
+        packageType: formData.get("packageType"),
+        orderAmount: formData.get("orderAmount"),
+        customerName: formData.get("customerName"),
+        phone: formData.get("phone"),
+        customerNote: formData.get("customerNote"),
+        paymentMethod: "Panel Kaydi",
+      }),
+    });
 
-  restaurantRefs.packageForm.reset();
-  hydrateRestaurant(data);
-  restaurantRefs.summary.textContent = `${currentRestaurant.name} icin manuel paket kaydedildi ve operasyon akisina alindi.`;
-  showToast("Manuel paket basariyla kaydedildi ve operasyon akisina alindi.");
+    restaurantRefs.packageForm.reset();
+    hydrateRestaurant(data);
+    restaurantRefs.summary.textContent = `${currentRestaurant.name} icin manuel paket kaydedildi, restoran onayi bekliyor.`;
+    showToast("Manuel paket kaydedildi. Onaylayinca kurye atamasi baslar.");
+  } catch (error) {
+    restaurantRefs.summary.textContent = error.message || "Manuel paket kaydedilemedi.";
+    showToast(error.message || "Manuel paket kaydedilemedi.", "error");
+  }
 });
 
 restaurantRefs.platformSelect.innerHTML = createPlatformOptions();

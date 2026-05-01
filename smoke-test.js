@@ -209,14 +209,25 @@ async function run() {
         deliveryAddress: firstAddress,
         packageType: "Sicak Yemek",
         orderAmount: 250,
+        customerName: "Birinci Musteri",
+        phone: "05550000001",
       }),
     });
     const firstManualPackage = firstRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === firstAddress);
-    if (!firstManualPackage || firstManualPackage.status !== "assigned" || firstManualPackage.assignedCourierId !== createdCourier.id) {
-      throw new Error("Uygun kurye varken ilk siparis otomatik atanamadi.");
+    if (!firstManualPackage || firstManualPackage.status !== "pending_approval") {
+      throw new Error("Manuel paket restoran onayi bekleyen durumda olusmadi.");
     }
     if (firstManualPackage.source !== "external_manual") {
       throw new Error("Manuel paket source alani beklenen sekilde isaretlenmedi.");
+    }
+    const firstApprovedState = await request(`/api/restaurant/packages/${firstManualPackage.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "confirm" }),
+    });
+    const firstAssignedPackage = firstApprovedState.packages.find((pkg) => pkg.id === firstManualPackage.id);
+    if (!firstAssignedPackage || firstAssignedPackage.status !== "assigned" || firstAssignedPackage.assignedCourierId !== createdCourier.id) {
+      throw new Error("Onay sonrasi uygun kurye varken ilk siparis otomatik atanamadi.");
     }
 
     const secondRestaurantPackageState = await request("/api/restaurant/packages", {
@@ -227,13 +238,24 @@ async function run() {
         deliveryAddress: secondAddress,
         packageType: "Tatli",
         orderAmount: 180,
+        customerName: "Ikinci Musteri",
+        phone: "05550000002",
       }),
     });
     const secondManualPackage = secondRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === secondAddress);
-    if (!secondManualPackage || secondManualPackage.status !== "assigned") {
+    if (!secondManualPackage || secondManualPackage.status !== "pending_approval") {
+      throw new Error("Ikinci manuel paket restoran onayi bekleyen durumda olusmadi.");
+    }
+    const secondApprovedState = await request(`/api/restaurant/packages/${secondManualPackage.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "confirm" }),
+    });
+    const secondAssignedPackage = secondApprovedState.packages.find((pkg) => pkg.id === secondManualPackage.id);
+    if (!secondAssignedPackage || secondAssignedPackage.status !== "assigned") {
       throw new Error("Ikinci uygun kurye varken ikinci siparis atanamadi.");
     }
-    if (secondManualPackage.assignedCourierId !== createdCourier2.id) {
+    if (secondAssignedPackage.assignedCourierId !== createdCourier2.id) {
       throw new Error("Ikinci siparis beklenen ikinci kuryeye atanamadi.");
     }
 
@@ -246,13 +268,24 @@ async function run() {
         deliveryAddress: thirdAddress,
         packageType: "Icecek",
         orderAmount: 90,
+        customerName: "Ucuncu Musteri",
+        phone: "05550000003",
       }),
     });
     const thirdManualPackage = thirdRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === thirdAddress);
-    if (!thirdManualPackage || thirdManualPackage.status !== "awaiting_assignment") {
-      throw new Error("Tum kuryeler busy iken ucuncu siparis awaiting_assignment olmadi.");
+    if (!thirdManualPackage || thirdManualPackage.status !== "pending_approval") {
+      throw new Error("Ucuncu manuel paket restoran onayi bekleyen durumda olusmadi.");
     }
-    if (!thirdManualPackage.lastAssignmentError) {
+    const thirdApprovedState = await request(`/api/restaurant/packages/${thirdManualPackage.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "confirm" }),
+    });
+    const thirdWaitingPackage = thirdApprovedState.packages.find((pkg) => pkg.id === thirdManualPackage.id);
+    if (!thirdWaitingPackage || thirdWaitingPackage.status !== "preparing") {
+      throw new Error("Tum kuryeler busy iken ucuncu siparis kurye bekleme durumuna gecmedi.");
+    }
+    if (!thirdWaitingPackage.lastAssignmentError) {
       throw new Error("Atama basarisizlik nedeni kaydedilmedi.");
     }
 
@@ -868,12 +901,19 @@ async function run() {
         deliveryAddress: overrideAddress,
         packageType: "Override Test",
         orderAmount: 140,
+        customerName: "Override Musteri",
+        phone: "05550000004",
       }),
     });
     const overridePackage = overridePackageState.packages.find((pkg) => pkg.deliveryAddress === overrideAddress);
     if (!overridePackage) {
       throw new Error("Override test paketi olusturulamadi.");
     }
+    await request(`/api/restaurant/packages/${overridePackage.id}/action`, {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({ action: "confirm" }),
+    });
 
     await request(`/api/admin/couriers/${createdCourier3.id}/availability`, {
       method: "PATCH",

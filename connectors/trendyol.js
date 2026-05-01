@@ -9,7 +9,17 @@ function trimmed(value) {
 }
 
 function sellerId(account) {
-  return trimmed(account?.externalId || account?.sellerId || account?.externalStoreId);
+  return trimmed(account?.sellerId || account?.externalMerchantId || account?.externalStoreId);
+}
+
+function missingCredentialsResult() {
+  return {
+    ok: false,
+    optional: true,
+    manualAvailable: true,
+    status: 200,
+    message: "API bilgileri eksik, manuel paket sistemi kullanilabilir.",
+  };
 }
 
 function ordersEndpoint(account, params = {}) {
@@ -75,9 +85,8 @@ async function testConnection(account) {
 
   if (!sid) {
     return {
-      ok: false,
-      status: 400,
-      message: "Trendyol Seller ID eksik.",
+      ...missingCredentialsResult(),
+      message: "Trendyol Seller ID eksik. API bilgileri eksik, manuel paket sistemi kullanilabilir.",
     };
   }
 
@@ -85,9 +94,8 @@ async function testConnection(account) {
     authHeaders(account);
   } catch (error) {
     return {
-      ok: false,
-      status: 401,
-      message: error.message,
+      ...missingCredentialsResult(),
+      message: `${error.message}. API bilgileri eksik, manuel paket sistemi kullanilabilir.`,
     };
   }
 
@@ -122,10 +130,16 @@ async function fetchOrders(account) {
   const sid = sellerId(account);
 
   if (!sid) {
-    throw new Error("Trendyol Seller ID eksik.");
+    console.warn("Trendyol polling skipped", { reason: "seller_id_missing" });
+    return [];
   }
 
-  authHeaders(account);
+  try {
+    authHeaders(account);
+  } catch {
+    console.warn("Trendyol polling skipped", { reason: "api_credentials_missing" });
+    return [];
+  }
 
   const response = await fetchWithTimeout(
     ordersEndpoint(account, { status: "Created" }),
