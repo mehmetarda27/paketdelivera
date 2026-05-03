@@ -1,3 +1,20 @@
+try {
+  require("dotenv").config({ path: "./.env" });
+} catch {
+  try {
+    const envFs = require("fs");
+    const envPath = require("path").resolve(process.cwd(), ".env");
+    if (envFs.existsSync(envPath)) {
+      envFs.readFileSync(envPath, "utf8").split(/\r?\n/).forEach((line) => {
+        const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+        if (!match || match[1].startsWith("#") || process.env[match[1]] !== undefined) {
+          return;
+        }
+        process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, "");
+      });
+    }
+  } catch {}
+}
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -14,7 +31,7 @@ const platformConnectors = {
 };
 
 const PORT = Number(process.env.PORT || 3000);
-const DB_FILE = path.resolve(process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
+const DB_FILE = path.resolve(process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
 const LOG_DIR = path.join(__dirname, "logs");
 const WEBHOOK_LOG_FILE = path.join(LOG_DIR, "webhooks.log");
 const ADMIN_BOOTSTRAP_FILE = path.join(LOG_DIR, "admin-bootstrap.txt");
@@ -982,6 +999,9 @@ function validatePlatformAccountDraft(body) {
   }
 
   const normalizedWebhookSecret = webhookSecret || createWebhookSecret();
+  const normalizedApiSecret = platform === "POS"
+    ? trimmed(body.apiSecret ?? body.api_secret ?? body.webhookSecret ?? body.webhook_secret)
+    : trimmed(body.apiSecret ?? body.api_secret);
 
   return {
     restaurantId,
@@ -992,7 +1012,7 @@ function validatePlatformAccountDraft(body) {
     apiUsername: trimmed(body.apiUsername),
     apiPassword: String(body.apiPassword || ""),
     apiKey: trimmed(body.apiKey),
-    apiSecret: trimmed(body.apiSecret),
+    apiSecret: normalizedApiSecret,
     accessToken: trimmed(body.accessToken ?? body.token),
     token: trimmed(body.token ?? body.accessToken),
     refreshToken: trimmed(body.refreshToken),
@@ -1216,6 +1236,51 @@ function validateIntegrationDraft(body, restaurant) {
   return pkg;
 }
 
+function normalizeFeederIntegrationDraft(body) {
+  const customer = body?.customer && typeof body.customer === "object" ? body.customer : {};
+  const addressValue = body?.address;
+  const address =
+    typeof addressValue === "object" && addressValue !== null
+      ? trimmed(addressValue.full || addressValue.text || addressValue.address || addressValue.line1)
+      : trimmed(addressValue);
+  const orderId = trimmed(body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
+  const platform = normalizePlatformInput(body.platform ?? body.sourcePlatform ?? body.source_platform);
+  const customerName = trimmed(body.customerName ?? body.customer_name ?? customer.name ?? customer.fullName ?? customer.full_name);
+  const phone = trimmed(body.phone ?? customer.phone ?? customer.phoneNumber ?? customer.phone_number);
+  const price = normalizeMoney(body.price ?? body.totalPrice ?? body.total_price ?? body.orderAmount ?? body.amount);
+
+  if (!trimmed(body.restaurantId ?? body.restaurant_id)) {
+    throw validationError("restaurantId zorunludur.");
+  }
+  if (!orderId || !customerName || !phone || !address || price <= 0 || !platform) {
+    throw validationError("orderId, customer, address, price ve platform zorunludur.");
+  }
+
+  return {
+    restaurantId: trimmed(body.restaurantId ?? body.restaurant_id),
+    source: "platform_api",
+    sourcePlatform: platform,
+    externalOrderNo: orderId,
+    externalOrderId: orderId,
+    recipient: customerName,
+    phone,
+    address,
+    zone: trimmed(body.zone),
+    paymentMethod: trimmed(body.paymentMethod ?? body.payment_method) || "Online Odeme",
+    orderAmount: price,
+    amount: price,
+    items: normalizeIncomingOrderItems(body.items),
+    note: trimmed(body.note),
+    customerNote: trimmed(body.customerNote ?? body.customer_note),
+    customerLatitude: body.customerLatitude ?? body.customer_lat ?? body.customerLat,
+    customerLongitude: body.customerLongitude ?? body.customer_lng ?? body.customerLng,
+    customerAddress: trimmed(body.customerAddress ?? body.customer_address) || address,
+    latitude: body.latitude ?? body.x,
+    longitude: body.longitude ?? body.y,
+    rawPayload: body.rawPayload ?? body.raw_payload ?? body,
+  };
+}
+
 function normalizeStatus(status) {
   return LEGACY_STATUS_MAP[String(status || "").trim()] || PENDING_STATUS;
 }
@@ -1341,6 +1406,14 @@ function requestProtocol(req) {
 
 function isSecureRequest(req) {
   return requestProtocol(req) === "https";
+}
+
+function isLocalHostRequest(req) {
+  const hostHeader = String(req?.headers?.host || "").toLowerCase();
+  const host = hostHeader.startsWith("[")
+    ? hostHeader.slice(1, hostHeader.indexOf("]"))
+    : hostHeader.split(":")[0];
+  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host);
 }
 
 function requestBaseUrl(req) {
@@ -1483,7 +1556,7 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     externalMerchantId: account.externalMerchantId,
     apiUsername: account.apiUsername,
     hasApiKey: Boolean(account.apiKey),
-    hasApiSecret: Boolean(account.apiSecret),
+    hasApiSecret: Boolean(account.apiSecret || account.webhookSecret),
     hasToken: Boolean(account.token || account.accessToken),
     hasPosSecretKey: Boolean(account.posSecretKey),
     storeFrontCode: account.storeFrontCode,
@@ -2181,22 +2254,74 @@ function openLiveStream(req, res, audience) {
 }
 
 function sendFile(res, fileName) {
-  const filePath = path.join(__dirname, fileName);
+  const normalizedName = String(fileName || "").replace(/^[/\\]+/, "");
+  const filePath = path.resolve(__dirname, normalizedName);
+  if (!filePath.startsWith(__dirname)) {
+    sendJson(res, 403, { error: "Gecersiz dosya yolu." });
+    return;
+  }
+
   if (!fs.existsSync(filePath)) {
     sendJson(res, 404, { error: "Dosya bulunamadi." });
     return;
   }
 
-  const ext = path.extname(fileName);
+  const ext = path.extname(normalizedName);
   const typeMap = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml; charset=utf-8",
+    ".ico": "image/x-icon",
   };
 
   writeSecurityHeaders(res);
   res.writeHead(200, { "Content-Type": typeMap[ext] || "text/plain; charset=utf-8" });
   fs.createReadStream(filePath).pipe(res);
+}
+
+function findStaticFile(pathname, method = "GET") {
+  if (STATIC_FILES[pathname]) {
+    return STATIC_FILES[pathname];
+  }
+
+  if (!["GET", "HEAD"].includes(method)) {
+    return "";
+  }
+
+  let decodedPath = "";
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return "";
+  }
+
+  if (!decodedPath || decodedPath.includes("\0") || decodedPath.includes("..")) {
+    return "";
+  }
+
+  const relativePath = decodedPath.replace(/^\/+/, "");
+  if (!relativePath || relativePath.startsWith("api/")) {
+    return "";
+  }
+
+  const ext = path.extname(relativePath).toLowerCase();
+  const allowedExts = new Set([".html", ".css", ".js", ".json", ".webmanifest", ".png", ".jpg", ".jpeg", ".svg", ".ico"]);
+  if (!allowedExts.has(ext)) {
+    return "";
+  }
+
+  const filePath = path.resolve(__dirname, relativePath);
+  if (!filePath.startsWith(__dirname) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return "";
+  }
+
+  return relativePath;
 }
 
 function notFound(res) {
@@ -3790,7 +3915,7 @@ function platformAccountMissingCredentials(account) {
     return !(account?.apiKey && account?.apiSecret && (account?.externalMerchantId || account?.externalStoreId || account?.externalId));
   }
   if (platform === "POS") {
-    return !(account?.apiKey || account?.apiSecret || account?.webhookSecret || account?.posSecretKey || account?.token || account?.accessToken);
+    return !((account?.token || account?.accessToken) && (account?.apiSecret || account?.webhookSecret));
   }
   return !(account?.apiKey || account?.apiSecret || account?.token || account?.accessToken || account?.apiUsername || account?.apiPassword);
 }
@@ -4548,7 +4673,9 @@ function connectorForPlatform(platform) {
   return platformConnectors[normalizePlatformInput(platform) || platform] || null;
 }
 
-async function pollPlatformAccount(account) {
+const posMissingEndpointLogKeys = new Set();
+
+async function pollPlatformAccount(account, options = {}) {
   const connector = connectorForPlatform(account.platform);
   if (!connector || typeof connector.fetchOrders !== "function") {
     return { ok: false, skipped: true, reason: "connector yok" };
@@ -4560,18 +4687,46 @@ async function pollPlatformAccount(account) {
   if (!isPosAccount && account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
     return { ok: false, skipped: true, reason: "API baglanti testi basarili olmadan polling calismaz." };
   }
+  if (isPosAccount && !options.manual && typeof connector.endpointConfigured === "function" && !connector.endpointConfigured(account)) {
+    const logKey = `${account.id}:missing_endpoint`;
+    if (!posMissingEndpointLogKeys.has(logKey)) {
+      posMissingEndpointLogKeys.add(logKey);
+      console.warn("POS polling skipped", {
+        accountId: account.id,
+        platformRestaurantId: account.externalStoreId,
+        endpointConfigured: false,
+        reason: "API endpoint eksik",
+      });
+    }
+    return {
+      ok: false,
+      skipped: true,
+      optional: true,
+      reason: "POS API endpoint eksik. ADISYO_API_BASE_URL veya ADISYO_POLLING_URL tanimlayin.",
+    };
+  }
 
   let rawOrders = [];
   try {
     rawOrders = await connector.fetchOrders(account);
   } catch (error) {
     if (error.code === "POS_ENDPOINT_MISSING") {
-      console.warn("POS polling skipped", {
-        accountId: account.id,
-        platformRestaurantId: account.externalStoreId,
-        reason: "API endpoint eksik",
-      });
-      return { ok: false, skipped: true, optional: true, reason: "API endpoint eksik. Adisyo/POS polling endpoint tanimli degil." };
+      const logKey = `${account.id}:missing_endpoint`;
+      if (options.manual || !posMissingEndpointLogKeys.has(logKey)) {
+        posMissingEndpointLogKeys.add(logKey);
+        console.warn("POS polling skipped", {
+          accountId: account.id,
+          platformRestaurantId: account.externalStoreId,
+          endpointConfigured: false,
+          reason: "API endpoint eksik",
+        });
+      }
+      return {
+        ok: false,
+        skipped: true,
+        optional: true,
+        reason: "POS API endpoint eksik. ADISYO_API_BASE_URL veya ADISYO_POLLING_URL tanimlayin.",
+      };
     }
     console.error("Platform polling connector failed", {
       platform: account.platform,
@@ -5376,7 +5531,7 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
       return;
     }
-    const result = await pollPlatformAccount(account);
+    const result = await pollPlatformAccount(account, { manual: true });
     sendJson(res, result.ok || result.optional || result.skipped ? 200 : 400, {
       ok: result.ok,
       error: result.ok ? undefined : result.reason,
@@ -5852,20 +6007,53 @@ async function handleApi(req, res, pathname) {
     }
 
     const { raw, json: body } = await readRequestBody(req);
-    const apiKey = String(req.headers["x-api-key"] || "").trim();
-    const signature = String(req.headers["x-delivera-signature"] || "").trim();
-    const restaurantRow = db.prepare("SELECT * FROM restaurants WHERE id = ? AND api_key = ?").get(body.restaurantId, apiKey);
+    const integrationKey = String(req.headers["x-integration-key"] || "").trim();
+    const expectedIntegrationKey = trimmed(process.env.DELIVERA_INTEGRATION_KEY);
+    const integrationKeyValid =
+      Boolean(expectedIntegrationKey) &&
+      integrationKey.length === expectedIntegrationKey.length &&
+      crypto.timingSafeEqual(Buffer.from(integrationKey), Buffer.from(expectedIntegrationKey));
 
-    if (!restaurantRow) {
+    if (!integrationKeyValid) {
       logWebhookAttempt({
-        restaurantId: body.restaurantId,
-        sourcePlatform: body.sourcePlatform,
-        externalOrderNo: body.externalOrderNo,
+        restaurantId: body.restaurantId ?? body.restaurant_id,
+        sourcePlatform: body.platform ?? body.sourcePlatform,
+        externalOrderNo: body.orderId ?? body.externalOrderNo,
         signatureValid: false,
-        responseStatus: 401,
+        responseStatus: 403,
         requestBody: raw,
       });
-      sendJson(res, 401, { error: "Gecersiz restoran kimligi veya API key." });
+      sendJson(res, 403, { ok: false, error: "Forbidden" });
+      return;
+    }
+
+    let feederDraft;
+    try {
+      feederDraft = normalizeFeederIntegrationDraft(body);
+    } catch (error) {
+      logWebhookAttempt({
+        restaurantId: body.restaurantId ?? body.restaurant_id,
+        sourcePlatform: body.platform ?? body.sourcePlatform,
+        externalOrderNo: body.orderId ?? body.externalOrderNo,
+        signatureValid: false,
+        responseStatus: 400,
+        requestBody: raw,
+      });
+      sendJson(res, 400, { error: error.message });
+      return;
+    }
+
+    const restaurantRow = db.prepare("SELECT * FROM restaurants WHERE id = ?").get(feederDraft.restaurantId);
+    if (!restaurantRow) {
+      logWebhookAttempt({
+        restaurantId: feederDraft.restaurantId,
+        sourcePlatform: feederDraft.sourcePlatform,
+        externalOrderNo: feederDraft.externalOrderNo,
+        signatureValid: true,
+        responseStatus: 404,
+        requestBody: raw,
+      });
+      sendJson(res, 404, { ok: false, error: "Restoran bulunamadi." });
       return;
     }
 
@@ -5880,72 +6068,50 @@ async function handleApi(req, res, pathname) {
       webhookSecret: restaurantRow.webhook_secret,
     };
 
-    const expectedSignature = signWebhook(raw, restaurant.webhookSecret);
-    const signatureValid =
-      Boolean(signature) &&
-      signature.length === expectedSignature.length &&
-      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
-
-    if (!signatureValid) {
+    if (restaurant.platforms.length > 0 && !restaurant.platforms.includes(feederDraft.sourcePlatform)) {
       logWebhookAttempt({
         restaurantId: restaurant.id,
-        sourcePlatform: body.sourcePlatform,
-        externalOrderNo: body.externalOrderNo,
-        signatureValid: false,
-        responseStatus: 401,
-        requestBody: raw,
-      });
-      sendJson(res, 401, { error: "Webhook imzasi dogrulanamadi." });
-      return;
-    }
-
-    if (restaurant.platforms.length > 0 && !restaurant.platforms.includes(body.sourcePlatform)) {
-      logWebhookAttempt({
-        restaurantId: restaurant.id,
-        sourcePlatform: body.sourcePlatform,
-        externalOrderNo: body.externalOrderNo,
+        sourcePlatform: feederDraft.sourcePlatform,
+        externalOrderNo: feederDraft.externalOrderNo,
         signatureValid: true,
         responseStatus: 400,
         requestBody: raw,
       });
-      sendJson(res, 400, { error: "Bu restoran icin platform tanimli degil." });
+      sendJson(res, 400, { ok: false, error: "Bu restoran icin platform tanimli degil." });
       return;
     }
 
-    const duplicate = findDuplicatePackage(body.restaurantId, trimmed(body.source) || "platform_api", trimmed(body.externalOrderId || body.externalOrderNo));
-
+    const duplicate = findDuplicatePackage(feederDraft.restaurantId, feederDraft.source, feederDraft.externalOrderId);
     if (duplicate) {
       logWebhookAttempt({
         restaurantId: restaurant.id,
-        sourcePlatform: body.sourcePlatform,
-        externalOrderNo: body.externalOrderId || body.externalOrderNo,
+        sourcePlatform: feederDraft.sourcePlatform,
+        externalOrderNo: feederDraft.externalOrderNo,
         signatureValid: true,
         responseStatus: 200,
         requestBody: raw,
       });
-      sendJson(res, 200, { message: "Bu siparis zaten alinmis, yeni kayit acilmadi." });
+      sendJson(res, 200, { ok: true, duplicate: true, message: "Bu siparis zaten alinmis, yeni kayit acilmadi." });
       return;
     }
 
     let pkg;
     try {
-      pkg = validateIntegrationDraft(body, restaurant);
+      pkg = validateIntegrationDraft(feederDraft, restaurant);
     } catch (error) {
       logWebhookAttempt({
         restaurantId: restaurant.id,
-        sourcePlatform: body.sourcePlatform,
-        externalOrderNo: body.externalOrderNo,
+        sourcePlatform: feederDraft.sourcePlatform,
+        externalOrderNo: feederDraft.externalOrderNo,
         signatureValid: true,
         responseStatus: 400,
         requestBody: raw,
       });
-      sendJson(res, 400, { error: error.message });
+      sendJson(res, 400, { ok: false, error: error.message });
       return;
     }
 
-    pkg.source = pkg.source || "platform_api";
     createPackageRecord(pkg, "Platform Siparisi");
-
     rebalancePackages();
     const created = decorateState().packages.find((item) => item.id === pkg.id);
 
@@ -5958,13 +6124,21 @@ async function handleApi(req, res, pathname) {
       details: {
         sourcePlatform: pkg.sourcePlatform,
         externalOrderNo: pkg.externalOrderNo,
+        receiver: "python_worker",
       },
+    });
+
+    console.log("Integration order received from worker", {
+      restaurantId: restaurant.id,
+      platform: pkg.sourcePlatform,
+      orderId: pkg.externalOrderId,
+      packageId: pkg.id,
     });
 
     logWebhookAttempt({
       restaurantId: restaurant.id,
-      sourcePlatform: body.sourcePlatform,
-      externalOrderNo: body.externalOrderNo,
+      sourcePlatform: pkg.sourcePlatform,
+      externalOrderNo: pkg.externalOrderNo,
       signatureValid: true,
       responseStatus: 201,
       requestBody: raw,
@@ -5977,6 +6151,7 @@ async function handleApi(req, res, pathname) {
     });
 
     sendJson(res, 201, {
+      ok: true,
       message: "Siparis alindi ve otomatik atama calisti.",
       package: created,
     });
@@ -6964,7 +7139,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (FORCE_HTTPS && !isSecureRequest(req) && req.headers.host) {
+    if (FORCE_HTTPS && !isLocalHostRequest(req) && !isSecureRequest(req) && req.headers.host) {
       res.writeHead(308, {
         Location: `${PUBLIC_BASE_URL || `https://${req.headers.host}`}${pathname}${requestUrl.search}`,
       });
@@ -6977,8 +7152,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (STATIC_FILES[pathname]) {
-      sendFile(res, STATIC_FILES[pathname]);
+    const staticFile = findStaticFile(pathname, req.method);
+    if (staticFile) {
+      sendFile(res, staticFile);
       return;
     }
 

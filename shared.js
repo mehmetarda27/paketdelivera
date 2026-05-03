@@ -51,13 +51,15 @@ const RESTAURANT_ID_STORAGE_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_STORAGE_KEY = "deliveraRestaurantApiKey";
 
 async function api(path, options = {}) {
+  const requestPath = String(path || "").replace(/^https:\/\/paketdelivera\.onrender\.com(?=\/api\/)/i, "");
+
   async function runRequest() {
     const mergedHeaders = {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     };
 
-    if (String(path || "").startsWith("/api/restaurant")) {
+    if (requestPath.startsWith("/api/restaurant")) {
       const restaurantId = localStorage.getItem(RESTAURANT_ID_STORAGE_KEY) || "";
       const apiKey = localStorage.getItem(RESTAURANT_API_KEY_STORAGE_KEY) || "";
       if (restaurantId && !mergedHeaders["x-restaurant-id"]) {
@@ -68,7 +70,7 @@ async function api(path, options = {}) {
       }
     }
 
-    const response = await fetch(path, {
+    const response = await fetch(requestPath, {
       ...options,
       headers: mergedHeaders,
     });

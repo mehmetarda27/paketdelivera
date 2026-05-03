@@ -13,7 +13,6 @@
     "service_worker": "background.js"
   },
   "host_permissions": [
-    "https://paketdelivera.onrender.com/*",
     "<all_urls>"
   ],
   "content_scripts": [

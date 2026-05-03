@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND_URL = "https://paketdelivera.onrender.com";
+const DEFAULT_BACKEND_URL = "";
 const shared = globalThis.DeliveraExtensionShared;
 const STORAGE_KEYS = {
   backendUrl: "deliveraBackendUrl",
