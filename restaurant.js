@@ -1592,3 +1592,21 @@ api("/api/bootstrap")
   });
 
 window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);
+document.querySelector("button").addEventListener("click", async () => {
+  const sellerId = document.querySelector("input").value;
+
+  const res = await fetch("/api/platform/account", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      platform: "Trendyol Go",
+      platformRestaurantId: sellerId,
+      webhookSecret: "delivera-gizli-anahtar-2026"
+    })
+  });
+
+  const data = await res.json();
+  console.log("SAVE RESULT:", data);
+});
