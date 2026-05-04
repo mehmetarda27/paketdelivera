@@ -1,4 +1,4 @@
-const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
+﻿const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
 const RESTAURANT_ID_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_KEY = "deliveraRestaurantApiKey";
@@ -374,11 +374,10 @@ function simplifyPlatformAccountForm() {
     "webhookAuthType",
     "apiUsername",
     "apiPassword",
-    "apiKey",
-    "apiSecret",
     "storeFrontCode",
     "chainId",
     "vendorId",
+    "posSecretKey",
   ];
 
   hiddenFieldNames.forEach((name) => {
@@ -520,30 +519,30 @@ function parseQuickPasteOrder(rawText) {
     ? phoneMatch[1].replace(/[^\d]/g, "").replace(/^90(?=5)/, "")
     : "";
 
-  const customerName = findLabeledValue(text, ["Musteri", "Müşteri", "Ad Soyad", "Adı Soyadı", "Alici", "Alıcı"]);
+  const customerName = findLabeledValue(text, ["Musteri", "MÃ¼ÅŸteri", "Ad Soyad", "AdÄ± SoyadÄ±", "Alici", "AlÄ±cÄ±"]);
   const paymentMethod = (() => {
-    const labeled = findLabeledValue(text, ["Odeme", "Ödeme", "Odeme Tipi", "Ödeme Tipi"]);
+    const labeled = findLabeledValue(text, ["Odeme", "Ã–deme", "Odeme Tipi", "Ã–deme Tipi"]);
     if (labeled) {
       return labeled;
     }
     if (/nakit kapida|kapida nakit|nakit/i.test(text)) {
       return "Nakit";
     }
-    if (/online|kart|kredi karti|kredi kartı|pos/i.test(text)) {
+    if (/online|kart|kredi karti|kredi kartÄ±|pos/i.test(text)) {
       return "Online Odeme";
     }
     return "";
   })();
-  const customerNote = findLabeledValue(text, ["Not", "Aciklama", "Açıklama", "Kurye Notu", "Musteri Notu", "Müşteri Notu"]);
-  const amountMatch = text.match(/(?:toplam|tutar|odeme|ödeme)\s*[:\-]?\s*[₺₸]?\s*([\d\.,]+)/i) || text.match(/[₺₸]\s*([\d\.,]+)/);
+  const customerNote = findLabeledValue(text, ["Not", "Aciklama", "AÃ§Ä±klama", "Kurye Notu", "Musteri Notu", "MÃ¼ÅŸteri Notu"]);
+  const amountMatch = text.match(/(?:toplam|tutar|odeme|Ã¶deme)\s*[:\-]?\s*[â‚ºâ‚¸]?\s*([\d\.,]+)/i) || text.match(/[â‚ºâ‚¸]\s*([\d\.,]+)/);
   const normalizedAmount = amountMatch?.[1]
     ? Number(String(amountMatch[1]).replace(/\./g, "").replace(",", "."))
     : null;
-  const packageType = findLabeledValue(text, ["Paket Tipi", "Urun", "Ürün", "Siparis", "Sipariş"]) || "Hizli Platform Siparisi";
+  const packageType = findLabeledValue(text, ["Paket Tipi", "Urun", "ÃœrÃ¼n", "Siparis", "SipariÅŸ"]) || "Hizli Platform Siparisi";
 
-  const labeledAddress = findLabeledValue(text, ["Adres", "Teslimat Adresi", "Musteri Adresi", "Müşteri Adresi"]);
+  const labeledAddress = findLabeledValue(text, ["Adres", "Teslimat Adresi", "Musteri Adresi", "MÃ¼ÅŸteri Adresi"]);
   const longAddressLine = lines
-    .filter((line) => line.length >= 18 && !/^(telefon|odeme|ödeme|musteri|müşteri|not|aciklama|açıklama|toplam|tutar)\b/i.test(line))
+    .filter((line) => line.length >= 18 && !/^(telefon|odeme|Ã¶deme|musteri|mÃ¼ÅŸteri|not|aciklama|aÃ§Ä±klama|toplam|tutar)\b/i.test(line))
     .sort((left, right) => right.length - left.length)[0] || "";
   const customerAddress = labeledAddress || longAddressLine;
 
@@ -588,6 +587,27 @@ function getCurrentRestaurant(data) {
 
 function getCurrentPlatformAccount(data) {
   return data.platformAccounts?.[0] || null;
+}
+
+function currentWebhookUrl() {
+  return `${window.location.origin}/api/platform/order`;
+}
+
+function getLastWebhookLog(data, account) {
+  const logs = Array.isArray(data?.webhookLogs) ? data.webhookLogs : [];
+  if (!account) {
+    return logs[0] || null;
+  }
+  return logs.find((log) => log.sourcePlatform === account.platform) || logs[0] || null;
+}
+
+function getLastWebhookTestPackage(data, account) {
+  const packages = Array.isArray(data?.packages) ? data.packages : [];
+  return packages.find((pkg) =>
+    pkg.source === "platform_webhook" &&
+    (!account || pkg.sourcePlatform === account.platform) &&
+    String(pkg.externalOrderNo || "").startsWith("TEST-")
+  ) || null;
 }
 
 function activeOrderPackages(packages) {
@@ -648,11 +668,11 @@ function setIntegrationInfo(data, explicitIntegration = null) {
     safeSetText(restaurantRefs.integrationPortalUsername, "Portal kullanici burada gorunur");
     safeSetText(restaurantRefs.integrationWebhookSecret, "Secret panelde gosterilmez");
     safeSetText(restaurantRefs.integrationEndpoint, "Restoran girisi yapildiginda endpoint gorunur");
-    safeSetText(restaurantRefs.platformWebhookUrl, "Platform hesabini kaydedince API polling bilgisi gorunur");
+    safeSetText(restaurantRefs.platformWebhookUrl, "Platform hesabini kaydedince webhook URL gorunur");
     safeSetText(restaurantRefs.platformSetupName, "Henuz kayitli platform yok.");
-    safeSetText(restaurantRefs.platformSetupAuth, "Auth bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupAuth, "Secret kaydedilmedi");
     safeSetText(restaurantRefs.platformSetupStore, "Store/vendor bilgisi burada gorunur");
-    safeSetText(restaurantRefs.platformSetupHint, "Baglanti testi basarili olursa polling siparis cekmeye baslar.");
+    safeSetText(restaurantRefs.platformSetupHint, "Polling API kapalı — webhook ile sipariş bekleniyor");
     safeSetText(restaurantRefs.samplePayload, "Restoran girisi yapildiginda ornek payload gorunecek.");
     return;
   }
@@ -665,9 +685,9 @@ function setIntegrationInfo(data, explicitIntegration = null) {
     portalUsername: restaurant.username,
     apiKey: restaurant.apiKey ? "Kayitli" : "Eksik",
     webhookSecret: restaurant.webhookSecret ? "Kayitli" : "Eksik",
-    endpoint: "Platform order API polling",
+    endpoint: currentWebhookUrl(),
     samplePayload: {
-      platform: normalizePlatformSlug(restaurant.platforms[0] || "Trendyol Go"),
+      platform: normalizePlatformSlug(restaurant.platforms[0] || "Trendyol Yemek"),
       platformRestaurantId: "TEST-STORE-1",
       orderId: "TEST-ORDER-1",
       customerName: "Test Musteri",
@@ -695,21 +715,29 @@ function setPlatformSetup(data) {
   const account = getCurrentPlatformAccount(data);
 
   if (!account) {
-    safeSetText(restaurantRefs.platformWebhookUrl, "Platform hesabini kaydedince API polling testi hazir olur");
+    safeSetText(restaurantRefs.platformWebhookUrl, currentWebhookUrl());
     safeSetText(restaurantRefs.platformSetupName, "Henuz kayitli platform yok.");
-    safeSetText(restaurantRefs.platformSetupAuth, "API bilgisi burada gorunur");
+    safeSetText(restaurantRefs.platformSetupAuth, "Secret kaydedilmedi");
     safeSetText(restaurantRefs.platformSetupStore, "Platform restoran bilgisi burada gorunur");
-    safeSetText(restaurantRefs.platformSetupHint, "Baglanti testi basarili olursa polling siparis cekmeye baslar.");
+    safeSetText(restaurantRefs.platformSetupHint, "Polling API kapalı — webhook ile sipariş bekleniyor");
     return;
   }
 
-  safeSetText(restaurantRefs.platformWebhookUrl, "API polling: Created siparisler 10 saniyede bir cekilir");
-  safeSetText(restaurantRefs.platformSetupName, `${account.platform} - ${account.active ? "aktif" : "pasif"}`);
-  safeSetText(restaurantRefs.platformSetupStore, account.externalStoreId || "-");
-  safeSetText(restaurantRefs.platformSetupAuth, account.hasApiKey && account.hasApiSecret ? "API key/secret kayitli" : "API bilgisi eksik");
+  const lastWebhook = getLastWebhookLog(data, account);
+  const lastTest = getLastWebhookTestPackage(data, account);
+  safeSetText(restaurantRefs.platformWebhookUrl, currentWebhookUrl());
+  safeSetText(restaurantRefs.platformSetupName, `${account.platform} - webhook ${account.webhookEnabled ? "aktif" : "pasif"} / polling ${account.pollingEnabled ? "aktif" : "pasif"}`);
+  safeSetText(restaurantRefs.platformSetupStore, account.externalStoreId ? `ID kayitli: ${account.externalStoreId}` : "ID eksik");
+  safeSetText(restaurantRefs.platformSetupAuth, account.hasWebhookSecret || account.webhookSecret ? "Secret kayitli" : "Secret eksik");
   safeSetText(
     restaurantRefs.platformSetupHint,
-    `${account.verificationStatus === "verified" ? "API aktif." : "API baglanti testi bekleniyor."} ${account.verificationNote || ""}`
+    [
+      account.pollingEnabled ? "Polling aktif - connector ile test edilebilir." : "Polling API kapalı — webhook ile sipariş bekleniyor",
+      account.lastWebhookAt ? `Son webhook: ${formatDate(account.lastWebhookAt)}` : (lastWebhook ? `Son webhook: ${formatDate(lastWebhook.createdAt)}` : "Son webhook: henuz yok"),
+      account.lastPollAt ? `Son polling: ${formatDate(account.lastPollAt)}` : "Son polling: henuz yok",
+      lastTest ? `Son test siparisi: ${lastTest.externalOrderNo} / ${lastTest.trackingNo}` : "Son test siparisi: henuz yok",
+      account.lastError ? `Son hata: ${account.lastError}` : "Son hata: yok",
+    ].join(" ")
   );
 }
 
@@ -749,25 +777,27 @@ function renderPlatformAccounts(accounts) {
   accounts.forEach((account) => {
     const card = document.createElement("article");
     card.className = "stack-card";
-    const verificationText = account.verificationStatus === "verified"
-      ? "API aktif"
-      : account.verificationStatus === "failed"
-        ? "API baglanti hatasi"
-        : "API baglanti testi bekliyor";
+    const lastWebhook = getLastWebhookLog(restaurantState.data, account);
+    const lastTest = getLastWebhookTestPackage(restaurantState.data, account);
+    const pollingReady = Boolean((account.hasApiKey && account.hasApiSecret) || (account.hasToken && account.hasApiSecret));
     card.innerHTML = `
       <div class="stack-top">
         <div>
           <strong>${account.platform}</strong>
-          <p>Platform Restaurant ID: ${account.externalStoreId}</p>
-          <p>Polling: 10 saniyede bir Created siparisler</p>
-          <p>Son senkron: ${account.lastSyncAt || "Henuz yok"}</p>
-          <p>${verificationText}${account.verificationNote ? ` - ${account.verificationNote}` : ""}</p>
+          <p>Webhook: ${account.webhookEnabled ? "aktif" : "pasif"}</p>
+          <p>Polling: ${account.pollingEnabled ? "aktif" : "pasif"}</p>
+          <p>Platform Restaurant ID: ${account.externalStoreId ? `ID kayitli (${account.externalStoreId})` : "ID eksik"}</p>
+          <p>Webhook Secret: ${account.hasWebhookSecret || account.webhookSecret ? "Secret kayitli" : "Secret eksik"}</p>
+          <p>Son webhook: ${account.lastWebhookAt ? formatDate(account.lastWebhookAt) : (lastWebhook ? formatDate(lastWebhook.createdAt) : "Henuz yok")}</p>
+          <p>Son polling: ${account.lastPollAt ? formatDate(account.lastPollAt) : "Henuz yok"}</p>
+          <p>Son test siparisi: ${lastTest ? `${lastTest.externalOrderNo} / ${lastTest.trackingNo}` : "Henuz yok"}</p>
+          <p>Son hata: ${account.lastError || "Yok"}</p>
         </div>
         <span class="soft-badge">${account.active ? "Canli" : "Pasif"}</span>
       </div>
       <div class="button-row">
-        <button class="ghost-btn" type="button" data-platform-test-connection="${account.id}">Baglantiyi Test Et</button>
-        <button class="ghost-btn" type="button" data-platform-sync="${account.id}">Simdi Siparis Cek</button>
+        <button class="primary-btn" type="button" data-platform-webhook-test="${account.id}">Webhook Test Siparisi Gonder</button>
+        <button class="ghost-btn" type="button" data-platform-sync="${account.id}" data-polling-ready="${pollingReady && account.pollingEnabled ? "1" : "0"}">Polling Test Et</button>
       </div>
     `;
     restaurantRefs.platformAccountList.appendChild(card);
@@ -817,9 +847,9 @@ function renderIntegrationWizard(wizard) {
   }
 
   const safeWizard = wizard || {
-    webhookUrl: "Platform hesabi kaydedince API polling bilgisi burada gorunur.",
+    webhookUrl: currentWebhookUrl(),
     verificationStatus: "pending",
-    helpText: "Platform entegrasyonu icin once hesap bilgilerini kaydet.",
+    helpText: "Webhook modu icin once platformRestaurantId ve secret kaydet.",
     steps: [],
   };
 
@@ -836,7 +866,7 @@ function renderIntegrationWizard(wizard) {
   `).join("") || '<div class="empty-state">Entegrasyon sihirbazi icin once restoran oturumu ac.</div>';
 
   restaurantRefs.integrationWizardWebhook.textContent = safeWizard.webhookUrl;
-  restaurantRefs.integrationWizardStatus.textContent = `${safeWizard.helpText} Durum: ${safeWizard.verificationStatus}.`;
+  restaurantRefs.integrationWizardStatus.textContent = `${safeWizard.helpText} Durum: Webhook modu aktif.`;
 }
 
 function renderRecentOrders(packages) {
@@ -890,7 +920,7 @@ function renderActiveOrders(data) {
   const restaurantName = data.restaurants?.[0]?.name || "Delivera Express";
 
   if (packageList.length === 0) {
-    restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya API polling siparisi geldiginde burada gorunecek.</div>';
+    restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya webhook siparisi geldiginde burada gorunecek.</div>';
     return;
   }
 
@@ -947,7 +977,7 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Kurye</span>
-          <strong>${pkg.assignedCourierName || "Henuz atanmadı"}</strong>
+          <strong>${pkg.assignedCourierName || "Henuz atanmadÄ±"}</strong>
         </div>
         <div>
           <span>Kurye Durumu</span>
@@ -1242,8 +1272,8 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   if (!restaurantState.token || !restaurantState.data?.restaurants?.[0]) {
-    restaurantRefs.summary.textContent = "Restoran oturumu bulunamadı, lütfen restoran paneline geçerli restoran bağlantısıyla girin.";
-    showToast("Restoran oturumu bulunamadı, lütfen restoran paneline geçerli restoran bağlantısıyla girin.", "error");
+    restaurantRefs.summary.textContent = "Restoran oturumu bulunamadÄ±, lÃ¼tfen restoran paneline geÃ§erli restoran baÄŸlantÄ±sÄ±yla girin.";
+    showToast("Restoran oturumu bulunamadÄ±, lÃ¼tfen restoran paneline geÃ§erli restoran baÄŸlantÄ±sÄ±yla girin.", "error");
     return;
   }
 
@@ -1267,7 +1297,9 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
     chainId: formData.get("chainId"),
     vendorId: formData.get("vendorId"),
     active: formData.has("active"),
-    webhookSecret: staticToken || String(formData.get("apiKey") || formData.get("apiPassword") || "").trim(),
+    webhookEnabled: formData.has("webhookEnabled"),
+    pollingEnabled: formData.has("pollingEnabled"),
+    webhookSecret: staticToken,
     authType: "static_token",
     staticToken,
   };
@@ -1284,7 +1316,7 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
     restaurantRefs.platformSelect.innerHTML = createPlatformOptions();
     simplifyPlatformAccountForm();
     hydrateRestaurant(data);
-    restaurantRefs.summary.textContent = "Platform hesabı kaydedildi";
+    restaurantRefs.summary.textContent = "Platform hesabÄ± kaydedildi";
     showToast("Platform hesabi kaydedildi");
   } catch (error) {
     restaurantRefs.summary.textContent = error.message || "Platform hesabi kaydedilemedi.";
@@ -1305,41 +1337,74 @@ restaurantRefs.copyWebhookButton?.addEventListener("click", async () => {
   }
 });
 
-restaurantRefs.testIntegrationButton?.addEventListener("click", async () => {
-  const accountId = restaurantState.data?.integrationWizard?.currentAccountId;
-  if (!accountId) {
-    showToast("Test icin once platform hesabi kaydet.", "error");
-    return;
+async function sendWebhookTestOrder(account) {
+  if (!account) {
+    throw new Error("Test icin once platform hesabi kaydet.");
   }
+  const webhookSecret = String(account.webhookSecret || "").trim();
+  if (!webhookSecret) {
+    throw new Error("Webhook secret panel oturumunda bulunamadi. Hesabi secret ile tekrar kaydet.");
+  }
+
+  const response = await api("/api/platform/order", {
+    method: "POST",
+    headers: {
+      "x-platform-secret": webhookSecret,
+    },
+    body: JSON.stringify({
+      platform: account.platform,
+      platformRestaurantId: account.externalStoreId,
+      orderId: `TEST-${Date.now()}`,
+      customerName: "Test Musteri",
+      phone: "05555555555",
+      address: "Mersin Akdeniz test adresi",
+      totalPrice: 150,
+      paymentMethod: "Online Odeme",
+    }),
+  });
+
+  await loadRestaurantWorkspace({ silent: true });
+  const trackingNo = response.trackingNo || response.package?.trackingNo || "";
+  showToast(`Webhook test basarili, paket olusturuldu: ${trackingNo}`);
+  restaurantRefs.summary.textContent = `Webhook test basarili, paket olusturuldu: ${trackingNo}`;
+  console.log("Webhook test successful", {
+    platform: account.platform,
+    platformRestaurantId: account.externalStoreId,
+    trackingNo,
+  });
+}
+
+restaurantRefs.testIntegrationButton?.addEventListener("click", async () => {
   try {
-    const response = await api("/api/restaurant/platform-accounts/test-connection", {
-      method: "POST",
-      headers: restaurantAuthHeaders(),
-      retryWithRefresh: refreshRestaurantAccess,
-      body: JSON.stringify({ accountId }),
-    });
-    hydrateRestaurant(response.state);
-    showToast(
-      response.verification.status === "verified" ? "Baglanti basarili." : "API bilgileri eksik, manuel paket sistemi kullanilabilir.",
-      response.verification.status === "verified" ? "success" : "error"
-    );
+    await sendWebhookTestOrder(getCurrentPlatformAccount(restaurantState.data || {}));
   } catch (error) {
-    showToast(error.message || "API bilgileri eksik, manuel paket sistemi kullanilabilir.", "error");
+    showToast(error.message || "Webhook test siparisi gonderilemedi.", "error");
   }
 });
 
 restaurantRefs.platformAccountList?.addEventListener("click", async (event) => {
-  const testConnectionButton = event.target.closest("[data-platform-test-connection]");
+  const webhookTestButton = event.target.closest("[data-platform-webhook-test]");
   const syncButton = event.target.closest("[data-platform-sync]");
-  const accountId = testConnectionButton?.dataset.platformTestConnection || syncButton?.dataset.platformSync;
+  const accountId = webhookTestButton?.dataset.platformWebhookTest || syncButton?.dataset.platformSync;
   if (!accountId) {
     return;
   }
+  if (webhookTestButton) {
+    try {
+      const account = (restaurantState.data?.platformAccounts || []).find((item) => item.id === accountId);
+      await sendWebhookTestOrder(account);
+    } catch (error) {
+      showToast(error.message || "Webhook test siparisi gonderilemedi.", "error");
+    }
+    return;
+  }
+  if (syncButton?.dataset.pollingReady !== "1") {
+    showToast("Polling kapali veya API bilgileri eksik");
+    restaurantRefs.summary.textContent = "Polling kapali veya API bilgileri eksik";
+    return;
+  }
   try {
-    const endpoint = testConnectionButton
-      ? "/api/restaurant/platform-accounts/test-connection"
-      : "/api/restaurant/platform-accounts/sync";
-    const response = await api(endpoint, {
+    const response = await api("/api/restaurant/platform-accounts/sync", {
       method: "POST",
       headers: restaurantAuthHeaders(),
       retryWithRefresh: refreshRestaurantAccess,
@@ -1592,35 +1657,4 @@ api("/api/bootstrap")
   });
 
 window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);
-document.addEventListener("click", async (event) => {
-  const button = event.target.closest("button");
-  if (!button) return;
 
-  if (!button.textContent.includes("Platform Hesabını Kaydet")) return;
-
-  const inputs = [...document.querySelectorAll("input")];
-  const sellerInput = inputs.find((i) =>
-    i.placeholder?.toLowerCase().includes("vendor") ||
-    i.placeholder?.toLowerCase().includes("store") ||
-    i.value === "535548"
-  );
-
-  const sellerId = sellerInput?.value?.trim() || "535548";
-
-const res = await fetch("/api/platform/integrations", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    platform: "Trendyol Go",
-    externalStoreId: sellerId,
-    webhookSecret: "delivera-gizli-anahtar-2026",
-    isActive: true
-  })
-});
-
-  const data = await res.json();
-  console.log("SAVE RESULT:", data);
-  alert(data.ok ? "Platform hesabı kaydedildi" : "Kayıt hatası: " + (data.error || "bilinmiyor"));
-});

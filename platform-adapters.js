@@ -43,7 +43,7 @@ function baseNormalizeOrder(platformKey, rawBody) {
   const body = rawBody || {};
   return {
     platform: platformKey,
-    platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.storeId ?? body.store_id ?? body.vendorId ?? body.vendor_id ?? body.restaurantId),
+    platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalStoreId ?? body.external_store_id ?? body.storeId ?? body.store_id ?? body.vendorId ?? body.vendor_id ?? body.restaurantId),
     orderId: trimmed(body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id ?? body.id),
     customerName: trimmed(body.customerName ?? body.customer_name ?? body.customer?.name),
     phone: trimmed(body.phone ?? body.customer?.phone),
@@ -89,7 +89,11 @@ function createAdapter(platformKey, mapper) {
       return mapper(rawBody || {});
     },
     verifyWebhook(req, account) {
-      const incomingSecret = trimmed(req?.headers?.["x-platform-secret"]);
+      const incomingSecret = [
+        req?.headers?.["x-platform-secret"],
+        req?.headers?.["x-webhook-secret"],
+        req?.headers?.["x-api-key"],
+      ].map(trimmed).find(Boolean);
       return Boolean(incomingSecret && incomingSecret === trimmed(account?.webhookSecret ?? account?.staticToken));
     },
     sendStatusUpdate(status, orderData) {
@@ -273,6 +277,7 @@ const platformAdapters = {
   }),
 };
 
+platformAdapters.trendyol_yemek = platformAdapters.trendyol_go;
 platformAdapters.adisyo = platformAdapters.pos;
 
 function getPlatformAdapter(platform) {

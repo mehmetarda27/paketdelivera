@@ -22,13 +22,8 @@ const crypto = require("crypto");
 const { URL } = require("url");
 const { DatabaseSync } = require("node:sqlite");
 const { getPlatformAdapter, normalizePlatformKey } = require("./platform-adapters");
-const platformConnectors = {
-  "Trendyol Go": require("./connectors/trendyol"),
-  GetirYemek: require("./connectors/getir"),
-  "Migros Yemek": require("./connectors/migros"),
-  Yemeksepeti: require("./connectors/yemeksepeti"),
-  POS: require("./connectors/pos"),
-};
+const platformConnectors = require("./connectors");
+const { createPlatformService } = require("./services/platformService");
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = path.resolve(process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
@@ -55,13 +50,21 @@ const RATE_LIMITS = {
 };
 
 const DEFAULT_ZONES = ["Akdeniz", "Yenisehir", "Mezitli", "Toroslar", "Tarsus", "Erdemli"];
-const SUPPORTED_PLATFORMS = ["Trendyol Go", "GetirYemek", "Yemeksepeti", "Migros Yemek", "POS"];
+const SUPPORTED_PLATFORMS = ["Trendyol Yemek", "Yemeksepeti", "Getir Yemek", "Migros Yemek", "POS"];
 const PLATFORM_SLUGS = {
-  "Trendyol Go": "trendyol-go",
-  GetirYemek: "getiryemek",
+  "Trendyol Yemek": "trendyol-yemek",
   Yemeksepeti: "yemeksepeti",
+  "Getir Yemek": "getir-yemek",
   "Migros Yemek": "migros-yemek",
   POS: "pos",
+};
+const PLATFORM_ALIASES = {
+  "trendyol go": "Trendyol Yemek",
+  "trendyol yemek": "Trendyol Yemek",
+  trendyol: "Trendyol Yemek",
+  "getiryemek": "Getir Yemek",
+  "getir yemek": "Getir Yemek",
+  getir: "Getir Yemek",
 };
 const PLATFORM_WEBHOOK_AUTH_TYPES = {
   API_KEY: "api_key",
@@ -117,6 +120,7 @@ const STATUS_TRANSITIONS = {
   [CANCELED_STATUS]: [],
 };
 const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 10_000);
+const PLATFORM_POLLING_ENABLED = ["1", "true", "yes"].includes(String(process.env.DELIVERA_PLATFORM_POLLING_ENABLED || "").toLowerCase());
 const PLATFORM_ORDER_STATUSES = new Set(["pending_approval", "approved", "assigned", "completed", "cancelled"]);
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
 const LEGACY_STATUS_MAP = {
@@ -164,6 +168,7 @@ const liveStreams = new Map();
 let assignmentSweepRunning = false;
 let assignmentSweepQueued = false;
 const assignmentRetryTimers = new Map();
+let platformService = null;
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -649,6 +654,24 @@ if (!platformAccountColumns.includes("is_active")) {
 if (!platformAccountColumns.includes("last_sync_at")) {
   db.exec("ALTER TABLE platform_accounts ADD COLUMN last_sync_at TEXT");
 }
+if (!platformAccountColumns.includes("integration_ref_code")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN integration_ref_code TEXT");
+}
+if (!platformAccountColumns.includes("polling_enabled")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN polling_enabled INTEGER NOT NULL DEFAULT 0");
+}
+if (!platformAccountColumns.includes("webhook_enabled")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 1");
+}
+if (!platformAccountColumns.includes("last_webhook_at")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN last_webhook_at TEXT");
+}
+if (!platformAccountColumns.includes("last_poll_at")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN last_poll_at TEXT");
+}
+if (!platformAccountColumns.includes("last_error")) {
+  db.exec("ALTER TABLE platform_accounts ADD COLUMN last_error TEXT");
+}
 
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_orders_unique
@@ -686,7 +709,7 @@ function trimmed(value) {
 
 function normalizePlatformName(value) {
   const incoming = trimmed(value).toLowerCase();
-  return SUPPORTED_PLATFORMS.find((platform) => platform.toLowerCase() === incoming) || "";
+  return PLATFORM_ALIASES[incoming] || SUPPORTED_PLATFORMS.find((platform) => platform.toLowerCase() === incoming) || "";
 }
 
 function normalizeIdList(value) {
@@ -1018,7 +1041,7 @@ function validatePlatformAccountDraft(body) {
     refreshToken: trimmed(body.refreshToken),
     tokenExpiresAt: trimmed(body.tokenExpiresAt),
     callbackUrl: trimmed(body.callbackUrl),
-    integrationReferenceCode: trimmed(body.integrationReferenceCode ?? body.integration_reference_code),
+    integrationReferenceCode: trimmed(body.integrationRefCode ?? body.integration_ref_code ?? body.integrationReferenceCode ?? body.integration_reference_code),
     posSecretKey: trimmed(body.posSecretKey ?? body.pos_secret_key),
     storeFrontCode: trimmed(body.storeFrontCode),
     chainId: trimmed(body.chainId),
@@ -1030,6 +1053,8 @@ function validatePlatformAccountDraft(body) {
     webhookPassword: "",
     staticToken: normalizedWebhookSecret,
     webhookSecret: normalizedWebhookSecret,
+    pollingEnabled: body.pollingEnabled === true || body.polling_enabled === true || body.pollingEnabled === 1 || body.polling_enabled === 1,
+    webhookEnabled: body.webhookEnabled !== false && body.webhook_enabled !== false,
     active: body.active !== false,
     settings: {},
   };
@@ -1556,13 +1581,14 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     externalMerchantId: account.externalMerchantId,
     apiUsername: account.apiUsername,
     hasApiKey: Boolean(account.apiKey),
-    hasApiSecret: Boolean(account.apiSecret || account.webhookSecret),
+    hasApiSecret: Boolean(account.apiSecret),
     hasToken: Boolean(account.token || account.accessToken),
     hasPosSecretKey: Boolean(account.posSecretKey),
     storeFrontCode: account.storeFrontCode,
     chainId: account.chainId,
     vendorId: account.vendorId,
     integrationReferenceCode: account.integrationReferenceCode,
+    integrationRefCode: account.integrationRefCode || account.integrationReferenceCode,
     webhookAuthType: account.webhookAuthType,
     authType: account.authType || account.webhookAuthType,
     callbackUrl: account.callbackUrl || "",
@@ -1570,6 +1596,11 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     settings: account.settings,
     active: account.active,
     lastSyncAt: account.lastSyncAt,
+    pollingEnabled: Boolean(account.pollingEnabled),
+    webhookEnabled: account.webhookEnabled !== false,
+    lastWebhookAt: account.lastWebhookAt || null,
+    lastPollAt: account.lastPollAt || account.lastSyncAt || null,
+    lastError: account.lastError || "",
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
@@ -1592,6 +1623,7 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     lastVerificationAt: account.lastVerificationAt,
     verifiedAt: account.verifiedAt,
     lastValidationMode: account.lastValidationMode,
+    webhookSecret: account.webhookSecret || account.staticToken || "",
   };
 }
 
@@ -2004,7 +2036,8 @@ function getPlatformAccounts(filter = {}) {
     refreshToken: row.refresh_token,
     tokenExpiresAt: row.token_expires_at,
     callbackUrl: row.callback_url,
-    integrationReferenceCode: row.integration_reference_code || "",
+    integrationReferenceCode: row.integration_ref_code || row.integration_reference_code || "",
+    integrationRefCode: row.integration_ref_code || row.integration_reference_code || "",
     posSecretKey: row.pos_secret_key || "",
     authType: row.auth_type || row.webhook_auth_type,
     storeFrontCode: row.store_front_code,
@@ -2025,6 +2058,11 @@ function getPlatformAccounts(filter = {}) {
     lastValidationMode: row.last_validation_mode,
     active: row.is_active === null || row.is_active === undefined ? Boolean(row.active) : Boolean(row.is_active),
     lastSyncAt: row.last_sync_at || null,
+    pollingEnabled: Boolean(row.polling_enabled),
+    webhookEnabled: row.webhook_enabled === null || row.webhook_enabled === undefined ? true : Boolean(row.webhook_enabled),
+    lastWebhookAt: row.last_webhook_at || null,
+    lastPollAt: row.last_poll_at || row.last_sync_at || null,
+    lastError: row.last_error || "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -2700,22 +2738,23 @@ function buildZoneAlerts(zones, packages) {
 
 function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
   const current = accounts[0] || null;
+  const webhookUrl = `${requestBaseUrl(req)}/api/platform/order`;
   return {
     currentAccountId: current?.id || "",
     currentPlatform: current?.platform || "",
     verificationStatus: current?.verificationStatus || PLATFORM_VERIFICATION_STATUS.PENDING,
     webhookUrl: current
-      ? "API polling aktif: /integration/order/sellers/{sellerId}/orders"
-      : "Platform hesabini kaydedince API polling testi hazir olur.",
+      ? webhookUrl
+      : "Platform hesabini kaydedince webhook URL hazir olur.",
     steps: [
       { id: "select_platform", title: "Adim 1", label: "Platform sec", done: Boolean(current?.platform) },
       { id: "credentials", title: "Adim 2", label: "Gerekli bilgileri gir", done: Boolean(current?.externalStoreId) },
-      { id: "test_api", title: "Adim 3", label: "API baglantisini test et", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
-      { id: "test", title: "Adim 4", label: "Baglantiyi test et", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
-      { id: "success", title: "Adim 5", label: "Baglanti basarili", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
+      { id: "test_api", title: "Adim 3", label: "Webhook secret kayitli", done: Boolean(current?.hasWebhookSecret || current?.webhookSecret) },
+      { id: "test", title: "Adim 4", label: "Webhook test siparisi gonder", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
+      { id: "success", title: "Adim 5", label: "Webhook modu aktif", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
     ],
     helpText: restaurant
-      ? `${restaurant.name} icin platform sec, kimlik bilgilerini kaydet ve API baglantisini test et.`
+      ? `${restaurant.name} icin webhook modu aktif. Polling API kapalı — webhook ile sipariş bekleniyor.`
       : "Restoran oturumu acildiginda entegrasyon sihirbazi aktif olur.",
   };
 }
@@ -3899,7 +3938,7 @@ function platformConnectionHttpStatus(result) {
   return 400;
 }
 
-function optionalIntegrationResult(message = "API bilgileri eksik, manuel paket sistemi kullanilabilir.") {
+function optionalIntegrationResult(message = "Polling kapali veya API bilgileri eksik.") {
   return {
     ok: false,
     optional: true,
@@ -3911,7 +3950,7 @@ function optionalIntegrationResult(message = "API bilgileri eksik, manuel paket 
 
 function platformAccountMissingCredentials(account) {
   const platform = normalizePlatformInput(account?.platform);
-  if (platform === "Trendyol Go") {
+  if (platform === "Trendyol Yemek") {
     return !(account?.apiKey && account?.apiSecret && (account?.externalMerchantId || account?.externalStoreId || account?.externalId));
   }
   if (platform === "POS") {
@@ -3963,7 +4002,7 @@ function buildIntegrationInfo(req, restaurant) {
     platformWebhookBase: `${requestBaseUrl(req)}/api/platform/order`,
     signatureHeader: "x-platform-secret",
     samplePayload: {
-      platform: platformSlug(restaurant.platforms[0] || "Trendyol Go").replace(/-/g, "_"),
+      platform: platformSlug(restaurant.platforms[0] || "Trendyol Yemek").replace(/-/g, "_"),
       platformRestaurantId: "TEST-STORE-1",
       orderId: "TEST-ORDER-1",
       customerName: "Ayse Demir",
@@ -4124,7 +4163,7 @@ async function verifyTrendyolMerchantCredentials(draft) {
 }
 
 async function verifyPlatformMerchantCredentials(draft) {
-  if (draft.platform === "Trendyol Go") {
+  if (draft.platform === "Trendyol Yemek") {
     return verifyTrendyolMerchantCredentials(draft);
   }
 
@@ -4349,6 +4388,19 @@ function verifyPlatformWebhookAuth(account, req) {
   return apiKeys.includes(account.webhookApiKey);
 }
 
+function verifySimplePlatformSecret(account, restaurant, req) {
+  const incomingSecret = candidateHeaderValues(req, ["x-platform-secret", "x-webhook-secret", "x-api-key"])[0] || "";
+  if (!incomingSecret) {
+    return false;
+  }
+  const allowedSecrets = [
+    account?.webhookSecret,
+    account?.staticToken,
+    restaurant?.webhookSecret,
+  ].map(trimmed).filter(Boolean);
+  return allowedSecrets.includes(incomingSecret);
+}
+
 function mapExternalStatusToInternal(status) {
   const incoming = trimmed(status).toUpperCase();
 
@@ -4545,6 +4597,13 @@ function upsertPlatformPackage(platform, restaurant, payload) {
     return decorateState({ restaurantId: restaurant.id }).packages.find((item) => item.id === pkg.id);
   }
 
+  console.log("Duplicate order skipped", {
+    platform,
+    restaurantId: restaurant.id,
+    externalOrderNo: payload.externalOrderNo,
+    packageId: existing.id,
+  });
+
   const currentStatus = normalizeStatus(existing.status);
   const incomingStatus = normalizeStatus(payload.status || currentStatus);
   const incomingPaymentStatus = normalizePaymentStatus(payload.paymentStatus, payload.paymentMethod);
@@ -4598,7 +4657,7 @@ function findPlatformRestaurant(platform, platformRestaurantId) {
 
   const account = getPlatformAccounts().find((item) =>
     item.active &&
-    item.platform === normalizedPlatform &&
+    normalizePlatformInput(item.platform) === normalizedPlatform &&
     item.externalStoreId === normalizedStoreId
   );
 
@@ -4649,12 +4708,26 @@ function handleSimplePlatformOrder(order) {
     return { ok: false, error: "Restaurant not found", statusCode: 404 };
   }
 
+  console.log("Platform matched", {
+    platform: match.account.platform,
+    restaurantId: match.restaurant.id,
+    platformRestaurantId: match.account.externalStoreId,
+  });
+
   const payload = createSimplePlatformPayload({
     ...order,
     platform: match.account.platform,
   }, match.restaurant);
   upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, "pending_approval");
   const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
+  console.log("Package created", {
+    platform: match.account.platform,
+    restaurantId: match.restaurant.id,
+    orderId: order.orderId,
+    packageId: created?.id || null,
+    trackingNo: created?.trackingNo || null,
+    source: "platform_webhook",
+  });
   broadcastLiveEvent({
     type: "platform-order-pending",
     restaurantId: match.restaurant.id,
@@ -4676,13 +4749,34 @@ function connectorForPlatform(platform) {
 const posMissingEndpointLogKeys = new Set();
 
 async function pollPlatformAccount(account, options = {}) {
+  if (!account.pollingEnabled) {
+    console.log("Polling skipped", {
+      platform: account.platform,
+      accountId: account.id,
+      reason: "polling_enabled false",
+    });
+    return {
+      ok: false,
+      skipped: true,
+      optional: true,
+      reason: "Polling kapali veya API bilgileri eksik",
+    };
+  }
+  if (!options.manual && !PLATFORM_POLLING_ENABLED) {
+    return {
+      ok: false,
+      skipped: true,
+      optional: true,
+      reason: "Polling API kapalı — webhook ile sipariş bekleniyor.",
+    };
+  }
   const connector = connectorForPlatform(account.platform);
   if (!connector || typeof connector.fetchOrders !== "function") {
     return { ok: false, skipped: true, reason: "connector yok" };
   }
   const isPosAccount = normalizePlatformInput(account.platform) === "POS";
   if (platformAccountMissingCredentials(account)) {
-    return { ok: false, skipped: true, optional: true, reason: "API bilgileri eksik, manuel paket sistemi kullanilabilir." };
+    return { ok: false, skipped: true, optional: true, reason: "Polling kapali veya API bilgileri eksik" };
   }
   if (!isPosAccount && account.verificationStatus !== PLATFORM_VERIFICATION_STATUS.VERIFIED) {
     return { ok: false, skipped: true, reason: "API baglanti testi basarili olmadan polling calismaz." };
@@ -4770,7 +4864,7 @@ async function pollPlatformAccount(account, options = {}) {
     }
   }
 
-  db.prepare("UPDATE platform_accounts SET last_sync_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), account.id);
+  db.prepare("UPDATE platform_accounts SET last_poll_at = ?, last_sync_at = ?, last_error = NULL, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), nowIso(), account.id);
   return { ok: true, createdCount, fetchedCount: rawOrders.length, createdStatusCount: createdOrders.length };
 }
 
@@ -5258,7 +5352,10 @@ async function handleApi(req, res, pathname) {
     }
 
     const { json: body } = await readRequestBody(req);
-    const draft = validatePlatformAccountDraft(body);
+    const draft = validatePlatformAccountDraft({
+      ...body,
+      restaurantId: body.restaurantId || body.restaurant_id || session.restaurant_id,
+    });
 
     if (draft.restaurantId !== session.restaurant_id) {
       sendJson(res, 403, { error: "Bu restoran baska tenant icin entegrasyon kaydedemez." });
@@ -5267,9 +5364,9 @@ async function handleApi(req, res, pathname) {
 
     const now = new Date().toISOString();
     const verification = {
-      status: PLATFORM_VERIFICATION_STATUS.PENDING,
-      note: "API baglanti testi bekliyor.",
-      mode: "api_polling_pending_test",
+      status: PLATFORM_VERIFICATION_STATUS.VERIFIED,
+      note: "Webhook modu aktif. Polling API kapalı — webhook ile sipariş bekleniyor.",
+      mode: "webhook_active",
     };
     db.prepare("UPDATE restaurants SET webhook_secret = ? WHERE id = ?").run(draft.webhookSecret, session.restaurant_id);
     const existing = db.prepare(`
@@ -5374,6 +5471,30 @@ async function handleApi(req, res, pathname) {
       );
     }
 
+    db.prepare(`
+      UPDATE platform_accounts
+      SET integration_ref_code = ?,
+          integration_reference_code = ?,
+          polling_enabled = ?,
+          webhook_enabled = ?,
+          active = ?,
+          is_active = ?,
+          last_error = NULL,
+          updated_at = ?
+      WHERE restaurant_id = ? AND platform = ? AND external_store_id = ?
+    `).run(
+      draft.integrationReferenceCode || null,
+      draft.integrationReferenceCode || null,
+      draft.pollingEnabled ? 1 : 0,
+      draft.webhookEnabled ? 1 : 0,
+      draft.active ? 1 : 0,
+      draft.active ? 1 : 0,
+      now,
+      session.restaurant_id,
+      draft.platform,
+      draft.externalStoreId
+    );
+
     writeAuditLog({
       actorRole: "restaurant",
       actorId: session.restaurant_id,
@@ -5384,6 +5505,20 @@ async function handleApi(req, res, pathname) {
         externalStoreId: draft.externalStoreId,
         verificationStatus: verification.status,
       },
+    });
+    console.log("Platform account saved", {
+      restaurantId: session.restaurant_id,
+      platform: draft.platform,
+      externalStoreId: draft.externalStoreId,
+      active: draft.active,
+      webhookEnabled: draft.webhookEnabled,
+      pollingEnabled: draft.pollingEnabled,
+      secretConfigured: Boolean(draft.webhookSecret),
+      mode: "webhook",
+    });
+    platformService?.savePlatformAccount({
+      ...draft,
+      restaurantId: session.restaurant_id,
     });
     broadcastLiveEvent({
       type: "platform-account-saved",
@@ -6167,7 +6302,11 @@ async function handleApi(req, res, pathname) {
     }
 
     const { raw, json: body } = await readRequestBody(req);
-    console.log("TGO WEBHOOK BODY:", JSON.stringify(body, null, 2));
+    console.log("Webhook received", {
+      platform: body?.platform || null,
+      platformRestaurantId: body?.platformRestaurantId || body?.externalStoreId || body?.external_store_id || null,
+      orderId: body?.orderId || body?.order_id || body?.externalOrderId || null,
+    });
     const order = normalizeOrder(body.platform, body);
     const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
 
@@ -6180,14 +6319,29 @@ async function handleApi(req, res, pathname) {
         responseStatus: 404,
         requestBody: raw,
       });
-      sendJson(res, 404, { ok: false, error: "Restaurant not found" });
+      sendJson(res, 404, {
+        ok: false,
+        error: "Restaurant/platform match failed",
+        platform: order.platform,
+        platformRestaurantId: order.platformRestaurantId,
+        hint: "platform ve platformRestaurantId aktif platform hesabindaki external_store_id ile ayni olmali.",
+      });
+      return;
+    }
+    if (match.account.webhookEnabled === false) {
+      sendJson(res, 403, {
+        ok: false,
+        error: "Webhook disabled for this platform account",
+        platform: order.platform,
+        platformRestaurantId: order.platformRestaurantId,
+      });
       return;
     }
 
     const adapter = getPlatformAdapter(normalizePlatformKey(match.account.platform));
-    const incomingPlatformSecret = trimmed(req.headers["x-platform-secret"]);
-    const acceptsLegacyRestaurantSecret = incomingPlatformSecret && incomingPlatformSecret === trimmed(match.restaurant.webhookSecret);
-    if (!adapter.verifyWebhook(req, match.account) && !acceptsLegacyRestaurantSecret) {
+    if (!adapter.verifyWebhook(req, match.account) && !verifySimplePlatformSecret(match.account, match.restaurant, req)) {
+      db.prepare("UPDATE platform_accounts SET last_error = ?, updated_at = ? WHERE id = ?")
+        .run("Invalid platform secret", nowIso(), match.account.id);
       logWebhookAttempt({
         restaurantId: match.restaurant.id,
         sourcePlatform: match.account.platform,
@@ -6201,6 +6355,8 @@ async function handleApi(req, res, pathname) {
     }
 
     const result = handleSimplePlatformOrder(order);
+    db.prepare("UPDATE platform_accounts SET last_webhook_at = ?, last_error = NULL, updated_at = ? WHERE id = ?")
+      .run(nowIso(), nowIso(), match.account.id);
     logWebhookAttempt({
       restaurantId: match.restaurant.id,
       sourcePlatform: match.account.platform,
@@ -6211,7 +6367,15 @@ async function handleApi(req, res, pathname) {
     });
     sendJson(res, result.package?.createdAt === result.package?.updatedAt ? 201 : 200, {
       ok: true,
+      trackingNo: result.package?.trackingNo || "",
+      source: "platform_webhook",
       package: result.package,
+    });
+    console.log("Webhook test successful", {
+      platform: match.account.platform,
+      restaurantId: match.restaurant.id,
+      orderId: order.orderId,
+      trackingNo: result.package?.trackingNo || null,
     });
     return;
   }
@@ -7165,11 +7329,27 @@ setInterval(() => {
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
 
-setInterval(() => {
-  pollPlatformAccounts().catch((error) => {
-    console.error("Platform polling failed", { message: error.message });
-  });
-}, PLATFORM_POLL_INTERVAL_MS).unref();
+platformService = createPlatformService({
+  getPlatformAccounts,
+  findPlatformRestaurant,
+  handleSimplePlatformOrder,
+  normalizeOrder,
+  connectorForPlatform,
+  platformAccountMissingCredentials,
+  nowIso,
+  db,
+  log: console,
+});
+
+if (PLATFORM_POLLING_ENABLED) {
+  setInterval(() => {
+    platformService.pollAllPlatformAccounts().catch((error) => {
+      console.error("Platform polling failed", { message: error.message });
+    });
+  }, PLATFORM_POLL_INTERVAL_MS).unref();
+} else {
+  console.log("Platform polling disabled; webhook flow is active.");
+}
 
 currentState().packages
   .filter((pkg) => normalizeStatus(pkg.status) === ASSIGNED_STATUS)

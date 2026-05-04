@@ -31,7 +31,7 @@
       <section class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-coral">Order Ingestion</p>
-          <h2>Trendyol Go, GetirYemek, Yemeksepeti ve Migros Yemek siparişlerini API ile otomatik al.</h2>
+          <h2>Trendyol Yemek, Yemeksepeti ve Getir Yemek siparişlerini ortak connector sistemiyle otomatik al.</h2>
           <p class="sidebar-copy">Restoran paneline portal kullanıcı adı ve şifre ile girilir. API key ve secret bilgileri insan girişi için değil, platform entegrasyonu içindir.</p>
         </div>
         <form id="restaurantAccessForm" class="login-form">
@@ -82,7 +82,7 @@
             </article>
             <article class="stack-card">
               <strong>3. Sonrası Sadece Operasyon</strong>
-              <p>Platform bağlantı, API polling ve paket takibi bu panelden devam eder.</p>
+              <p>Platform webhook, paket takibi ve restoran akışı bu panelden devam eder.</p>
             </article>
           </div>
         </article>
@@ -128,10 +128,10 @@
           </div>
           <div id="integrationWizardSteps" class="stack-list"></div>
           <div class="integration-card wizard-actions">
-            <code id="integrationWizardWebhook">Platform seçildiğinde API polling bilgisi burada hazır olur.</code>
+            <code id="integrationWizardWebhook">Platform seçildiğinde webhook URL burada hazır olur.</code>
             <div class="badge-row">
-              <button id="copyWebhookButton" class="ghost-btn" type="button">API Bilgisini Kopyala</button>
-              <button id="testIntegrationButton" class="primary-btn" type="button">Bağlantıyı Test Et</button>
+              <button id="copyWebhookButton" class="ghost-btn" type="button">Webhook URL Kopyala</button>
+              <button id="testIntegrationButton" class="primary-btn" type="button">Webhook Test Siparişi Gönder</button>
             </div>
             <p id="integrationWizardStatus" class="subtle-text">Kayıtlı platform hesabı olunca canlı test burada görünür.</p>
           </div>
@@ -274,7 +274,7 @@
               <input name="externalMerchantId" type="text" placeholder="Opsiyonel merchant/seller kimligi">
             </label>
             <label>
-              API Yetki Tipi
+              Webhook Yetki Tipi
               <select name="webhookAuthType" id="platformWebhookAuthType">
                 <option value="api_key">API Key</option>
                 <option value="basic_auth">Basic Auth</option>
@@ -322,14 +322,22 @@
               <input name="vendorId" type="text" placeholder="Yemeksepeti vendor id">
             </label>
             <label>
-              Static Token
-              <input name="staticToken" type="text" placeholder="Static token kullanan platformlar için">
+              Webhook Secret
+              <input name="staticToken" type="text" placeholder="Webhook için gizli anahtar">
+            </label>
+            <label class="checkbox-card">
+              <input name="webhookEnabled" type="checkbox" checked>
+              <span>Webhook Aktif</span>
+            </label>
+            <label class="checkbox-card">
+              <input name="pollingEnabled" type="checkbox">
+              <span>Polling Aktif</span>
             </label>
             <label class="checkbox-card">
               <input name="active" type="checkbox" checked>
               <span>Aktif</span>
             </label>
-            <button class="primary-btn full-width" type="submit">Platform Hesabını Kaydet</button>
+            <button id="savePlatformAccountButton" class="primary-btn full-width" type="submit">Platform Hesabını Kaydet</button>
           </form>
         </article>
 
@@ -337,19 +345,19 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-coral">Hazır Bağlantı</p>
-              <h3>API Polling ve Yetkilendirme Bilgileri</h3>
+              <h3>Webhook Modu ve Yetkilendirme Bilgileri</h3>
             </div>
           </div>
           <div class="integration-card">
             <p>Platform paneline bu URL girilir; sipariş oluştuğunda sistemimize otomatik düşüş buradan olur:</p>
-            <code id="platformWebhookUrl">Platform hesabını kaydedince API polling bilgisi görünür</code>
+            <code id="platformWebhookUrl">Platform hesabını kaydedince webhook URL görünür</code>
             <div class="stack-list">
               <article class="stack-card">
                 <strong>Seçili Platform</strong>
                 <p id="platformSetupName">Henüz kayıtlı platform yok.</p>
               </article>
               <article class="stack-card">
-                <strong>API Auth</strong>
+                <strong>Webhook Secret</strong>
                 <code id="platformSetupAuth">Yetki bilgisi burada görünür</code>
               </article>
               <article class="stack-card">
@@ -358,7 +366,7 @@
               </article>
               <article class="stack-card">
                 <strong>Canlı Not</strong>
-                <p id="platformSetupHint">Trendyol için resmi order API polling modeli hazır.</p>
+                <p id="platformSetupHint">Webhook modu aktif.</p>
               </article>
             </div>
           </div>

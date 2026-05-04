@@ -1,6 +1,6 @@
 const { getPlatformAdapter, normalizePlatformKey } = require("../platform-adapters");
 
-const PLATFORM = "Trendyol Go";
+const PLATFORM = "Trendyol Yemek";
 const DEFAULT_BASE_URL = "https://apigw.trendyol.com";
 const REQUEST_TIMEOUT_MS = 8_000;
 
@@ -130,14 +130,14 @@ async function fetchOrders(account) {
   const sid = sellerId(account);
 
   if (!sid) {
-    console.warn("Trendyol polling skipped", { reason: "seller_id_missing" });
+    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "seller_id_missing" });
     return [];
   }
 
   try {
     authHeaders(account);
   } catch {
-    console.warn("Trendyol polling skipped", { reason: "api_credentials_missing" });
+    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "api_credentials_missing" });
     return [];
   }
 
@@ -160,10 +160,11 @@ async function fetchOrders(account) {
   return [];
 }
 
-function normalizeOrder(raw) {
+function normalizeOrder(raw, account = {}) {
   return getPlatformAdapter(normalizePlatformKey(PLATFORM)).normalizeOrder({
     ...raw,
     platform: PLATFORM,
+    platformRestaurantId: raw?.platformRestaurantId || raw?.platform_restaurant_id || account.externalStoreId,
   });
 }
 
@@ -175,11 +176,11 @@ async function acknowledgeOrder(order) {
   };
 }
 
-async function updateOrderStatus(order, status) {
+async function updateOrderStatus(account, orderId, status) {
   return {
     ok: true,
     mode: "local",
-    orderId: order?.orderId || order?.platformOrderId || null,
+    orderId,
     status,
   };
 }

@@ -20,6 +20,10 @@ function authHeaders(account) {
   return headers;
 }
 
+function hasPollingCredentials(account) {
+  return Boolean(endpoint(account, "orders") && (account?.apiKey || account?.apiSecret || account?.accessToken || account?.token));
+}
+
 async function testConnection(account) {
   const url = endpoint(account, "verify") || endpoint(account, "orders");
   if (!url) return { ok: false, status: 404, message: "Yemeksepeti verify/polling endpoint tanimli degil." };
@@ -32,24 +36,31 @@ async function testConnection(account) {
 }
 
 async function fetchOrders(account) {
+  if (!hasPollingCredentials(account)) {
+    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "polling_endpoint_or_credentials_missing" });
+    return [];
+  }
   const url = endpoint(account, "orders");
-  if (!url) return [];
   const response = await fetch(url, { method: "GET", headers: authHeaders(account) });
   if (!response.ok) throw new Error(`Yemeksepeti polling HTTP ${response.status}`);
   const data = await response.json();
   return Array.isArray(data) ? data : (data.orders || data.items || data.content || []);
 }
 
-function normalizeOrder(raw) {
-  return getPlatformAdapter(normalizePlatformKey(PLATFORM)).normalizeOrder({ ...raw, platform: PLATFORM });
+function normalizeOrder(raw, account = {}) {
+  return getPlatformAdapter(normalizePlatformKey(PLATFORM)).normalizeOrder({
+    ...raw,
+    platform: PLATFORM,
+    platformRestaurantId: raw?.platformRestaurantId || raw?.platform_restaurant_id || account.externalStoreId,
+  });
 }
 
 async function acknowledgeOrder(order) {
   return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null };
 }
 
-async function updateOrderStatus(order, status) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null, status };
+async function updateOrderStatus(account, orderId, status) {
+  return { ok: true, mode: "local", orderId, status };
 }
 
 module.exports = { testConnection, fetchOrders, normalizeOrder, acknowledgeOrder, updateOrderStatus };
