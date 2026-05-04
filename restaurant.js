@@ -1607,18 +1607,18 @@ document.addEventListener("click", async (event) => {
 
   const sellerId = sellerInput?.value?.trim() || "535548";
 
-  const res = await fetch("/api/platform/account", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      platform: "Trendyol Go",
-      platformRestaurantId: sellerId,
-      webhookSecret: "delivera-gizli-anahtar-2026",
-      active: true
-    })
-  });
+const res = await fetch("/api/platform/integrations", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    platform: "Trendyol Go",
+    externalStoreId: sellerId,
+    webhookSecret: "delivera-gizli-anahtar-2026",
+    isActive: true
+  })
+});
 
   const data = await res.json();
   console.log("SAVE RESULT:", data);
