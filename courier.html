@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="theme-courier">
@@ -156,6 +156,12 @@
       </section>
     </main>
   </div>
+  <nav class="courier-bottom-nav" aria-label="Kurye alt menusu">
+    <a href="#courierPackages" class="active"><i data-lucide="clipboard-list"></i><span>Gorevler</span></a>
+    <a href="#courierPackages"><i data-lucide="map"></i><span>Harita</span></a>
+    <a href="#courierEarningsMetrics"><i data-lucide="wallet"></i><span>Kazanc</span></a>
+    <a href="#courierName"><i data-lucide="user-round"></i><span>Profil</span></a>
+  </nav>
   <template id="courierPackageTemplate">
     <article class="package-card dark-card-shell courier-task-card">
       <div class="package-top">
@@ -202,7 +208,11 @@
       </div>
     </article>
   </template>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="/shared.js"></script>
   <script src="/courier.js"></script>
+  <script>
+    window.addEventListener("load", () => window.lucide?.createIcons());
+  </script>
 </body>
 </html>
