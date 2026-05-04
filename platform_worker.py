@@ -467,48 +467,48 @@ class OAuth2TokenManager:
 
 
 class PlatformAdapter:
-    def __init__(self, account: PlatformAccount, token_manager: OAuth2TokenManager) -> None:
+    def __init__(self, account, token_manager):
         self.account = account
         self.token_manager = token_manager
         self.session = requests.Session()
 
     def orders_url(self) -> str:
-        settings = self.account.settings
-        url = first_present(settings.get("ordersUrl"), settings.get("orders_url"), settings.get("pollingUrl"), settings.get("polling_url"))
-        if url:
-            return str(url)
-
-        prefix = PLATFORM_ENV_PREFIX[self.account.platform]
-        env_url = os.getenv(f"{prefix}_ORDERS_URL", "")
-        if env_url:
-            return env_url
-
         if self.account.platform == "Trendyol Go":
-            base = os.getenv("TRENDYOL_BASE_URL", "https://apigw.trendyol.com").rstrip("/")
-            seller_id = first_present(self.account.external_merchant_id, self.account.external_store_id)
-            return f"{base}/integration/order/sellers/{seller_id}/orders"
+            base = os.getenv("TRENDYOL_BASE_URL", "https://api.trendyol.com/sapigw").rstrip("/")
+            seller_id = os.getenv("TRENDYOL_SELLER_ID", "").strip()
+
+            if not seller_id:
+                raise RuntimeError("TRENDYOL_SELLER_ID .env içinde yok")
+
+            logger.info("🔥 Using Trendyol Seller ID: %s", seller_id)
+
+            url = f"{base}/suppliers/{seller_id}/orders"
+            logger.info("🔥 Trendyol orders URL: %s", url)
+
+            return url
 
         raise RuntimeError(f"{self.account.platform} orders endpoint is not configured")
 
     def headers(self) -> dict[str, str]:
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        token = self.token_manager.valid_token(self.account)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        elif self.account.platform == "Trendyol Go" and self.account.api_key and self.account.api_secret:
-            raw = f"{self.account.api_key}:{self.account.api_secret}".encode("utf-8")
-            headers["Authorization"] = f"Basic {base64.b64encode(raw).decode('ascii')}"
-            headers["User-Agent"] = "Mozilla/5.0"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
 
-        if self.account.api_key:
-            headers["x-api-key"] = self.account.api_key
-        if self.account.api_secret:
-            headers["x-api-secret"] = self.account.api_secret
-        if self.account.external_store_id:
-            headers["x-restaurant-id"] = self.account.external_store_id
-            headers["x-vendor-id"] = self.account.external_store_id
-            headers["x-merchant-id"] = self.account.external_store_id
+        # 🔥 AUTH FIX
+        api_key = os.getenv("TRENDYOL_API_KEY")
+        api_secret = os.getenv("TRENDYOL_API_SECRET")
+        logger.info("API KEY CHECK: %s", api_key)
+        logger.info("API SECRET CHECK: %s", api_secret)
+
+        if api_key and api_secret:
+            raw = f"{api_key}:{api_secret}".encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+            headers["User-Agent"] = "DeliveraExpress/1.0"
+
         return headers
+
+        raise RuntimeError(f"{self.account.platform} orders endpoint is not configured")
 
     def request_params(self) -> dict[str, str]:
         settings = self.account.settings

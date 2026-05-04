@@ -6167,6 +6167,7 @@ async function handleApi(req, res, pathname) {
     }
 
     const { raw, json: body } = await readRequestBody(req);
+    console.log("TGO WEBHOOK BODY:", JSON.stringify(body, null, 2));
     const order = normalizeOrder(body.platform, body);
     const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
 
@@ -7136,14 +7137,6 @@ const server = http.createServer(async (req, res) => {
         },
         timestamp: new Date().toISOString(),
       });
-      return;
-    }
-
-    if (FORCE_HTTPS && !isLocalHostRequest(req) && !isSecureRequest(req) && req.headers.host) {
-      res.writeHead(308, {
-        Location: `${PUBLIC_BASE_URL || `https://${req.headers.host}`}${pathname}${requestUrl.search}`,
-      });
-      res.end();
       return;
     }
 

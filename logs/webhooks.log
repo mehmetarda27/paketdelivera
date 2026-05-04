@@ -229,3 +229,5 @@
 [2026-05-01T18:25:21.921Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
 [2026-05-01T18:25:26.073Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
 [2026-05-01T18:44:12.923Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
+[2026-05-03T21:42:11.594Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
+[2026-05-04T05:17:19.470Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
