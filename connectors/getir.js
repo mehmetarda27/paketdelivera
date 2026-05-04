@@ -2,13 +2,16 @@ const { getPlatformAdapter, normalizePlatformKey } = require("../platform-adapte
 
 const PLATFORM = "Getir Yemek";
 const ENV_PREFIX = "GETIR";
+const REQUEST_TIMEOUT_MS = 8_000;
 
 function trimmed(value) {
   return String(value ?? "").trim();
 }
 
 function endpoint(account, kind) {
-  return trimmed(account?.settings?.[`${kind}Url`]) || trimmed(process.env[`${ENV_PREFIX}_${kind.toUpperCase()}_URL`]);
+  return trimmed(account?.settings?.[`${kind}Url`]) ||
+    trimmed(process.env[`${ENV_PREFIX}_${kind.toUpperCase()}_URL`]) ||
+    (kind === "orders" ? trimmed(process.env.GETIR_POLLING_URL) : "");
 }
 
 function authHeaders(account) {
@@ -21,14 +24,24 @@ function authHeaders(account) {
 }
 
 function hasPollingCredentials(account) {
-  return Boolean(endpoint(account, "orders") && (account?.apiKey || account?.apiSecret || account?.accessToken || account?.token));
+  return Boolean(account?.apiKey || account?.apiSecret || account?.accessToken || account?.token);
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function testConnection(account) {
   const url = endpoint(account, "verify") || endpoint(account, "orders");
   if (!url) return { ok: false, status: 404, message: "Getir verify/polling endpoint tanimli degil." };
   try {
-    const response = await fetch(url, { method: "GET", headers: authHeaders(account) });
+    const response = await fetchWithTimeout(url, { method: "GET", headers: authHeaders(account) });
     return { ok: response.ok, status: response.status, message: response.ok ? "OK" : `HTTP ${response.status}` };
   } catch (error) {
     return { ok: false, status: "timeout", message: error.message };
@@ -36,23 +49,47 @@ async function testConnection(account) {
 }
 
 async function fetchOrders(account) {
+  const url = endpoint(account, "orders");
   if (!hasPollingCredentials(account)) {
     console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "polling_endpoint_or_credentials_missing" });
     return [];
   }
-  const url = endpoint(account, "orders");
-  const response = await fetch(url, { method: "GET", headers: authHeaders(account) });
+  if (!url) {
+    console.warn("Polling endpoint not configured", { platform: PLATFORM, accountId: account?.id || null });
+    const error = new Error("Polling endpoint ayarlı değil");
+    error.code = "POLLING_ENDPOINT_NOT_CONFIGURED";
+    throw error;
+  }
+  const response = await fetchWithTimeout(url, { method: "GET", headers: authHeaders(account) });
   if (!response.ok) throw new Error(`Getir polling HTTP ${response.status}`);
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("Invalid JSON from polling endpoint");
+  }
   return Array.isArray(data) ? data : (data.orders || data.foodOrders || data.items || []);
 }
 
 function normalizeOrder(raw, account = {}) {
-  return getPlatformAdapter(normalizePlatformKey(PLATFORM)).normalizeOrder({
+  const normalized = getPlatformAdapter(normalizePlatformKey(PLATFORM)).normalizeOrder({
     ...raw,
     platform: PLATFORM,
     platformRestaurantId: raw?.platformRestaurantId || raw?.platform_restaurant_id || account.externalStoreId,
   });
+  return {
+    platform: PLATFORM,
+    restaurantId: account.restaurantId,
+    externalStoreId: normalized.platformRestaurantId || account.externalStoreId,
+    orderId: normalized.orderId,
+    customerName: normalized.customerName,
+    phone: normalized.phone,
+    address: normalized.address,
+    totalPrice: normalized.totalPrice,
+    paymentMethod: normalized.paymentMethod,
+    note: normalized.customerNote || "",
+    rawPayload: raw,
+  };
 }
 
 async function acknowledgeOrder(order) {

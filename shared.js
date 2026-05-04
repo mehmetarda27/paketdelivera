@@ -1,9 +1,7 @@
 const PLATFORM_OPTIONS = [
-  "Trendyol Go",
-  "GetirYemek",
+  "Trendyol Yemek",
   "Yemeksepeti",
-  "Migros Yemek",
-  "POS",
+  "Getir Yemek",
 ];
 
 const PAYMENT_OPTIONS = [

@@ -231,3 +231,16 @@
 [2026-05-01T18:44:12.923Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
 [2026-05-03T21:42:11.594Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
 [2026-05-04T05:17:19.470Z] status=200 signature=invalid restaurant=rst_oe19vbz4 platform=Trendyol Go order=connection-test
+[2026-05-04T11:12:54.055Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Go order=TEST-1777893174036
+[2026-05-04T11:15:05.426Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Go order=TEST-1777893305408
+[2026-05-04T11:29:34.782Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-1777894174758
+[2026-05-04T11:31:10.806Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-DUP-1777894270786
+[2026-05-04T11:31:10.825Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-DUP-1777894270786
+[2026-05-04T11:31:55.898Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-ADMIN-1777894315874
+[2026-05-04T11:32:51.890Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-ADMIN-1777894371869
+[2026-05-04T11:33:28.223Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-ADMIN-1777894408207
+[2026-05-04T11:35:19.340Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894519319
+[2026-05-04T11:35:19.358Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894519319
+[2026-05-04T11:36:04.692Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894564669
+[2026-05-04T11:36:04.714Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894564669
+[2026-05-04T12:04:16.001Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-WEBHOOK-1777896255981

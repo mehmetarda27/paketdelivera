@@ -119,7 +119,7 @@ const STATUS_TRANSITIONS = {
   [REJECTED_STATUS]: [],
   [CANCELED_STATUS]: [],
 };
-const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 10_000);
+const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLLING_INTERVAL_MS || process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 30_000);
 const PLATFORM_POLLING_ENABLED = ["1", "true", "yes"].includes(String(process.env.DELIVERA_PLATFORM_POLLING_ENABLED || "").toLowerCase());
 const PLATFORM_ORDER_STATUSES = new Set(["pending_approval", "approved", "assigned", "completed", "cancelled"]);
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
@@ -4290,8 +4290,15 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
 }
 
 function findDuplicatePackage(restaurantId, source, externalOrderId) {
-  if (!restaurantId || !source || !externalOrderId) {
+  if (!restaurantId || !externalOrderId) {
     return null;
+  }
+
+  if (!source || source === "platform_any") {
+    return db.prepare(`
+      SELECT * FROM packages
+      WHERE restaurant_id = ? AND source IN ('platform_webhook', 'platform_polling') AND external_order_id = ?
+    `).get(restaurantId, externalOrderId) || null;
   }
 
   return db.prepare(`
@@ -4565,7 +4572,7 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
 }
 
 function upsertPlatformPackage(platform, restaurant, payload) {
-  const existing = findDuplicatePackage(restaurant.id, "platform_webhook", payload.externalOrderId || payload.externalOrderNo);
+  const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
   upsertPlatformOrderRecord({
     platform,
     orderId: payload.externalOrderId || payload.externalOrderNo,
@@ -4674,8 +4681,9 @@ function findPlatformRestaurant(platform, platformRestaurantId) {
 }
 
 function createSimplePlatformPayload(order, restaurant) {
+  const source = order.source === "platform_polling" ? "platform_polling" : "platform_webhook";
   return {
-    source: "platform_webhook",
+    source,
     sourcePlatform: order.platform,
     externalOrderNo: order.orderId,
     externalOrderId: order.orderId,
@@ -4726,7 +4734,7 @@ function handleSimplePlatformOrder(order) {
     orderId: order.orderId,
     packageId: created?.id || null,
     trackingNo: created?.trackingNo || null,
-    source: "platform_webhook",
+    source: payload.source,
   });
   broadcastLiveEvent({
     type: "platform-order-pending",
@@ -5337,6 +5345,21 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/restaurant/platform-accounts") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      platformAccounts: getPlatformAccounts({ restaurantId: session.restaurant_id })
+        .map((account) => sanitizePlatformAccount(account, true)),
+    });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts") {
     const session = getRestaurantSession(req);
     if (!session) {
@@ -5654,6 +5677,36 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const restaurantPollTestMatch = pathname.match(/^\/api\/restaurant\/platform-accounts\/([^/]+)\/poll-test$/);
+  if (req.method === "POST" && restaurantPollTestMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const accountId = decodeURIComponent(restaurantPollTestMatch[1]);
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === accountId);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    const result = await platformService.pollPlatformAccount(account, { manual: true, test: true });
+    const message = !account.pollingEnabled
+      ? "Polling kapalı"
+      : platformAccountMissingCredentials(account)
+        ? "API bilgileri eksik"
+        : result.reason || `${result.fetchedCount || 0} sipariş bulundu`;
+    sendJson(res, 200, {
+      ok: Boolean(result.ok),
+      message: result.ok
+        ? `${result.fetchedCount || 0} sipariş bulundu${result.trackingNumbers?.length ? `. Paketler: ${result.trackingNumbers.join(", ")}` : ""}`
+        : message,
+      result,
+      state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
+    });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts/sync") {
     const session = getRestaurantSession(req);
     if (!session) {
@@ -5666,10 +5719,13 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
       return;
     }
-    const result = await pollPlatformAccount(account, { manual: true });
+    const result = await platformService.pollPlatformAccount(account, { manual: true, test: true });
     sendJson(res, result.ok || result.optional || result.skipped ? 200 : 400, {
       ok: result.ok,
       error: result.ok ? undefined : result.reason,
+      message: result.ok
+        ? `${result.fetchedCount || 0} sipariş bulundu${result.trackingNumbers?.length ? `. Paketler: ${result.trackingNumbers.join(", ")}` : ""}`
+        : result.reason,
       result,
       state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
     });
@@ -6290,6 +6346,17 @@ async function handleApi(req, res, pathname) {
       message: "Siparis alindi ve otomatik atama calisti.",
       package: created,
     });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/platform/poll-now") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { ok: false, error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const result = await platformService.pollAllPlatformAccounts({ manual: true, adminId: adminSession.admin_id });
+    sendJson(res, 200, { ok: true, result });
     return;
   }
 
@@ -7349,6 +7416,7 @@ if (PLATFORM_POLLING_ENABLED) {
   }, PLATFORM_POLL_INTERVAL_MS).unref();
 } else {
   console.log("Platform polling disabled; webhook flow is active.");
+  console.log("Polling skipped because global disabled");
 }
 
 currentState().packages

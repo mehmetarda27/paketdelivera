@@ -732,7 +732,9 @@ function setPlatformSetup(data) {
   safeSetText(
     restaurantRefs.platformSetupHint,
     [
-      account.pollingEnabled ? "Polling aktif - connector ile test edilebilir." : "Polling API kapalı — webhook ile sipariş bekleniyor",
+      account.pollingEnabled
+        ? (account.hasApiKey || account.hasApiSecret || account.hasToken ? "Polling aktif - connector ile test edilebilir." : "Polling açık ama API bilgileri eksik")
+        : "Polling kapalı — webhook ile sipariş bekleniyor",
       account.lastWebhookAt ? `Son webhook: ${formatDate(account.lastWebhookAt)}` : (lastWebhook ? `Son webhook: ${formatDate(lastWebhook.createdAt)}` : "Son webhook: henuz yok"),
       account.lastPollAt ? `Son polling: ${formatDate(account.lastPollAt)}` : "Son polling: henuz yok",
       lastTest ? `Son test siparisi: ${lastTest.externalOrderNo} / ${lastTest.trackingNo}` : "Son test siparisi: henuz yok",
@@ -779,13 +781,14 @@ function renderPlatformAccounts(accounts) {
     card.className = "stack-card";
     const lastWebhook = getLastWebhookLog(restaurantState.data, account);
     const lastTest = getLastWebhookTestPackage(restaurantState.data, account);
-    const pollingReady = Boolean((account.hasApiKey && account.hasApiSecret) || (account.hasToken && account.hasApiSecret));
+    const pollingCredentialsReady = Boolean(account.hasApiKey || account.hasApiSecret || account.hasToken);
+    const pollingReady = Boolean(account.pollingEnabled && pollingCredentialsReady);
     card.innerHTML = `
       <div class="stack-top">
         <div>
           <strong>${account.platform}</strong>
           <p>Webhook: ${account.webhookEnabled ? "aktif" : "pasif"}</p>
-          <p>Polling: ${account.pollingEnabled ? "aktif" : "pasif"}</p>
+          <p>Polling: ${account.pollingEnabled ? (pollingCredentialsReady ? "aktif" : "açık ama API bilgileri eksik") : "kapalı"}</p>
           <p>Platform Restaurant ID: ${account.externalStoreId ? `ID kayitli (${account.externalStoreId})` : "ID eksik"}</p>
           <p>Webhook Secret: ${account.hasWebhookSecret || account.webhookSecret ? "Secret kayitli" : "Secret eksik"}</p>
           <p>Son webhook: ${account.lastWebhookAt ? formatDate(account.lastWebhookAt) : (lastWebhook ? formatDate(lastWebhook.createdAt) : "Henuz yok")}</p>
@@ -797,7 +800,7 @@ function renderPlatformAccounts(accounts) {
       </div>
       <div class="button-row">
         <button class="primary-btn" type="button" data-platform-webhook-test="${account.id}">Webhook Test Siparisi Gonder</button>
-        <button class="ghost-btn" type="button" data-platform-sync="${account.id}" data-polling-ready="${pollingReady && account.pollingEnabled ? "1" : "0"}">Polling Test Et</button>
+        <button class="ghost-btn" type="button" data-platform-sync="${account.id}" data-polling-enabled="${account.pollingEnabled ? "1" : "0"}" data-polling-ready="${pollingReady ? "1" : "0"}">Polling Test Et</button>
       </div>
     `;
     restaurantRefs.platformAccountList.appendChild(card);
@@ -1398,21 +1401,26 @@ restaurantRefs.platformAccountList?.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (syncButton?.dataset.pollingEnabled !== "1") {
+    showToast("Polling kapalı");
+    restaurantRefs.summary.textContent = "Polling kapalı";
+    return;
+  }
   if (syncButton?.dataset.pollingReady !== "1") {
-    showToast("Polling kapali veya API bilgileri eksik");
-    restaurantRefs.summary.textContent = "Polling kapali veya API bilgileri eksik";
+    showToast("API bilgileri eksik");
+    restaurantRefs.summary.textContent = "API bilgileri eksik";
     return;
   }
   try {
-    const response = await api("/api/restaurant/platform-accounts/sync", {
+    const response = await api(`/api/restaurant/platform-accounts/${encodeURIComponent(accountId)}/poll-test`, {
       method: "POST",
       headers: restaurantAuthHeaders(),
       retryWithRefresh: refreshRestaurantAccess,
-      body: JSON.stringify({ accountId }),
+      body: JSON.stringify({}),
     });
     hydrateRestaurant(response.state || response);
     showToast(
-      response.message || response.error || response.result?.reason || (testConnectionButton ? "Baglanti kontrol edildi." : "Siparis cekme kontrol edildi."),
+      response.message || response.error || response.result?.reason || "Polling test tamamlandi.",
       response.ok ? "success" : "error"
     );
   } catch (error) {
