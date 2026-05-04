@@ -1592,8 +1592,20 @@ api("/api/bootstrap")
   });
 
 window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);
-document.querySelector("button").addEventListener("click", async () => {
-  const sellerId = document.querySelector("input").value;
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+
+  if (!button.textContent.includes("Platform Hesabını Kaydet")) return;
+
+  const inputs = [...document.querySelectorAll("input")];
+  const sellerInput = inputs.find((i) =>
+    i.placeholder?.toLowerCase().includes("vendor") ||
+    i.placeholder?.toLowerCase().includes("store") ||
+    i.value === "535548"
+  );
+
+  const sellerId = sellerInput?.value?.trim() || "535548";
 
   const res = await fetch("/api/platform/account", {
     method: "POST",
@@ -1603,10 +1615,12 @@ document.querySelector("button").addEventListener("click", async () => {
     body: JSON.stringify({
       platform: "Trendyol Go",
       platformRestaurantId: sellerId,
-      webhookSecret: "delivera-gizli-anahtar-2026"
+      webhookSecret: "delivera-gizli-anahtar-2026",
+      active: true
     })
   });
 
   const data = await res.json();
   console.log("SAVE RESULT:", data);
+  alert(data.ok ? "Platform hesabı kaydedildi" : "Kayıt hatası: " + (data.error || "bilinmiyor"));
 });
