@@ -24,6 +24,7 @@ const before = {
 db.exec("BEGIN IMMEDIATE");
 try {
   db.prepare("DELETE FROM platform_accounts").run();
+  db.prepare("DELETE FROM platform_orders").run();
   db.prepare("DELETE FROM packages").run();
   db.prepare("DELETE FROM webhook_logs").run();
   db.prepare("DELETE FROM audit_logs").run();
