@@ -61,7 +61,7 @@ function createPlatformService(deps = {}) {
   function handleWebhookOrder(order) {
     const match = findPlatformRestaurant(order.platform, order.platformRestaurantId || order.externalStoreId);
     if (!match) {
-      return { ok: false, statusCode: 404, error: "Restaurant/platform match failed" };
+      return { ok: false, statusCode: 404, error: "Restoran ID bu platformla eşleşmedi. Gerçek Store/Restaurant ID girilmeli." };
     }
     log.info?.("Platform matched", {
       platform: match.account.platform,

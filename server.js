@@ -76,6 +76,38 @@ const PLATFORM_VERIFICATION_STATUS = {
   VERIFIED: "verified",
   FAILED: "failed",
 };
+const PLATFORM_CONFIGS = {
+  "Trendyol Yemek": {
+    platform: "Trendyol Yemek",
+    mode: "polling",
+    requiredFields: ["externalStoreId", "apiKey", "apiSecret"],
+    optionalFields: ["token", "webhookSecret"],
+    testStrategy: "polling",
+    userFriendlyErrors: {
+      missingCredentials: "Supplier ID, API Key ve API Secret girilmeli.",
+    },
+  },
+  "Getir Yemek": {
+    platform: "Getir Yemek",
+    mode: "webhook",
+    requiredFields: ["externalStoreId", "webhookSecret"],
+    optionalFields: ["apiSecret"],
+    testStrategy: "local_webhook",
+    userFriendlyErrors: {
+      missingCredentials: "Store/Restaurant ID ve Webhook Secret girilmeli.",
+    },
+  },
+  Yemeksepeti: {
+    platform: "Yemeksepeti",
+    mode: "hybrid",
+    requiredFields: ["externalStoreId", "webhookSecret"],
+    optionalFields: ["apiKey", "apiSecret", "token"],
+    testStrategy: "auto",
+    userFriendlyErrors: {
+      missingCredentials: "Vendor ID ve Webhook Secret girilmeli.",
+    },
+  },
+};
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
@@ -733,6 +765,58 @@ function normalizePlatformFromSlug(value) {
   return SUPPORTED_PLATFORMS.find((platform) => platformSlug(platform) === incoming) || "";
 }
 
+function platformConfig(platform) {
+  const normalizedPlatform = normalizePlatformInput(platform);
+  return PLATFORM_CONFIGS[normalizedPlatform] || {
+    platform: normalizedPlatform || trimmed(platform),
+    mode: "webhook",
+    requiredFields: ["externalStoreId", "webhookSecret"],
+    optionalFields: ["apiKey", "apiSecret", "token"],
+    testStrategy: "local_webhook",
+    userFriendlyErrors: {},
+  };
+}
+
+function platformModeFlags(platform) {
+  const config = platformConfig(platform);
+  return {
+    config,
+    webhookEnabled: config.mode === "webhook" || config.mode === "hybrid",
+    pollingEnabled: config.mode === "polling" || config.mode === "hybrid",
+  };
+}
+
+function platformFriendlyError(message = "", platform = "") {
+  const text = trimmed(message);
+  if (!text) {
+    return "";
+  }
+  if (/Restaurant\/platform match failed|Restaurant not found/i.test(text)) {
+    return "Restoran ID bu platformla eşleşmedi. Gerçek Store/Restaurant ID girilmeli.";
+  }
+  if (/Polling endpoint ayarl|Polling endpoint not configured|verify\/polling endpoint tanimli degil|endpoint tanimli degil/i.test(text)) {
+    return "Bu platform polling desteklemiyor. Webhook modu kullanılacak.";
+  }
+  if (/API eri|yetki kapal|403/i.test(text)) {
+    return "Bu restoran için API yetkisi kapalı. Platform panelinden API/POS entegrasyon izni açılmalı.";
+  }
+  if (/Unauthorized|401|API Key veya API Secret hatal/i.test(text)) {
+    return "API Key, Secret veya Token hatalı olabilir.";
+  }
+  if (/API bilgileri eksik|credentials|missing/i.test(text)) {
+    return platformConfig(platform).userFriendlyErrors.missingCredentials || "Platform bağlantı bilgileri eksik.";
+  }
+  return text;
+}
+
+function testStrategyForAccount(account) {
+  const config = platformConfig(account?.platform);
+  if (config.testStrategy === "auto") {
+    return account?.pollingEnabled && !platformAccountMissingCredentials(account) ? "polling" : "local_webhook";
+  }
+  return config.testStrategy;
+}
+
 function parseBasicAuthHeader(req) {
   const header = String(req.headers.authorization || "");
   if (!header.startsWith("Basic ")) {
@@ -1021,14 +1105,19 @@ function validatePlatformAccountDraft(body) {
     throw validationError("Platform store/vendor kimligi zorunludur.");
   }
 
+  const config = platformConfig(platform);
   const normalizedWebhookSecret = webhookSecret || createWebhookSecret();
   const normalizedApiSecret = platform === "POS"
     ? trimmed(body.apiSecret ?? body.api_secret ?? body.webhookSecret ?? body.webhook_secret)
     : trimmed(body.apiSecret ?? body.api_secret);
+  const flags = platformModeFlags(platform);
 
   return {
     restaurantId,
     platform,
+    platformConfig: config,
+    mode: config.mode,
+    testStrategy: config.testStrategy,
     externalStoreId,
     externalId: externalStoreId,
     externalMerchantId: trimmed(body.externalMerchantId ?? body.external_merchant_id),
@@ -1053,10 +1142,15 @@ function validatePlatformAccountDraft(body) {
     webhookPassword: "",
     staticToken: normalizedWebhookSecret,
     webhookSecret: normalizedWebhookSecret,
-    pollingEnabled: body.pollingEnabled === true || body.polling_enabled === true || body.pollingEnabled === 1 || body.polling_enabled === 1,
-    webhookEnabled: body.webhookEnabled !== false && body.webhook_enabled !== false,
+    pollingEnabled: flags.pollingEnabled,
+    webhookEnabled: flags.webhookEnabled,
     active: body.active !== false,
-    settings: {},
+    settings: {
+      ...(typeof body.settings === "object" && body.settings ? body.settings : {}),
+      platformMode: config.mode,
+      testStrategy: config.testStrategy,
+      requiredFields: config.requiredFields,
+    },
   };
 }
 
@@ -1571,6 +1665,7 @@ function maskSecret(value) {
 }
 
 function sanitizePlatformAccount(account, includeSecrets = false) {
+  const config = platformConfig(account.platform);
   const safeAccount = {
     id: account.id,
     restaurantId: account.restaurantId,
@@ -1594,6 +1689,10 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     callbackUrl: account.callbackUrl || "",
     webhookId: account.webhookId,
     settings: account.settings,
+    mode: account.settings?.platformMode || config.mode,
+    testStrategy: account.settings?.testStrategy || config.testStrategy,
+    requiredFields: config.requiredFields,
+    optionalFields: config.optionalFields,
     active: account.active,
     lastSyncAt: account.lastSyncAt,
     pollingEnabled: Boolean(account.pollingEnabled),
@@ -4754,6 +4853,65 @@ function connectorForPlatform(platform) {
   return platformConnectors[normalizePlatformInput(platform) || platform] || null;
 }
 
+async function testPlatformAccountAutomatically(account) {
+  const strategy = testStrategyForAccount(account);
+  if (strategy === "local_webhook") {
+    const result = handleSimplePlatformOrder({
+      platform: account.platform,
+      platformRestaurantId: account.externalStoreId,
+      orderId: `TEST-${Date.now()}`,
+      customerName: "Test Musteri",
+      phone: "05555555555",
+      address: "Mersin Test Adresi",
+      totalPrice: 250,
+      paymentMethod: "Online Odeme",
+      customerNote: "Entegrasyon Merkezi test siparisi",
+      items: [{ id: "test-1", name: "Test Menu", quantity: 1, price: 250 }],
+    });
+    return result.ok
+      ? {
+          ok: true,
+          status: 200,
+          strategy,
+          message: "Bağlantı başarılı. Webhook test siparişi oluşturuldu.",
+          package: result.package,
+        }
+      : {
+          ok: false,
+          status: result.statusCode || 404,
+          strategy,
+          message: platformFriendlyError(result.error, account.platform),
+        };
+  }
+
+  const connector = connectorForPlatform(account.platform);
+  if (!connector || typeof connector.testConnection !== "function") {
+    return optionalIntegrationResult("Bu platform için otomatik test bulunamadı. Webhook modu kullanılacak.");
+  }
+  if (platformAccountMissingCredentials(account)) {
+    return {
+      ...optionalIntegrationResult(platformFriendlyError("API bilgileri eksik", account.platform)),
+      strategy,
+    };
+  }
+
+  try {
+    const result = await connector.testConnection(account);
+    return {
+      ...result,
+      strategy,
+      message: platformFriendlyError(result.message || `HTTP ${result.status}`, account.platform),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "timeout",
+      strategy,
+      message: platformFriendlyError(error.message, account.platform),
+    };
+  }
+}
+
 const posMissingEndpointLogKeys = new Set();
 
 async function pollPlatformAccount(account, options = {}) {
@@ -5386,11 +5544,13 @@ async function handleApi(req, res, pathname) {
     }
 
     const now = new Date().toISOString();
+    const draftConfig = platformConfig(draft.platform);
     const verification = {
-      status: PLATFORM_VERIFICATION_STATUS.VERIFIED,
+      status: PLATFORM_VERIFICATION_STATUS.PENDING,
       note: "Webhook modu aktif. Polling API kapalı — webhook ile sipariş bekleniyor.",
-      mode: "webhook_active",
+      mode: `${draftConfig.mode}_auto`,
     };
+    verification.note = `${draft.platform} entegrasyonu ${draftConfig.mode} modunda kaydedildi. Test bekleniyor.`;
     db.prepare("UPDATE restaurants SET webhook_secret = ? WHERE id = ?").run(draft.webhookSecret, session.restaurant_id);
     const existing = db.prepare(`
       SELECT * FROM platform_accounts
@@ -5633,25 +5793,7 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Restoran bulunamadi." });
       return;
     }
-    const connector = connectorForPlatform(account.platform);
-    let result = connector?.testConnection
-      ? null
-      : optionalIntegrationResult("Connector bulunamadi, manuel paket sistemi kullanilabilir.");
-    if (!result && platformAccountMissingCredentials(account)) {
-      result = optionalIntegrationResult();
-    }
-    if (!result) {
-      try {
-        result = await connector.testConnection(account);
-      } catch (error) {
-        console.error("Platform connection test failed", {
-          platform: account.platform,
-          accountId: account.id,
-          message: error.message,
-        });
-        result = optionalIntegrationResult("API baglanti testi tamamlanamadi, manuel paket sistemi kullanilabilir.");
-      }
-    }
+    const result = await testPlatformAccountAutomatically(account);
     logPlatformConnectionTest(account, result);
     const verificationStatus = result.ok
       ? PLATFORM_VERIFICATION_STATUS.VERIFIED
@@ -5660,18 +5802,20 @@ async function handleApi(req, res, pathname) {
         : PLATFORM_VERIFICATION_STATUS.FAILED;
     markPlatformAccountVerification(account.id, {
       status: verificationStatus,
-      mode: "connector_test",
-      note: result.message || `HTTP ${result.status}`,
+      mode: result.strategy || testStrategyForAccount(account),
+      note: platformFriendlyError(result.message || `HTTP ${result.status}`, account.platform),
     });
     sendJson(res, platformConnectionHttpStatus(result), {
       ok: result.ok,
       status: result.status,
-      message: result.message || `HTTP ${result.status}`,
-      error: result.ok ? undefined : (result.message || `HTTP ${result.status}`),
+      strategy: result.strategy || testStrategyForAccount(account),
+      message: platformFriendlyError(result.message || `HTTP ${result.status}`, account.platform),
+      error: result.ok ? undefined : platformFriendlyError(result.message || `HTTP ${result.status}`, account.platform),
       verification: {
         status: verificationStatus,
-        note: result.message || `HTTP ${result.status}`,
+        note: platformFriendlyError(result.message || `HTTP ${result.status}`, account.platform),
       },
+      package: result.package,
       state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
     });
     return;
@@ -6388,10 +6532,10 @@ async function handleApi(req, res, pathname) {
       });
       sendJson(res, 404, {
         ok: false,
-        error: "Restaurant/platform match failed",
+        error: platformFriendlyError("Restaurant/platform match failed", order.platform),
         platform: order.platform,
         platformRestaurantId: order.platformRestaurantId,
-        hint: "platform ve platformRestaurantId aktif platform hesabindaki external_store_id ile ayni olmali.",
+        hint: "Platform panelindeki gerçek Store/Restaurant ID ile aynı değer kullanılmalı.",
       });
       return;
     }

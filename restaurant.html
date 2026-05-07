@@ -131,7 +131,7 @@
             <code id="integrationWizardWebhook">Platform seçildiğinde webhook URL burada hazır olur.</code>
             <div class="badge-row">
               <button id="copyWebhookButton" class="ghost-btn" type="button">Webhook URL Kopyala</button>
-              <button id="testIntegrationButton" class="primary-btn" type="button">Webhook Test Siparişi Gönder</button>
+              <button id="testIntegrationButton" class="primary-btn" type="button">Bağlantıyı Test Et</button>
             </div>
             <p id="integrationWizardStatus" class="subtle-text">Kayıtlı platform hesabı olunca canlı test burada görünür.</p>
           </div>
@@ -256,8 +256,8 @@
         <article class="glass-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-coral">Platform Bağlantısı</p>
-              <h3>Canlı Platform Hesabı Tanımla</h3>
+              <p class="eyebrow accent-coral">Entegrasyon Merkezi</p>
+              <h3>Platformu Seç, Bilgileri Gir, Otomatik Bağlan</h3>
             </div>
           </div>
           <form id="platformAccountForm" class="form-grid">
@@ -266,7 +266,7 @@
               <select name="platform" id="platformSelect"></select>
             </label>
             <label>
-              Store veya Vendor ID
+              Restoran / Store / Supplier ID
               <input name="externalStoreId" type="text" placeholder="Platformdaki magaza kimligi" required>
             </label>
             <label>
@@ -327,17 +327,17 @@
             </label>
             <label class="checkbox-card">
               <input name="webhookEnabled" type="checkbox" checked>
-              <span>Webhook Aktif</span>
+              <span>Webhook Otomatik</span>
             </label>
             <label class="checkbox-card">
               <input name="pollingEnabled" type="checkbox">
-              <span>Polling Aktif</span>
+              <span>Polling Otomatik</span>
             </label>
             <label class="checkbox-card">
               <input name="active" type="checkbox" checked>
               <span>Aktif</span>
             </label>
-            <button id="savePlatformAccountButton" class="primary-btn full-width" type="submit">Platform Hesabını Kaydet</button>
+            <button id="savePlatformAccountButton" class="primary-btn full-width" type="submit">Kaydet ve Test Et</button>
           </form>
         </article>
 
@@ -345,7 +345,7 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-coral">Hazır Bağlantı</p>
-              <h3>Webhook Modu ve Yetkilendirme Bilgileri</h3>
+              <h3>Otomatik Mod ve Yetkilendirme Bilgileri</h3>
             </div>
           </div>
           <div class="integration-card">

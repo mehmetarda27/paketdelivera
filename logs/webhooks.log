@@ -244,3 +244,7 @@
 [2026-05-04T11:36:04.692Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894564669
 [2026-05-04T11:36:04.714Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-FINAL-1777894564669
 [2026-05-04T12:04:16.001Z] status=201 signature=valid restaurant=rst_oe19vbz4 platform=Trendyol Yemek order=TEST-WEBHOOK-1777896255981
+[2026-05-07T21:10:02.667Z] status=401 signature=invalid restaurant=rst_o04vyl83 platform=Yemeksepeti order=YS-WRONG-1778188202662
+[2026-05-07T21:10:02.685Z] status=201 signature=valid restaurant=rst_o04vyl83 platform=Yemeksepeti order=YS-1778188202669
+[2026-05-07T21:10:02.700Z] status=201 signature=valid restaurant=rst_o04vyl83 platform=Yemeksepeti order=YS-1778188202669
+[2026-05-07T21:10:02.716Z] status=201 signature=valid restaurant=rst_o04vyl83 platform=Yemeksepeti order=YS-REJECT-1778188202701
