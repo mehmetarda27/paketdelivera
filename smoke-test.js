@@ -45,6 +45,24 @@ async function request(path, options = {}) {
   return body;
 }
 
+function smokeMapUrl(order, target = "customer") {
+  const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
+  const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
+  const address = String(
+    target === "restaurant"
+      ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
+      : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
+  ).trim();
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  }
+  if (!address) {
+    return "";
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+}
+
 async function run() {
   const adminUsername = process.env.DELIVERA_ADMIN_USERNAME || "admin";
   const adminPassword = process.env.DELIVERA_ADMIN_PASSWORD || "Delivera123!";
@@ -451,6 +469,20 @@ async function run() {
     if (assignedPackage.source !== "external_manual") {
       throw new Error("Manuel paket kurye paneline beklenen source ile dusmedi.");
     }
+    if (!assignedPackage.recipient || !assignedPackage.phone || !assignedPackage.paymentMethod) {
+      throw new Error("Kurye paneli musteri bilgisi veya odeme tipini eksik aldi.");
+    }
+    const restaurantMapUrl = smokeMapUrl(assignedPackage, "restaurant");
+    if (restaurantMapUrl !== `https://www.google.com/maps/search/?api=1&query=${restaurantLatitude},${restaurantLongitude}`) {
+      throw new Error("Restoran harita linki koordinatla uretilmedi.");
+    }
+    const customerMapUrl = smokeMapUrl(assignedPackage, "customer");
+    if (!customerMapUrl.includes(encodeURIComponent(firstAddress))) {
+      throw new Error("Musteri harita linki adres fallback ile encode edilmedi.");
+    }
+    if (smokeMapUrl({ customerAddress: "" }, "customer") !== "") {
+      throw new Error("Bos adres icin harita linki uretilmemeliydi.");
+    }
 
     courierWorkspace = await request(`/api/courier/packages/${assignedPackage.id}/status`, {
       method: "PATCH",
@@ -764,7 +796,7 @@ async function run() {
       throw new Error("Yazdirma ekrani window.print akisini icermiyor.");
     }
     const courierSource = fs.readFileSync(path.join(__dirname, "courier.js"), "utf8");
-    if (!courierSource.includes("Restorani Haritada Ac") || !courierSource.includes("Musteriyi Haritada Ac") || !courierSource.includes("openOrderMap")) {
+    if (!courierSource.includes("Restorani Haritada Ac") || !courierSource.includes("Musteriyi Haritada Ac") || !courierSource.includes("openOrderMap") || !courierSource.includes("buildOrderMapUrl") || !courierSource.includes("encodeURIComponent(address)")) {
       throw new Error("Kurye paneli restoran/musteri harita butonlarini icermiyor.");
     }
 
@@ -1042,7 +1074,7 @@ async function run() {
       throw new Error("Platform delivered callback logu yazilmadi.");
     }
 
-    console.log("Smoke test basarili: admin, restoran, kurye ve platform webhook akisi calisti.");
+    console.log("Smoke test başarılı: admin, restoran, kurye, webhook, otomatik atama ve harita akışı çalıştı.");
   } finally {
     server.kill("SIGTERM");
     try {

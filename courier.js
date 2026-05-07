@@ -144,7 +144,7 @@ function hasMapTarget(latitudeValue, longitudeValue, addressValue) {
   return Boolean(String(addressValue || "").trim());
 }
 
-function openOrderMap(order, target = "customer") {
+function buildOrderMapUrl(order, target = "customer") {
   const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
   const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
   const address = String(
@@ -152,18 +152,26 @@ function openOrderMap(order, target = "customer") {
       ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
       : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
   ).trim();
-  let url = "";
 
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
-  } else {
-    if (!address) {
-      showToast("Adres bulunamadi.", "error");
-      return;
-    }
-    url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
   }
 
+  if (!address) {
+    return "";
+  }
+
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+}
+
+function openOrderMap(order, target = "customer") {
+  const url = buildOrderMapUrl(order, target);
+  if (!url) {
+    showToast("Adres bulunamadi.", "error");
+    console.log("Map link skipped", { target, reason: "missing_location" });
+    return;
+  }
+  console.log("Map link opened", { target, mode: url.includes("%") ? "address" : "coordinates" });
   window.open(url, "_blank");
 }
 
