@@ -940,6 +940,11 @@ function setPlatformSetup(data) {
 }
 
 function renderRestaurantList(restaurants) {
+  const signature = listRenderSignature(restaurants, ["id", "name", "zone", "latitude", "longitude"]);
+  if (restaurantRefs.restaurantList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.restaurantList.__deliveraRenderSignature = signature;
   restaurantRefs.restaurantList.innerHTML = "";
 
   if (restaurants.length === 0) {
@@ -965,6 +970,11 @@ function renderRestaurantList(restaurants) {
 }
 
 function renderPlatformAccounts(accounts) {
+  const signature = listRenderSignature(accounts || [], ["id", "platform", "externalStoreId", "active", "lastWebhookAt", "lastPollAt", "lastVerificationAt", "verifiedAt", "lastError", "hasApiKey", "hasApiSecret", "hasWebhookSecret", "pollingEnabled", "webhookEnabled"]);
+  if (restaurantRefs.platformAccountList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.platformAccountList.__deliveraRenderSignature = signature;
   restaurantRefs.platformAccountList.innerHTML = "";
 
   if (!accounts || accounts.length === 0) {
@@ -1036,6 +1046,11 @@ function renderRestaurantPerformance(performance) {
     averageDeliveryMinutes: 0,
     failedDeliveryRate: 0,
   };
+  const signature = listRenderSignature([data], ["todayOrderCount", "deliveredTodayCount", "averageAssignmentMinutes", "averageDeliveryMinutes", "failedDeliveryRate"]);
+  if (restaurantRefs.performanceBoard.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.performanceBoard.__deliveraRenderSignature = signature;
 
   restaurantRefs.performanceBoard.innerHTML = `
     <article class="mini-stat-card">
@@ -1072,6 +1087,16 @@ function renderIntegrationWizard(wizard) {
     helpText: "Webhook modu icin once platformRestaurantId ve secret kaydet.",
     steps: [],
   };
+  const signature = [
+    safeWizard.webhookUrl,
+    safeWizard.verificationStatus,
+    safeWizard.helpText,
+    listRenderSignature(safeWizard.steps || [], ["title", "label", "done"]),
+  ].join("||");
+  if (restaurantRefs.integrationWizardSteps.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.integrationWizardSteps.__deliveraRenderSignature = signature;
 
   restaurantRefs.integrationWizardSteps.innerHTML = safeWizard.steps.map((step) => `
     <article class="stack-card wizard-step-card ${step.done ? "wizard-step-done" : ""}">
@@ -1090,8 +1115,13 @@ function renderIntegrationWizard(wizard) {
 }
 
 function renderRecentOrders(packages) {
-  restaurantRefs.recentOrders.innerHTML = "";
   const list = packages.slice(0, 8);
+  const signature = listRenderSignature(list, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierId", "assignedCourierName", "paymentStatus", "updatedAt"]);
+  if (restaurantRefs.recentOrders.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.recentOrders.__deliveraRenderSignature = signature;
+  restaurantRefs.recentOrders.innerHTML = "";
 
   if (list.length === 0) {
     restaurantRefs.recentOrders.innerHTML = '<div class="empty-state">Bu restorana ait aktif siparis veya manuel paket yok.</div>';
@@ -1134,10 +1164,19 @@ function renderRecentOrders(packages) {
 }
 
 function renderActiveOrders(data) {
-  restaurantRefs.activeOrders.innerHTML = "";
   const packageList = [...data.packages].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
   const courierById = courierMap(data);
   const restaurantName = data.restaurants?.[0]?.name || "Delivera Express";
+  const signature = [
+    restaurantName,
+    listRenderSignature(packageList, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierId", "assignedCourierName", "paymentStatus", "lastAssignmentError", "updatedAt"]),
+    listRenderSignature(data.couriers || [], ["id", "status", "lastLocationAt"]),
+  ].join("||");
+  if (restaurantRefs.activeOrders.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.activeOrders.__deliveraRenderSignature = signature;
+  restaurantRefs.activeOrders.innerHTML = "";
 
   if (packageList.length === 0) {
     restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya webhook siparisi geldiginde burada gorunecek.</div>';
@@ -1281,12 +1320,22 @@ function renderActiveOrders(data) {
 }
 
 function renderOrderHistory(packages) {
-  restaurantRefs.orderHistory.innerHTML = "";
   const filteredHistory = [...packages]
     .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
     .filter((pkg) => packageMatchesHistoryRange(pkg, restaurantState.historyRange))
     .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
   const list = filteredHistory.slice(0, restaurantState.historyVisibleCount);
+  const signature = [
+    restaurantState.historyRange,
+    restaurantState.historyVisibleCount,
+    filteredHistory.length,
+    listRenderSignature(list, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierName", "paymentStatus", "updatedAt", "deliveredAt", "failedAt"]),
+  ].join("||");
+  if (restaurantRefs.orderHistory.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.orderHistory.__deliveraRenderSignature = signature;
+  restaurantRefs.orderHistory.innerHTML = "";
 
   restaurantRefs.historyMeta.textContent = `${filteredHistory.length} kapanan siparis icinden ${list.length} kayit gorunuyor.`;
   restaurantRefs.historyMore.classList.toggle("hidden", list.length >= filteredHistory.length);

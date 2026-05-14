@@ -267,6 +267,11 @@ function renderAdminStats(stats) {
 }
 
 function renderRestaurantFilter(restaurants) {
+  const signature = `${adminState.selectedRestaurantId}|${listRenderSignature(restaurants, ["id", "name"])}`;
+  if (adminRefs.restaurantFilter.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.restaurantFilter.__deliveraRenderSignature = signature;
   adminRefs.restaurantFilter.innerHTML = ['<option value="">Tum Restoranlar</option>']
     .concat(restaurants.map((restaurant) => `<option value="${restaurant.id}">${restaurant.name}</option>`))
     .join("");
@@ -274,6 +279,17 @@ function renderRestaurantFilter(restaurants) {
 }
 
 function renderRestaurantStats(restaurants, stats, packages) {
+  const signature = [
+    adminState.selectedRestaurantId,
+    listRenderSignature(restaurants, ["id", "name", "zone"]),
+    stats.totalPackages,
+    stats.waitingPackages,
+    listRenderSignature(packages, ["id", "status", "assignedCourierId", "updatedAt"]),
+  ].join("||");
+  if (adminRefs.restaurantStatsBoard.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.restaurantStatsBoard.__deliveraRenderSignature = signature;
   adminRefs.restaurantStatsBoard.innerHTML = "";
 
   const selectedRestaurant = restaurants.find((restaurant) => restaurant.id === adminState.selectedRestaurantId) || null;
@@ -323,6 +339,11 @@ function renderRestaurantStats(restaurants, stats, packages) {
 }
 
 function renderAdminCouriers(couriers) {
+  const signature = listRenderSignature(couriers, ["id", "name", "username", "zone", "status", "available", "activeLoad", "lastLocationAt", "latitude", "longitude"]);
+  if (adminRefs.courierList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.courierList.__deliveraRenderSignature = signature;
   adminRefs.courierList.innerHTML = "";
 
   if (couriers.length === 0) {
@@ -379,6 +400,11 @@ function renderAdminCouriers(couriers) {
 }
 
 function renderZoneBoard(zones) {
+  const signature = listRenderSignature(zones, ["name", "packageCount", "activeCourierCount", "courierCount", "waitingCount"]);
+  if (adminRefs.zoneBoard.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.zoneBoard.__deliveraRenderSignature = signature;
   adminRefs.zoneBoard.innerHTML = "";
 
   if (zones.length === 0) {
@@ -399,6 +425,11 @@ function renderZoneBoard(zones) {
 }
 
 function renderZoneAlerts(zoneAlerts) {
+  const signature = listRenderSignature(zoneAlerts || [], ["zone", "message", "waitingCount", "oldestWaitingMinutes", "severity"]);
+  if (adminRefs.zoneAlertList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.zoneAlertList.__deliveraRenderSignature = signature;
   adminRefs.zoneAlertList.innerHTML = "";
 
   if (!zoneAlerts || zoneAlerts.length === 0) {
@@ -671,9 +702,20 @@ function buildPackageCard(pkg) {
 }
 
 function renderAdminPackages(packages) {
-  adminRefs.packageList.innerHTML = "";
   const visible = packages.filter(packageVisible);
   const packagePage = adminState.data?.pagination?.packages || null;
+  const signature = [
+    adminRefs.searchInput.value.trim().toLowerCase(),
+    packagePage?.hasMore,
+    packagePage?.nextCursor,
+    packagePage?.total,
+    listRenderSignature(visible, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierId", "assignedCourierName", "lastAssignmentError", "paymentStatus", "updatedAt"]),
+  ].join("||");
+  if (adminRefs.packageList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.packageList.__deliveraRenderSignature = signature;
+  adminRefs.packageList.innerHTML = "";
 
   if (visible.length === 0) {
     adminRefs.packageList.innerHTML = '<div class="empty-state">Aramana uyan paket bulunamadi.</div>';
@@ -697,8 +739,13 @@ function renderAdminPackages(packages) {
 }
 
 function renderAwaitingPackages(packages) {
-  adminRefs.awaitingPackageList.innerHTML = "";
   const waiting = packages.filter((pkg) => ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status));
+  const signature = listRenderSignature(waiting, ["id", "trackingNo", "restaurantName", "recipient", "deliveryAddress", "address", "status", "lastAssignmentAttemptAt", "lastAssignmentError", "updatedAt"]);
+  if (adminRefs.awaitingPackageList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.awaitingPackageList.__deliveraRenderSignature = signature;
+  adminRefs.awaitingPackageList.innerHTML = "";
 
   if (waiting.length === 0) {
     adminRefs.awaitingPackageList.innerHTML = '<div class="empty-state">Atama bekleyen siparis yok.</div>';
@@ -724,8 +771,13 @@ function renderAwaitingPackages(packages) {
 }
 
 function renderActiveCourierOps(couriers) {
-  adminRefs.activeCourierOpsList.innerHTML = "";
   const list = couriers.filter((courier) => courier.status === "online" || courier.status === "busy");
+  const signature = listRenderSignature(list, ["id", "name", "username", "zone", "activeLoad", "lastLocationAt", "status"]);
+  if (adminRefs.activeCourierOpsList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.activeCourierOpsList.__deliveraRenderSignature = signature;
+  adminRefs.activeCourierOpsList.innerHTML = "";
 
   if (list.length === 0) {
     adminRefs.activeCourierOpsList.innerHTML = '<div class="empty-state">Aktif veya musait kurye yok.</div>';
@@ -750,6 +802,11 @@ function renderActiveCourierOps(couriers) {
 }
 
 function renderWebhookLogs(logs) {
+  const signature = listRenderSignature((logs || []).slice(0, 10), ["id", "sourcePlatform", "externalOrderNo", "restaurantId", "signatureValid", "responseStatus", "createdAt"]);
+  if (adminRefs.webhookLogList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.webhookLogList.__deliveraRenderSignature = signature;
   adminRefs.webhookLogList.innerHTML = "";
 
   if (!logs || logs.length === 0) {
@@ -775,6 +832,11 @@ function renderWebhookLogs(logs) {
 }
 
 function renderAuditLogs(logs) {
+  const signature = listRenderSignature((logs || []).slice(0, 12), ["id", "action", "actorRole", "actorId", "restaurantId", "packageId", "createdAt"]);
+  if (adminRefs.auditLogList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.auditLogList.__deliveraRenderSignature = signature;
   adminRefs.auditLogList.innerHTML = "";
 
   if (!logs || logs.length === 0) {
@@ -800,6 +862,11 @@ function renderAuditLogs(logs) {
 }
 
 function renderCourierDailyReports(reports) {
+  const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "updatedAt"]);
+  if (adminRefs.courierDailyReportList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.courierDailyReportList.__deliveraRenderSignature = signature;
   adminRefs.courierDailyReportList.innerHTML = "";
 
   if (!reports || reports.length === 0) {
@@ -843,8 +910,13 @@ function renderAdminNotifications(notifications) {
 }
 
 function renderAnnouncements(items) {
-  adminRefs.announcementList.innerHTML = "";
   const courierAnnouncements = (items || []).filter((item) => item.targetRole === "courier");
+  const signature = listRenderSignature(courierAnnouncements, ["id", "targetRole", "title", "message", "updatedAt", "createdAt"]);
+  if (adminRefs.announcementList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.announcementList.__deliveraRenderSignature = signature;
+  adminRefs.announcementList.innerHTML = "";
 
   if (!courierAnnouncements.length) {
     adminRefs.announcementList.innerHTML = '<div class="empty-state">Aktif kurye duyurusu yok.</div>';
@@ -879,15 +951,24 @@ function renderAnnouncements(items) {
 
 function renderShiftPlanTools(couriers, plans, summary) {
   if (adminRefs.shiftPlanCourier) {
-    adminRefs.shiftPlanCourier.innerHTML = ['<option value="">Kurye sec</option>']
-      .concat((couriers || []).map((courier) => `<option value="${courier.id}">${courier.name} - ${courier.zone}</option>`))
-      .join("");
+    const selectedCourier = adminRefs.shiftPlanCourier.value;
+    const selectSignature = listRenderSignature(couriers || [], ["id", "name", "zone"]);
+    if (adminRefs.shiftPlanCourier.__deliveraRenderSignature !== selectSignature) {
+      adminRefs.shiftPlanCourier.__deliveraRenderSignature = selectSignature;
+      adminRefs.shiftPlanCourier.innerHTML = ['<option value="">Kurye sec</option>']
+        .concat((couriers || []).map((courier) => `<option value="${courier.id}">${courier.name} - ${courier.zone}</option>`))
+        .join("");
+      adminRefs.shiftPlanCourier.value = selectedCourier;
+    }
   }
   if (adminRefs.shiftPlanDate && !adminRefs.shiftPlanDate.value) {
     adminRefs.shiftPlanDate.value = new Date().toISOString().slice(0, 10);
   }
 
-  adminRefs.shiftPlanSummary.innerHTML = "";
+  const summarySignature = listRenderSignature(summary || [], ["zone", "plannedCouriers", "missingCouriers"]);
+  if (adminRefs.shiftPlanSummary.__deliveraRenderSignature !== summarySignature) {
+    adminRefs.shiftPlanSummary.__deliveraRenderSignature = summarySignature;
+    adminRefs.shiftPlanSummary.innerHTML = "";
   (summary || []).forEach((item) => {
     const card = document.createElement("article");
     card.className = "zone-card";
@@ -898,7 +979,13 @@ function renderShiftPlanTools(couriers, plans, summary) {
     `;
     adminRefs.shiftPlanSummary.appendChild(card);
   });
+  }
 
+  const planSignature = listRenderSignature(plans || [], ["id", "courierName", "zone", "planDate", "startTime", "endTime", "status", "acceptedAt", "offerExpiresAt"]);
+  if (adminRefs.shiftPlanList.__deliveraRenderSignature === planSignature) {
+    return;
+  }
+  adminRefs.shiftPlanList.__deliveraRenderSignature = planSignature;
   adminRefs.shiftPlanList.innerHTML = "";
   if (!(plans || []).length) {
     adminRefs.shiftPlanList.innerHTML = '<div class="empty-state">Bugun icin vardiya plani kaydi yok.</div>';
@@ -944,6 +1031,11 @@ function renderShiftPlanTools(couriers, plans, summary) {
 }
 
 function renderCashReconciliations(items) {
+  const signature = listRenderSignature(items || [], ["id", "courierName", "reportDate", "zone", "expectedCash", "reportedCash", "variance", "status", "updatedAt"]);
+  if (adminRefs.cashReconciliationList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.cashReconciliationList.__deliveraRenderSignature = signature;
   adminRefs.cashReconciliationList.innerHTML = "";
   if (!(items || []).length) {
     adminRefs.cashReconciliationList.innerHTML = '<div class="empty-state">Nakit mutabakat kaydi henuz yok.</div>';

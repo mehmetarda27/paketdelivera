@@ -348,6 +348,22 @@ function locationLabel(courier) {
 }
 
 function renderCourierStats(courier, packages) {
+  const signature = [
+    courier.id,
+    courier.zone,
+    courier.username,
+    courier.activeLoad,
+    courier.status,
+    courier.available,
+    courier.latitude,
+    courier.longitude,
+    courier.lastLocationAt,
+    listRenderSignature(packages, ["id", "status", "updatedAt"]),
+  ].join("||");
+  if (courierRefs.stats.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.stats.__deliveraRenderSignature = signature;
   courierRefs.stats.innerHTML = "";
 
   const delivered = packages.filter((pkg) => pkg.status === "delivered").length;
@@ -386,7 +402,6 @@ function renderCourierStats(courier, packages) {
 }
 
 function renderCourierDayMetrics(dayMetrics) {
-  courierRefs.dayMetrics.innerHTML = "";
   const metrics = dayMetrics || {
     deliveredCount: 0,
     totalAmount: 0,
@@ -395,6 +410,12 @@ function renderCourierDayMetrics(dayMetrics) {
     hasClosedDay: false,
     closedAt: null,
   };
+  const signature = listRenderSignature([metrics], ["deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "hasClosedDay", "closedAt"]);
+  if (courierRefs.dayMetrics.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.dayMetrics.__deliveraRenderSignature = signature;
+  courierRefs.dayMetrics.innerHTML = "";
 
   courierRefs.dayMetrics.innerHTML = `
     <article class="mini-stat-card">
@@ -431,6 +452,11 @@ function renderCourierEarnings(earningsSummary) {
     last7Days: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
     total: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
   };
+  const signature = JSON.stringify(data);
+  if (courierRefs.earningsMetrics.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.earningsMetrics.__deliveraRenderSignature = signature;
 
   courierRefs.earningsMetrics.innerHTML = `
     <article class="mini-stat-card">
@@ -553,6 +579,16 @@ function renderCourierShiftSummary(shiftSummary) {
   const currentShift = shiftSummary?.currentShift || null;
   const recentShifts = shiftSummary?.recentShifts || [];
   const shiftPlans = shiftSummary?.shiftPlans || [];
+  const signature = [
+    currentShift?.id,
+    currentShift?.startedAt,
+    listRenderSignature(recentShifts.slice(0, 3), ["id", "startedAt", "endedAt"]),
+    listRenderSignature(shiftPlans.slice(0, 3), ["id", "planDate", "startTime", "endTime", "zone", "status", "acceptedAt", "offerExpiresAt"]),
+  ].join("||");
+  if (courierRefs.shiftMetrics.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.shiftMetrics.__deliveraRenderSignature = signature;
   const items = [];
 
   items.push(`
@@ -611,8 +647,13 @@ function renderCourierShiftSummary(shiftSummary) {
 }
 
 function renderPackages(packages) {
-  courierRefs.packages.innerHTML = "";
   const activePackages = packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+  const signature = listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError"]);
+  if (courierRefs.packages.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.packages.__deliveraRenderSignature = signature;
+  courierRefs.packages.innerHTML = "";
 
   if (activePackages.length === 0) {
     courierRefs.packages.innerHTML = '<div class="empty-state">Bu kuryeye atanmis paket yok.</div>';
@@ -782,12 +823,22 @@ function renderPackages(packages) {
 }
 
 function renderCourierHistory(packages) {
-  courierRefs.history.innerHTML = "";
   const filteredHistory = [...packages]
     .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
     .filter((pkg) => packageMatchesHistoryRange(pkg, courierState.historyRange))
     .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
   const historyPackages = filteredHistory.slice(0, courierState.historyVisibleCount);
+  const signature = [
+    courierState.historyRange,
+    courierState.historyVisibleCount,
+    filteredHistory.length,
+    listRenderSignature(historyPackages, ["id", "trackingNo", "recipient", "restaurantName", "deliveryAddress", "address", "status", "paymentStatus", "failureReason", "updatedAt", "deliveredAt", "failedAt"]),
+  ].join("||");
+  if (courierRefs.history.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.history.__deliveraRenderSignature = signature;
+  courierRefs.history.innerHTML = "";
 
   courierRefs.historyMeta.textContent = `${filteredHistory.length} kapanan teslimattan ${historyPackages.length} kayit gorunuyor.`;
   courierRefs.historyMore.classList.toggle("hidden", historyPackages.length >= filteredHistory.length);
@@ -832,8 +883,13 @@ function renderCourierNotifications(notifications) {
 }
 
 function renderCourierAnnouncements(items) {
-  courierRefs.announcementList.innerHTML = "";
   const announcements = (items || []).filter((item) => item.targetRole === "courier");
+  const signature = listRenderSignature(announcements, ["id", "targetRole", "title", "message", "updatedAt", "createdAt"]);
+  if (courierRefs.announcementList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  courierRefs.announcementList.__deliveraRenderSignature = signature;
+  courierRefs.announcementList.innerHTML = "";
 
   if (!announcements.length) {
     courierRefs.announcementList.innerHTML = '<div class="empty-state compact-empty-state">Aktif admin duyurusu yok.</div>';

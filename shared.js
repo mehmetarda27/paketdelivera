@@ -48,6 +48,36 @@ const signalCooldowns = new Map();
 const RESTAURANT_ID_STORAGE_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_STORAGE_KEY = "deliveraRestaurantApiKey";
 
+function renderIfChanged(target, signature, renderCallback) {
+  if (!target || typeof renderCallback !== "function") {
+    return false;
+  }
+
+  const nextSignature = String(signature ?? "");
+  if (target.__deliveraRenderSignature === nextSignature) {
+    return false;
+  }
+
+  target.__deliveraRenderSignature = nextSignature;
+  renderCallback();
+  return true;
+}
+
+function resetRenderSignature(target) {
+  if (target) {
+    target.__deliveraRenderSignature = "";
+  }
+}
+
+function listRenderSignature(items = [], fields = []) {
+  return JSON.stringify((items || []).map((item) => {
+    if (!fields.length) {
+      return item;
+    }
+    return fields.map((field) => item?.[field] ?? "");
+  }));
+}
+
 async function api(path, options = {}) {
   const requestPath = String(path || "").replace(/^https:\/\/paketdelivera\.onrender\.com(?=\/api\/)/i, "");
 
@@ -312,13 +342,16 @@ function renderNotificationCenter(target, notifications = [], emptyText = "Bildi
     return;
   }
 
+  const visibleNotifications = (notifications || []).slice(0, 8);
+  const signature = listRenderSignature(visibleNotifications, ["id", "eventType", "message", "createdAt"]);
+  if (!renderIfChanged(target, signature || `empty:${emptyText}`, () => {
   target.innerHTML = "";
-  if (!notifications.length) {
+  if (!visibleNotifications.length) {
     target.innerHTML = `<div class="empty-state compact-empty-state">${emptyText}</div>`;
     return;
   }
 
-  notifications.slice(0, 8).forEach((item) => {
+  visibleNotifications.forEach((item) => {
     const titleMap = {
       "package-created": "Yeni Paket",
       "package-assigned": "Kurye Atamasi",
@@ -343,6 +376,9 @@ function renderNotificationCenter(target, notifications = [], emptyText = "Bildi
     `;
     target.appendChild(card);
   });
+  })) {
+    return;
+  }
 }
 
 function connectLiveStream(path, token, handlers = {}) {

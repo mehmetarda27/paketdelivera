@@ -37,6 +37,7 @@
 
 html {
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -243,6 +244,7 @@ a {
   display: grid;
   grid-template-columns: 320px 1fr;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .wide-shell {
@@ -264,6 +266,7 @@ a {
   position: sticky;
   top: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 34px 26px;
   display: flex;
   flex-direction: column;
@@ -948,8 +951,10 @@ select option {
 }
 
 .history-list {
+  min-height: 168px;
   max-height: 760px;
   overflow: auto;
+  overflow-anchor: none;
   padding-right: 6px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
@@ -970,6 +975,7 @@ select option {
 }
 
 .empty-state {
+  min-height: 96px;
   padding: 34px 18px;
   border-radius: var(--radius-md);
   text-align: center;
@@ -979,6 +985,7 @@ select option {
 }
 
 .compact-empty-state {
+  min-height: 64px;
   padding: 18px 14px;
 }
 
@@ -1108,6 +1115,36 @@ code {
 .dashboard-grid > .workspace-collapsible,
 .priority-workspace-grid > .workspace-collapsible {
   grid-column: 1 / -1;
+}
+
+#packageList,
+#courierPackages,
+#activeOrders {
+  min-height: 220px;
+  overflow-anchor: none;
+}
+
+#recentOrders,
+#awaitingPackageList,
+#activeCourierOpsList,
+#courierList,
+#restaurantList,
+#platformAccountList,
+#adminNotificationCenter,
+#restaurantNotificationCenter,
+#courierNotificationCenter,
+#announcementList,
+#courierAnnouncementList {
+  min-height: 96px;
+  overflow-anchor: none;
+}
+
+.package-card,
+.stack-card,
+.zone-card,
+.mini-stat-card,
+.metric-card {
+  contain: layout paint;
 }
 
 .shift-offer-card.shift-offer-pending {
@@ -1273,6 +1310,7 @@ code {
   z-index: 1;
   width: min(760px, 100%);
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow: auto;
 }
 
@@ -2034,6 +2072,7 @@ code {
   width: min(50vw, 760px);
   min-width: min(100%, 560px);
   max-height: calc(100vh - 56px);
+  max-height: calc(100dvh - 56px);
   padding: 30px;
   background: rgba(255, 255, 255, 0.96) !important;
   color: #0f172a !important;
@@ -2154,6 +2193,7 @@ code {
     width: 100%;
     min-width: 0;
     max-height: 88vh;
+    max-height: 88dvh;
   }
 
   .package-list {
@@ -2685,4 +2725,33 @@ body.theme-courier {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
     rgba(2, 6, 23, 0.36);
+}
+
+@media (hover: none) {
+  .landing-hero:hover,
+  .landing-strip:hover,
+  .showcase-card:hover,
+  .glass-panel:hover,
+  .metric-card:hover,
+  .stack-card:hover,
+  .zone-card:hover,
+  .package-card:hover,
+  .mini-stat-card:hover,
+  .primary-btn:hover,
+  .ghost-btn:hover,
+  .chip-option:hover,
+  .selectable-card:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
