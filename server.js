@@ -20,13 +20,18 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { URL } = require("url");
-const { DatabaseSync } = require("node:sqlite");
+const dbFacade = require("./db");
+const { getDb, resolveDbFile } = dbFacade;
 const { getPlatformAdapter, normalizePlatformKey } = require("./platform-adapters");
 const platformConnectors = require("./connectors");
+const logger = require("./services/logger");
 const { createPlatformService } = require("./services/platformService");
+const { createRateLimitStore } = require("./services/rateLimitStore");
+const { createQueueService, JOB_TYPES } = require("./services/queueService");
+const { verifyPlatformSignature } = require("./services/platformSignature");
 
 const PORT = Number(process.env.PORT || 3000);
-const DB_FILE = path.resolve(process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE || path.join(__dirname, "delivera.sqlite"));
+const DB_FILE = resolveDbFile();
 const LOG_DIR = path.join(__dirname, "logs");
 const WEBHOOK_LOG_FILE = path.join(LOG_DIR, "webhooks.log");
 const ADMIN_BOOTSTRAP_FILE = path.join(LOG_DIR, "admin-bootstrap.txt");
@@ -39,15 +44,28 @@ const REFRESH_TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_MAX_AGE_MS = 20 * 60 * 1000;
 const PLATFORM_VERIFY_TIMEOUT_MS = 8_000;
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
+const IS_PRODUCTION = NODE_ENV === "production";
 const PUBLIC_BASE_URL = trimmed(process.env.PUBLIC_BASE_URL).replace(/\/+$/, "");
+const CORS_ALLOWED_ORIGINS = String(process.env.DELIVERA_CORS_ORIGINS || process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 const TRUST_PROXY = ["1", "true", "yes"].includes(String(process.env.TRUST_PROXY || "").toLowerCase());
 const FORCE_HTTPS = ["1", "true", "yes"].includes(String(process.env.FORCE_HTTPS || "").toLowerCase());
+const REDIS_URL = trimmed(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL);
 const RATE_LIMITS = {
   integrations: { limit: 60, windowMs: RATE_LIMIT_WINDOW_MS },
   courierLogin: { limit: 12, windowMs: RATE_LIMIT_WINDOW_MS },
+  adminLogin: { limit: 10, windowMs: RATE_LIMIT_WINDOW_MS },
+  restaurantLogin: { limit: 15, windowMs: RATE_LIMIT_WINDOW_MS },
+  platformOrder: { limit: 120, windowMs: RATE_LIMIT_WINDOW_MS },
+  quickPaste: { limit: 90, windowMs: RATE_LIMIT_WINDOW_MS },
   adminWrites: { limit: 120, windowMs: RATE_LIMIT_WINDOW_MS },
+  courierStatus: { limit: 180, windowMs: RATE_LIMIT_WINDOW_MS },
   general: { limit: 240, windowMs: RATE_LIMIT_WINDOW_MS },
 };
+const DEFAULT_PAGE_LIMIT = 100;
+const MAX_PAGE_LIMIT = 200;
 
 const DEFAULT_ZONES = ["Akdeniz", "Yenisehir", "Mezitli", "Toroslar", "Tarsus", "Erdemli"];
 const SUPPORTED_PLATFORMS = ["Trendyol Yemek", "Yemeksepeti", "Getir Yemek", "Migros Yemek", "POS"];
@@ -153,6 +171,7 @@ const STATUS_TRANSITIONS = {
 };
 const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLLING_INTERVAL_MS || process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 30_000);
 const PLATFORM_POLLING_ENABLED = ["1", "true", "yes"].includes(String(process.env.DELIVERA_PLATFORM_POLLING_ENABLED || "").toLowerCase());
+const ASSIGNMENT_DEBUG_LOGS = ["1", "true", "yes"].includes(String(process.env.DELIVERA_ASSIGNMENT_DEBUG || "").toLowerCase());
 const PLATFORM_ORDER_STATUSES = new Set(["pending_approval", "approved", "assigned", "completed", "cancelled"]);
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
 const LEGACY_STATUS_MAP = {
@@ -194,9 +213,20 @@ const STATIC_FILES = {
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-const db = new DatabaseSync(DB_FILE);
-const rateBuckets = new Map();
+const db = getDb({ filename: DB_FILE });
+const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger });
+const queueService = createQueueService({ redisUrl: REDIS_URL, logger });
 const liveStreams = new Map();
+const performanceMetrics = {
+  startedAt: Date.now(),
+  requestCount: 0,
+  totalResponseTimeMs: 0,
+  maxResponseTimeMs: 0,
+  errorCount: 0,
+  statusBuckets: {},
+  recentResponseTimes: [],
+};
+const recentRequestLogs = [];
 let assignmentSweepRunning = false;
 let assignmentSweepQueued = false;
 const assignmentRetryTimers = new Map();
@@ -342,6 +372,10 @@ db.exec(`
     signature_valid INTEGER NOT NULL,
     response_status INTEGER NOT NULL,
     request_body TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    dead_lettered_at TEXT,
+    last_error TEXT,
     created_at TEXT NOT NULL
   );
 
@@ -567,6 +601,20 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN assignment_tried_courier_ids_json TEXT");
 }
 
+const webhookLogColumns = db.prepare("PRAGMA table_info(webhook_logs)").all().map((row) => row.name);
+if (!webhookLogColumns.includes("retry_count")) {
+  db.exec("ALTER TABLE webhook_logs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+}
+if (!webhookLogColumns.includes("next_retry_at")) {
+  db.exec("ALTER TABLE webhook_logs ADD COLUMN next_retry_at TEXT");
+}
+if (!webhookLogColumns.includes("dead_lettered_at")) {
+  db.exec("ALTER TABLE webhook_logs ADD COLUMN dead_lettered_at TEXT");
+}
+if (!webhookLogColumns.includes("last_error")) {
+  db.exec("ALTER TABLE webhook_logs ADD COLUMN last_error TEXT");
+}
+
 const shiftPlanColumns = db.prepare("PRAGMA table_info(courier_shift_plans)").all().map((row) => row.name);
 if (!shiftPlanColumns.includes("offer_expires_at")) {
   db.exec("ALTER TABLE courier_shift_plans ADD COLUMN offer_expires_at TEXT");
@@ -708,6 +756,48 @@ if (!platformAccountColumns.includes("last_error")) {
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_orders_unique
   ON platform_orders (platform, platform_order_id, restaurant_id);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_restaurant_created
+  ON packages (restaurant_id, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_status_created
+  ON packages (status, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_zone_status
+  ON packages (zone, status);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_assigned_status
+  ON packages (assigned_courier_id, status, assigned_at);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_duplicate_lookup
+  ON packages (restaurant_id, source, external_order_id);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_platform_lookup
+  ON packages (restaurant_id, source_platform, external_order_id);
+
+  CREATE INDEX IF NOT EXISTS idx_couriers_status_zone
+  ON couriers (status, zone);
+
+  CREATE INDEX IF NOT EXISTS idx_couriers_zone_status
+  ON couriers (zone, status);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_accounts_lookup
+  ON platform_accounts (platform, external_store_id, active, webhook_enabled);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_accounts_restaurant_updated
+  ON platform_accounts (restaurant_id, updated_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_orders_restaurant_status_created
+  ON platform_orders (restaurant_id, status, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_restaurant_id_desc
+  ON audit_logs (restaurant_id, id DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_webhook_logs_restaurant_id_desc
+  ON webhook_logs (restaurant_id, id DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_notification_logs_target_created
+  ON notification_logs (target_role, target_id, created_at DESC);
 `);
 
 const zoneInsert = db.prepare("INSERT OR IGNORE INTO zones (name) VALUES (?)");
@@ -715,6 +805,28 @@ DEFAULT_ZONES.forEach((zone) => zoneInsert.run(zone));
 
 function uid(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function trackingNoExists(trackingNo) {
+  return Boolean(db.prepare("SELECT 1 FROM packages WHERE tracking_no = ?").get(trackingNo));
+}
+
+function generateTrackingNo() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = `PKT-${Math.floor(100000 + Math.random() * 900000)}`;
+    if (!trackingNoExists(candidate)) {
+      return candidate;
+    }
+  }
+  return `PKT-${Date.now()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
+}
+
+function ensureUniqueTrackingNo(preferred) {
+  const incoming = trimmed(preferred);
+  if (incoming && !trackingNoExists(incoming)) {
+    return incoming;
+  }
+  return generateTrackingNo();
 }
 
 function json(value) {
@@ -974,7 +1086,7 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
 
   return {
     id: uid("pkg"),
-    trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
+    trackingNo: generateTrackingNo(),
     restaurantId: restaurantRow.id,
     source: isQuickPasteOrder
       ? (normalizedSource === "platform_extension_auto"
@@ -1290,7 +1402,7 @@ function validateIntegrationDraft(body, restaurant) {
   const items = Array.isArray(body.items) ? body.items : [];
   const pkg = {
     id: uid("pkg"),
-    trackingNo: `PKT-${Math.floor(1000 + Math.random() * 9000)}`,
+    trackingNo: generateTrackingNo(),
     restaurantId: restaurant.id,
     source: trimmed(body.source) || "platform_webhook",
     sourcePlatform: trimmed(body.sourcePlatform),
@@ -1427,12 +1539,27 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   return UNPAID_PAYMENT_STATUS;
 }
 
-function suggestedRestaurantPrepMinutes(zone, state = currentState()) {
-  const zonePackages = state.packages.filter((pkg) => pkg.zone === zone && [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(pkg.status)));
-  const zoneCouriers = state.couriers.filter((courier) => courier.zone === zone);
-  const busyCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_BUSY_STATUS).length;
-  const onlineCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS).length;
-  const pressure = zonePackages.length + (busyCouriers * 2) - onlineCouriers;
+function suggestedRestaurantPrepMinutes(zone, state = null) {
+  const activeStatuses = [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS];
+  let packageCount = 0;
+  let busyCouriers = 0;
+  let onlineCouriers = 0;
+
+  if (state) {
+    packageCount = state.packages.filter((pkg) => pkg.zone === zone && activeStatuses.includes(normalizeStatus(pkg.status))).length;
+    const zoneCouriers = state.couriers.filter((courier) => courier.zone === zone);
+    busyCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_BUSY_STATUS).length;
+    onlineCouriers = zoneCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS).length;
+  } else {
+    packageCount = db.prepare(`
+      SELECT COUNT(*) AS count FROM packages
+      WHERE zone = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+    `).get(zone, ...activeStatuses).count;
+    busyCouriers = countTable("couriers", "zone = ? AND status = ?", [zone, COURIER_BUSY_STATUS]);
+    onlineCouriers = countTable("couriers", "zone = ? AND status = ?", [zone, COURIER_ONLINE_STATUS]);
+  }
+
+  const pressure = packageCount + (busyCouriers * 2) - onlineCouriers;
   return Math.max(5, Math.min(15, 5 + Math.max(0, pressure)));
 }
 
@@ -1544,25 +1671,55 @@ function requestBaseUrl(req) {
   return `${requestProtocol(req)}://${host}`;
 }
 
-function applyRateLimit(req, scope, rule) {
-  const now = Date.now();
+function originForCors(req) {
+  const origin = trimmed(req?.headers?.origin).replace(/\/+$/, "");
+  if (!origin) {
+    return "";
+  }
+
+  if (CORS_ALLOWED_ORIGINS.includes("*") || CORS_ALLOWED_ORIGINS.includes(origin)) {
+    return origin;
+  }
+
+  try {
+    const originUrl = new URL(origin);
+    if (originUrl.host === req?.headers?.host || originUrl.origin === new URL(requestBaseUrl(req)).origin) {
+      return origin;
+    }
+  } catch {}
+
+  return "";
+}
+
+async function applyRateLimit(req, scope, rule) {
   const key = `${scope}:${clientIp(req)}`;
-  const current = rateBuckets.get(key);
+  const result = await rateLimitStore.increment(key, rule);
+  return result.limited ? result.retryAfter : null;
+}
 
-  if (!current || now - current.startedAt >= rule.windowMs) {
-    rateBuckets.set(key, { count: 1, startedAt: now });
-    return null;
-  }
+function productionDisabled(res) {
+  sendJson(res, 404, { error: "Bu islem production ortaminda kullanilamaz." });
+}
 
-  current.count += 1;
-  if (current.count > rule.limit) {
-    return Math.max(1, Math.ceil((rule.windowMs - (now - current.startedAt)) / 1000));
-  }
-
-  return null;
+function sendRateLimited(res, retryAfter) {
+  res.setHeader("Retry-After", String(retryAfter));
+  sendJson(res, 429, {
+    ok: false,
+    error: "Too many requests",
+    code: "rate_limited",
+    retryAfter,
+  });
 }
 
 function writeSecurityHeaders(res) {
+  const req = res._deliveraRequest;
+  const corsOrigin = originForCors(req);
+  if (corsOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", req?.headers?.["access-control-request-headers"] || "Content-Type, Authorization, X-API-Key, X-Platform-Secret, X-Webhook-Secret");
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
@@ -1979,9 +2136,10 @@ function logPasswordReset(actorRole, username, token) {
 }
 
 function getAuditLogs(limit = 30, filter = {}) {
+  const offset = parsePositiveInteger(filter.offset, 0);
   const rows = filter.restaurantId
-    ? db.prepare("SELECT * FROM audit_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT ?").all(filter.restaurantId, limit)
-    : db.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?").all(limit);
+    ? db.prepare("SELECT * FROM audit_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT ? OFFSET ?").all(filter.restaurantId, limit, offset)
+    : db.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ? OFFSET ?").all(limit, offset);
 
   return rows.map((row) => ({
     id: row.id,
@@ -2042,19 +2200,20 @@ function persistNotificationsForEvent(event) {
 }
 
 function getNotifications(targetRole, targetId = null, limit = 20) {
+  const offset = 0;
   const rows = targetId
     ? db.prepare(`
       SELECT * FROM notification_logs
       WHERE target_role = ? AND target_id = ?
       ORDER BY datetime(created_at) DESC
-      LIMIT ?
-    `).all(targetRole, targetId, limit)
+      LIMIT ? OFFSET ?
+    `).all(targetRole, targetId, limit, offset)
     : db.prepare(`
       SELECT * FROM notification_logs
       WHERE target_role = ? AND target_id IS NULL
       ORDER BY datetime(created_at) DESC
-      LIMIT ?
-    `).all(targetRole, limit);
+      LIMIT ? OFFSET ?
+    `).all(targetRole, limit, offset);
 
   return rows.map((row) => ({
     id: row.id,
@@ -2168,9 +2327,12 @@ function getPlatformAccounts(filter = {}) {
 }
 
 function getPlatformOrders(filter = {}) {
+  const pagination = filter.pagination || null;
+  const limit = pagination ? clampLimit(pagination.limit) : 100;
+  const offset = pagination ? parsePositiveInteger(pagination.offset) : 0;
   const rows = filter.restaurantId
-    ? db.prepare("SELECT * FROM platform_orders WHERE restaurant_id = ? ORDER BY datetime(created_at) DESC LIMIT 100").all(filter.restaurantId)
-    : db.prepare("SELECT * FROM platform_orders ORDER BY datetime(created_at) DESC LIMIT 100").all();
+    ? db.prepare("SELECT * FROM platform_orders WHERE restaurant_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(filter.restaurantId, limit, offset)
+    : db.prepare("SELECT * FROM platform_orders ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(limit, offset);
 
   return rows.map((row) => ({
     id: row.id,
@@ -2187,6 +2349,13 @@ function getPlatformOrders(filter = {}) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
+  const total = filter.restaurantId
+    ? countTable("platform_orders", "restaurant_id = ?", [filter.restaurantId])
+    : countTable("platform_orders");
+  return pageMeta(total, pagination);
 }
 
 function normalizePlatformOrderStatus(status) {
@@ -2308,7 +2477,17 @@ function readRequestBody(req) {
 function sendJson(res, statusCode, payload) {
   writeSecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(payload));
+  const requestId = res._deliveraRequestId || "";
+  const responsePayload = payload && typeof payload === "object" && !Array.isArray(payload) && requestId && payload.requestId === undefined
+    ? { ...payload, requestId }
+    : payload;
+  res.end(JSON.stringify(responsePayload));
+}
+
+function sendText(res, statusCode, payload, contentType = "text/plain; charset=utf-8") {
+  writeSecurityHeaders(res);
+  res.writeHead(statusCode, { "Content-Type": contentType });
+  res.end(payload);
 }
 
 function createLiveStream(audience) {
@@ -2422,6 +2601,271 @@ function sendFile(res, fileName) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+function recordRequestMetrics(startedAt, statusCode) {
+  const elapsed = Date.now() - startedAt;
+  performanceMetrics.requestCount += 1;
+  performanceMetrics.totalResponseTimeMs += elapsed;
+  performanceMetrics.maxResponseTimeMs = Math.max(performanceMetrics.maxResponseTimeMs, elapsed);
+  performanceMetrics.statusBuckets[statusCode] = (performanceMetrics.statusBuckets[statusCode] || 0) + 1;
+  if (statusCode >= 500) {
+    performanceMetrics.errorCount += 1;
+  }
+  performanceMetrics.recentResponseTimes.push(elapsed);
+  if (performanceMetrics.recentResponseTimes.length > 500) {
+    performanceMetrics.recentResponseTimes.shift();
+  }
+}
+
+function recordRequestLog(req, res, startedAt) {
+  const statusCode = res.statusCode || 0;
+  const elapsedMs = Date.now() - startedAt;
+  const entry = {
+    requestId: res._deliveraRequestId || "",
+    method: req.method,
+    path: (() => {
+      try {
+        return new URL(req.url, `http://${req.headers.host || "localhost"}`).pathname;
+      } catch {
+        return req.url || "";
+      }
+    })(),
+    statusCode,
+    elapsedMs,
+    ip: clientIp(req),
+    createdAt: nowIso(),
+  };
+  recentRequestLogs.push(entry);
+  if (recentRequestLogs.length > 50) {
+    recentRequestLogs.shift();
+  }
+  if (statusCode >= 500) {
+    logger.error("Request failed", {
+      ...entry,
+      endpoint: entry.path,
+      requestId: entry.requestId,
+    });
+  } else if (statusCode === 401 || statusCode === 403 || statusCode === 429) {
+    logger.warn("Request completed with client error", {
+      endpoint: entry.path,
+      method: entry.method,
+      requestId: entry.requestId,
+      statusCode,
+      elapsedMs,
+    });
+  }
+}
+
+function countTable(tableName, where = "", params = []) {
+  return db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}${where ? ` WHERE ${where}` : ""}`).get(...params).count;
+}
+
+function clampLimit(value, fallback = DEFAULT_PAGE_LIMIT) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(MAX_PAGE_LIMIT, Math.floor(parsed)));
+}
+
+function parsePositiveInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+function paginationFromRequest(req, defaults = {}) {
+  let searchParams = new URLSearchParams();
+  try {
+    searchParams = new URL(req?.url || "/", `http://${req?.headers?.host || "localhost"}`).searchParams;
+  } catch {}
+  const limit = clampLimit(searchParams.get("limit") ?? defaults.limit, defaults.limit || DEFAULT_PAGE_LIMIT);
+  const offset = parsePositiveInteger(searchParams.get("offset") ?? searchParams.get("cursor") ?? defaults.offset, defaults.offset || 0);
+  return { limit, offset };
+}
+
+function pageMeta(total, pagination) {
+  const offset = parsePositiveInteger(pagination?.offset, 0);
+  const limit = clampLimit(pagination?.limit, DEFAULT_PAGE_LIMIT);
+  const nextOffset = offset + limit;
+  return {
+    limit,
+    offset,
+    cursor: String(offset),
+    nextCursor: nextOffset < total ? String(nextOffset) : null,
+    hasMore: nextOffset < total,
+    total,
+  };
+}
+
+function databaseSizeBytes() {
+  try {
+    return fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function tableCountSafe(tableName, where = "", params = []) {
+  try {
+    return countTable(tableName, where, params);
+  } catch {
+    return 0;
+  }
+}
+
+function queueHealthPayload() {
+  return {
+    assignmentRetryTimers: assignmentRetryTimers.size,
+    assignmentSweepRunning,
+    assignmentSweepQueued,
+    platformPollingEnabled: PLATFORM_POLLING_ENABLED,
+    platformPollIntervalMs: PLATFORM_POLL_INTERVAL_MS,
+    liveStreams: liveStreams.size,
+    queueService: queueService.health(),
+  };
+}
+
+function cacheHealthPayload() {
+  const rateLimitHealth = rateLimitStore.health();
+  return {
+    mode: rateLimitHealth.mode,
+    redisUrlConfigured: Boolean(REDIS_URL),
+    rateLimitStore: rateLimitHealth,
+    responseCache: "not_enabled",
+  };
+}
+
+function systemStatusPayload() {
+  const activeStatuses = [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS];
+  const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const dbOk = Boolean(db.prepare("SELECT 1 AS ok").get()?.ok);
+
+  return {
+    ok: true,
+    app: "Delivera Express",
+    env: NODE_ENV,
+    uptimeSeconds: Math.round(process.uptime()),
+    database: {
+      ok: dbOk,
+      mode: dbFacade.clientName(),
+      file: DB_FILE,
+      sizeBytes: databaseSizeBytes(),
+      postgresUrlConfigured: Boolean(trimmed(process.env.DATABASE_URL || process.env.POSTGRES_URL)),
+    },
+    totals: {
+      restaurants: tableCountSafe("restaurants"),
+      couriers: tableCountSafe("couriers"),
+      packages: tableCountSafe("packages"),
+      activePackages: db.prepare(`SELECT COUNT(*) AS count FROM packages WHERE status IN (${activeStatuses.map(() => "?").join(",")})`).get(...activeStatuses).count,
+      packagesLast24h: tableCountSafe("packages", "created_at >= ?", [last24h]),
+      platformOrders: tableCountSafe("platform_orders"),
+    },
+    operations: {
+      onlineCouriers: tableCountSafe("couriers", "status = ?", [COURIER_ONLINE_STATUS]),
+      busyCouriers: tableCountSafe("couriers", "status = ?", [COURIER_BUSY_STATUS]),
+      waitingPackages: db.prepare(`
+        SELECT COUNT(*) AS count FROM packages
+        WHERE status IN (?, ?, ?, ?)
+      `).get(PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS).count,
+    },
+    queues: queueHealthPayload(),
+    cache: cacheHealthPayload(),
+    timestamp: nowIso(),
+  };
+}
+
+function performanceSummaryPayload() {
+  const averageResponseTimeMs = performanceMetrics.requestCount
+    ? performanceMetrics.totalResponseTimeMs / performanceMetrics.requestCount
+    : 0;
+  const recent = [...performanceMetrics.recentResponseTimes].sort((left, right) => left - right);
+  const percentile = (value) => {
+    if (recent.length === 0) {
+      return 0;
+    }
+    return recent[Math.min(recent.length - 1, Math.ceil((value / 100) * recent.length) - 1)];
+  };
+
+  return {
+    ok: true,
+    uptimeSeconds: Math.round(process.uptime()),
+    startedAt: new Date(performanceMetrics.startedAt).toISOString(),
+    requestCount: performanceMetrics.requestCount,
+    errorCount: performanceMetrics.errorCount,
+    averageResponseTimeMs: Number(averageResponseTimeMs.toFixed(2)),
+    maxResponseTimeMs: performanceMetrics.maxResponseTimeMs,
+    p50ResponseTimeMs: percentile(50),
+    p95ResponseTimeMs: percentile(95),
+    p99ResponseTimeMs: percentile(99),
+    statusBuckets: performanceMetrics.statusBuckets,
+    memory: process.memoryUsage(),
+    databaseSizeBytes: databaseSizeBytes(),
+    queues: queueHealthPayload(),
+    cache: cacheHealthPayload(),
+    recentRequests: recentRequestLogs.slice(-10),
+    timestamp: nowIso(),
+  };
+}
+
+function prometheusLine(name, value, labels = {}) {
+  const labelEntries = Object.entries(labels).filter(([, labelValue]) => labelValue !== undefined && labelValue !== null);
+  const labelText = labelEntries.length
+    ? `{${labelEntries.map(([labelName, labelValue]) => `${labelName}="${String(labelValue).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`
+    : "";
+  const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return `${name}${labelText} ${numericValue}`;
+}
+
+function metricsTextPayload() {
+  const status = systemStatusPayload();
+  const perf = performanceSummaryPayload();
+  const lines = [
+    "# HELP delivera_up Application liveness flag.",
+    "# TYPE delivera_up gauge",
+    prometheusLine("delivera_up", status.ok ? 1 : 0),
+    "# HELP delivera_uptime_seconds Process uptime in seconds.",
+    "# TYPE delivera_uptime_seconds gauge",
+    prometheusLine("delivera_uptime_seconds", status.uptimeSeconds),
+    "# HELP delivera_requests_total Total observed HTTP requests.",
+    "# TYPE delivera_requests_total counter",
+    prometheusLine("delivera_requests_total", perf.requestCount),
+    "# HELP delivera_errors_total Total observed HTTP 5xx responses.",
+    "# TYPE delivera_errors_total counter",
+    prometheusLine("delivera_errors_total", perf.errorCount),
+    "# HELP delivera_response_time_ms HTTP response time summary in milliseconds.",
+    "# TYPE delivera_response_time_ms gauge",
+    prometheusLine("delivera_response_time_ms", perf.averageResponseTimeMs, { quantile: "avg" }),
+    prometheusLine("delivera_response_time_ms", perf.p50ResponseTimeMs, { quantile: "p50" }),
+    prometheusLine("delivera_response_time_ms", perf.p95ResponseTimeMs, { quantile: "p95" }),
+    prometheusLine("delivera_response_time_ms", perf.p99ResponseTimeMs, { quantile: "p99" }),
+    "# HELP delivera_database_size_bytes SQLite database file size.",
+    "# TYPE delivera_database_size_bytes gauge",
+    prometheusLine("delivera_database_size_bytes", status.database.sizeBytes),
+    "# HELP delivera_table_rows Current table row counts.",
+    "# TYPE delivera_table_rows gauge",
+    prometheusLine("delivera_table_rows", status.totals.restaurants, { table: "restaurants" }),
+    prometheusLine("delivera_table_rows", status.totals.couriers, { table: "couriers" }),
+    prometheusLine("delivera_table_rows", status.totals.packages, { table: "packages" }),
+    prometheusLine("delivera_table_rows", status.totals.platformOrders, { table: "platform_orders" }),
+    "# HELP delivera_couriers Current courier operational counts.",
+    "# TYPE delivera_couriers gauge",
+    prometheusLine("delivera_couriers", status.operations.onlineCouriers, { status: "online" }),
+    prometheusLine("delivera_couriers", status.operations.busyCouriers, { status: "busy" }),
+    "# HELP delivera_queue_depth In-process queue/timer depth.",
+    "# TYPE delivera_queue_depth gauge",
+    prometheusLine("delivera_queue_depth", status.queues.assignmentRetryTimers, { queue: "assignment_retry_timers" }),
+    prometheusLine("delivera_queue_depth", status.queues.liveStreams, { queue: "live_streams" }),
+  ];
+
+  Object.entries(perf.statusBuckets || {}).forEach(([statusCode, count]) => {
+    lines.push(prometheusLine("delivera_http_status_total", count, { status: statusCode }));
+  });
+
+  return `${lines.join("\n")}\n`;
+}
+
 function findStaticFile(pathname, method = "GET") {
   if (STATIC_FILES[pathname]) {
     return STATIC_FILES[pathname];
@@ -2530,9 +2974,43 @@ function getCourierById(courierId) {
 }
 
 function getPackages(filter = {}) {
-  const rows = filter.restaurantId
-    ? db.prepare("SELECT * FROM packages WHERE restaurant_id = ? ORDER BY datetime(created_at) DESC").all(filter.restaurantId)
-    : db.prepare("SELECT * FROM packages ORDER BY datetime(created_at) DESC").all();
+  const whereParts = [];
+  const params = [];
+  if (filter.restaurantId) {
+    whereParts.push("restaurant_id = ?");
+    params.push(filter.restaurantId);
+  }
+  if (filter.courierId) {
+    whereParts.push("assigned_courier_id = ?");
+    params.push(filter.courierId);
+  }
+  if (filter.status) {
+    whereParts.push("status = ?");
+    params.push(normalizeStatus(filter.status));
+  }
+  if (filter.platform) {
+    whereParts.push("source_platform = ?");
+    params.push(filter.platform);
+  }
+  if (filter.dateFrom) {
+    whereParts.push("created_at >= ?");
+    params.push(filter.dateFrom);
+  }
+  if (filter.dateTo) {
+    whereParts.push("created_at <= ?");
+    params.push(filter.dateTo);
+  }
+  if (filter.search) {
+    whereParts.push("(tracking_no LIKE ? OR external_order_no LIKE ? OR recipient LIKE ? OR phone LIKE ? OR address LIKE ? OR delivery_address LIKE ?)");
+    const searchValue = `%${filter.search}%`;
+    params.push(searchValue, searchValue, searchValue, searchValue, searchValue, searchValue);
+  }
+  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+  const pagination = filter.pagination || null;
+  const sql = `SELECT * FROM packages ${whereSql} ORDER BY datetime(created_at) DESC`;
+  const rows = pagination
+    ? db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...params, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
+    : db.prepare(sql).all(...params);
 
   return rows.map((row) => ({
     id: row.id,
@@ -2583,6 +3061,63 @@ function getPackages(filter = {}) {
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
   }));
+}
+
+function packagePagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
+  const whereParts = [];
+  const params = [];
+  if (filter.restaurantId) {
+    whereParts.push("restaurant_id = ?");
+    params.push(filter.restaurantId);
+  }
+  if (filter.courierId) {
+    whereParts.push("assigned_courier_id = ?");
+    params.push(filter.courierId);
+  }
+  if (filter.status) {
+    whereParts.push("status = ?");
+    params.push(normalizeStatus(filter.status));
+  }
+  if (filter.platform) {
+    whereParts.push("source_platform = ?");
+    params.push(filter.platform);
+  }
+  if (filter.dateFrom) {
+    whereParts.push("created_at >= ?");
+    params.push(filter.dateFrom);
+  }
+  if (filter.dateTo) {
+    whereParts.push("created_at <= ?");
+    params.push(filter.dateTo);
+  }
+  if (filter.search) {
+    whereParts.push("(tracking_no LIKE ? OR external_order_no LIKE ? OR recipient LIKE ? OR phone LIKE ? OR address LIKE ? OR delivery_address LIKE ?)");
+    const searchValue = `%${filter.search}%`;
+    params.push(searchValue, searchValue, searchValue, searchValue, searchValue, searchValue);
+  }
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM packages${whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : ""}`).get(...params).count;
+  return pageMeta(total, pagination);
+}
+
+function getCapacityPackagesForAssignment(pkg) {
+  const rows = db.prepare(`
+    SELECT * FROM packages
+    WHERE status IN (?, ?, ?)
+      AND id <> ?
+  `).all(ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, pkg.id);
+  return [...rows.map((row) => mapPackageRow(row)), pkg];
+}
+
+function assignmentStateForPackage(pkg) {
+  return {
+    zones: getZones(),
+    restaurants: getRestaurants({ restaurantId: pkg.restaurantId }),
+    couriers: getCouriers(),
+    packages: getCapacityPackagesForAssignment(pkg),
+    platformAccounts: [],
+    platformOrders: [],
+    webhookLogs: [],
+  };
 }
 
 function mapPackageRow(row, restaurantMap = new Map()) {
@@ -2638,8 +3173,10 @@ function mapPackageRow(row, restaurantMap = new Map()) {
   };
 }
 
-function getCourierPackages(courierId) {
-  const rows = db.prepare("SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC").all(courierId);
+function getCourierPackages(courierId, pagination = null) {
+  const rows = pagination
+    ? db.prepare("SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(courierId, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
+    : db.prepare("SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC").all(courierId);
   const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];
   const restaurantMap = new Map(
     restaurantIds.map((restaurantId) => {
@@ -2848,8 +3385,8 @@ function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
     steps: [
       { id: "select_platform", title: "Adim 1", label: "Platform sec", done: Boolean(current?.platform) },
       { id: "credentials", title: "Adim 2", label: "Gerekli bilgileri gir", done: Boolean(current?.externalStoreId) },
-      { id: "test_api", title: "Adim 3", label: "Webhook secret kayitli", done: Boolean(current?.hasWebhookSecret || current?.webhookSecret) },
-      { id: "test", title: "Adim 4", label: "Webhook test siparisi gonder", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
+      { id: "webhook_secret", title: "Adim 3", label: "Webhook secret kayitli", done: Boolean(current?.hasWebhookSecret || current?.webhookSecret) },
+      { id: "first_order", title: "Adim 4", label: "Ilk gercek siparisle dogrula", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
       { id: "success", title: "Adim 5", label: "Webhook modu aktif", done: current?.verificationStatus === PLATFORM_VERIFICATION_STATUS.VERIFIED },
     ],
     helpText: restaurant
@@ -2858,13 +3395,15 @@ function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
   };
 }
 
-function buildCourierWorkspace(courierId) {
+function buildCourierWorkspace(courierId, options = {}) {
   const courier = getCourierById(courierId);
   if (!courier) {
     return null;
   }
 
-  const packages = getCourierPackages(courierId);
+  const pagination = options.pagination || { limit: DEFAULT_PAGE_LIMIT, offset: 0 };
+  const packages = getCourierPackages(courierId, pagination);
+  const packagesPagination = pageMeta(countTable("packages", "assigned_courier_id = ?", [courierId]), pagination);
   const todayPackages = deliveredPackagesForCourierOnDate(courierId, dayKey());
   const daySummary = summarizeCourierDay(todayPackages);
   const dayReport = db.prepare("SELECT * FROM courier_daily_reports WHERE courier_id = ? AND report_date = ?").get(courierId, dayKey());
@@ -2887,13 +3426,17 @@ function buildCourierWorkspace(courierId) {
     shiftSummary: buildCourierShiftSummary(courierId),
     notifications: getNotifications("courier", courierId, 20),
     announcements: getAnnouncements("courier"),
+    pagination: {
+      packages: packagesPagination,
+    },
   };
 }
 
 function getWebhookLogs(limit = 20, filter = {}) {
+  const offset = parsePositiveInteger(filter.offset, 0);
   const rows = filter.restaurantId
-    ? db.prepare("SELECT * FROM webhook_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT ?").all(filter.restaurantId, limit)
-    : db.prepare("SELECT * FROM webhook_logs ORDER BY id DESC LIMIT ?").all(limit);
+    ? db.prepare("SELECT * FROM webhook_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT ? OFFSET ?").all(filter.restaurantId, limit, offset)
+    : db.prepare("SELECT * FROM webhook_logs ORDER BY id DESC LIMIT ? OFFSET ?").all(limit, offset);
 
   return rows.map((row) => ({
     id: row.id,
@@ -3047,6 +3590,17 @@ function activeAssignmentsForCourier(packages, courierId, excludePackageId = nul
   ).length;
 }
 
+function buildActiveLoadMap(packages, excludePackageId = null) {
+  const loadMap = new Map();
+  packages.forEach((item) => {
+    if (!item.assignedCourierId || item.id === excludePackageId || !isCapacityBlockingPackage(item)) {
+      return;
+    }
+    loadMap.set(item.assignedCourierId, (loadMap.get(item.assignedCourierId) || 0) + 1);
+  });
+  return loadMap;
+}
+
 function isCourierOfferExpired(pkg, referenceTime = Date.now()) {
   return normalizeStatus(pkg?.status) === ASSIGNED_STATUS &&
     pkg?.assignedAt &&
@@ -3151,9 +3705,20 @@ function syncAssignmentRetryForPackage(pkg) {
   }
 
   clearAssignmentRetry(pkg.id);
+  queueService.enqueue(JOB_TYPES.ASSIGNMENT_RETRY, {
+    packageId: pkg.id,
+    assignedCourierId: pkg.assignedCourierId,
+    scheduledAt: nowIso(),
+  }, {
+    delayMs: COURIER_OFFER_TIMEOUT_MS,
+  }).then((result) => {
+    if (result.ok) {
+      logger.info("Assignment retry queued", { packageId: pkg.id, queueMode: result.mode, jobId: result.jobId });
+    }
+  });
   const timerId = setTimeout(() => {
     handleAssignmentRetry(pkg.id).catch((error) => {
-      console.error("Assignment retry failed", error);
+      logger.error("Assignment retry failed", { packageId: pkg.id, error });
     });
   }, COURIER_OFFER_TIMEOUT_MS);
   assignmentRetryTimers.set(pkg.id, timerId);
@@ -3225,6 +3790,7 @@ function evaluateAssignmentFailure(state, pkg) {
 
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
+  const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
   const ranked = state.couriers
     .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS)
     .map((courier) => ({
@@ -3232,7 +3798,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       distance: distance(courier.latitude, courier.longitude, pkg.latitude, pkg.longitude),
       load: Math.max(
         occupiedCourierLoads.get(courier.id) || 0,
-        activeAssignmentsForCourier(state.packages, courier.id, pkg.id)
+        activeLoadMap.get(courier.id) || 0
       ),
     }))
     .filter(({ courier, distance: courierDistance, load }) =>
@@ -3242,26 +3808,18 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     )
     .sort((left, right) => left.distance - right.distance || left.load - right.load);
 
-  console.log("Assignment courier distance check", {
-    packageId: pkg.id,
-    packageStatus: pkg.status,
-    zone: pkg.zone,
-    packageLat: pkg.latitude,
-    packageLng: pkg.longitude,
-    skippedCourierIds: [...excludedCourierIds],
-    couriers: state.couriers
-      .map((courier) => ({
-        courierId: courier.id,
-        status: normalizeCourierStatus(courier.status, courier.available),
-        available: courier.available,
-        activeLoad: Math.max(
-          occupiedCourierLoads.get(courier.id) || 0,
-          activeAssignmentsForCourier(state.packages, courier.id, pkg.id)
-        ),
-        distanceKm: Number(distance(courier.latitude, courier.longitude, pkg.latitude, pkg.longitude).toFixed(3)),
-      })),
-    eligibleCourierIds: ranked.map((item) => item.courier.id),
-  });
+  if (ASSIGNMENT_DEBUG_LOGS) {
+    logger.debug("Assignment courier distance check", {
+      packageId: pkg.id,
+      packageStatus: pkg.status,
+      zone: pkg.zone,
+      packageLat: pkg.latitude,
+      packageLng: pkg.longitude,
+      skippedCourierIds: [...excludedCourierIds],
+      courierCount: state.couriers.length,
+      eligibleCourierIds: ranked.map((item) => item.courier.id),
+    });
+  }
 
   return ranked;
 }
@@ -3319,6 +3877,15 @@ function persistPackageAssignment(pkg) {
   );
   if (pkg.assignedCourierId) {
     updatePlatformOrderStatusByPackage(pkg, "assigned");
+    const assignedPackage = getPackageById(pkg.id);
+    if (isPlatformBackedPackage(pkg)) {
+      notifyPlatformOrderAssigned(
+        pkg.sourcePlatform || pkg.source_platform,
+        pkg.externalOrderId || pkg.external_order_id || pkg.externalOrderNo || pkg.external_order_no,
+        pkg.assignedCourierId,
+        assignedPackage
+      );
+    }
   }
   syncAssignmentRetryForPackage(getPackageById(pkg.id));
 }
@@ -3343,7 +3910,7 @@ function updatePackageAssignmentFailure(packageId, reason, note) {
 
 function tryAssignPackageAtomically(pkg, candidate) {
   return withImmediateTransaction(() => {
-    console.log("Assignment started", {
+    logger.debug("Assignment started", {
       packageId: pkg.id,
       courierId: candidate.courier.id,
     });
@@ -3433,7 +4000,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
     );
 
     if (update.changes !== 1) {
-      console.log("Assignment skipped due to concurrent change", {
+      logger.warn("Assignment skipped due to concurrent change", {
         packageId: pkg.id,
         courierId: targetCourier.id,
       });
@@ -3444,7 +4011,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
     appendTriedCourier(pkg.id, targetCourier.id);
     const assignedPackage = getPackageById(pkg.id);
     syncAssignmentRetryForPackage(assignedPackage);
-    console.log("Assignment success", {
+    logger.info("Assignment success", {
       packageId: pkg.id,
       courierId: targetCourier.id,
       courierStatus,
@@ -3464,7 +4031,7 @@ async function handleAssignmentRetry(packageId) {
     return;
   }
 
-  console.log("Retry triggered", {
+  logger.info("Assignment retry triggered", {
     packageId,
     assignedCourierId: target.assignedCourierId,
     triedCourierIds: target.assignmentTriedCourierIds || [],
@@ -3482,12 +4049,12 @@ async function handleAssignmentRetry(packageId) {
     target.assignedCourierId,
   ]);
   excludedCourierIds.forEach((courierId) => {
-    console.log("Courier skipped (already tried)", { packageId, courierId });
+    logger.debug("Courier skipped because already tried", { packageId, courierId });
   });
 
   const ranked = rankEligibleCouriers(state, target, occupiedCourierLoads, { excludedCourierIds });
   if (ranked.length === 0) {
-    console.log("Retry assignment: no suitable courier found", { packageId });
+    logger.warn("Retry assignment found no suitable courier", { packageId });
     updatePackageAssignmentFailure(packageId, "mesafe disi", "Retry assignment: no suitable courier found");
     setPackageTriedCouriers(packageId, []);
     broadcastLiveEvent({
@@ -3501,7 +4068,7 @@ async function handleAssignmentRetry(packageId) {
   for (const candidate of ranked) {
     const result = tryAssignPackageAtomically(target, candidate);
     if (result.ok) {
-      console.log("Retry assignment: new courier assigned", {
+      logger.info("Retry assignment selected a new courier", {
         packageId,
         courierId: candidate.courier.id,
       });
@@ -3517,7 +4084,7 @@ async function handleAssignmentRetry(packageId) {
     }
   }
 
-  console.log("Retry assignment: no suitable courier found", { packageId });
+  logger.warn("Retry assignment found no suitable courier", { packageId });
   updatePackageAssignmentFailure(packageId, "mesafe disi", "Retry assignment: no suitable courier found");
   setPackageTriedCouriers(packageId, []);
 }
@@ -3940,13 +4507,35 @@ function stats(state) {
   };
 }
 
+function statsFromDb(filter = {}) {
+  const packageWhere = filter.restaurantId ? "restaurant_id = ?" : "";
+  const packageParams = filter.restaurantId ? [filter.restaurantId] : [];
+  const activeStatuses = [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS];
+  const transitStatuses = [ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS];
+  const wherePrefix = packageWhere ? `${packageWhere} AND ` : "";
+  return {
+    totalRestaurants: filter.restaurantId ? 1 : countTable("restaurants"),
+    totalCouriers: countTable("couriers"),
+    totalPlatformAccounts: filter.restaurantId ? countTable("platform_accounts", "restaurant_id = ?", [filter.restaurantId]) : countTable("platform_accounts"),
+    activeCouriers: countTable("couriers", "status IN (?, ?)", [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS]),
+    totalPackages: countTable("packages", packageWhere, packageParams),
+    waitingPackages: db.prepare(`SELECT COUNT(*) AS count FROM packages WHERE ${wherePrefix}status IN (${activeStatuses.map(() => "?").join(",")})`).get(...packageParams, ...activeStatuses).count,
+    assignedPackages: db.prepare(`SELECT COUNT(*) AS count FROM packages WHERE ${wherePrefix}assigned_courier_id IS NOT NULL`).get(...packageParams).count,
+    inTransitPackages: db.prepare(`SELECT COUNT(*) AS count FROM packages WHERE ${wherePrefix}status IN (${transitStatuses.map(() => "?").join(",")})`).get(...packageParams, ...transitStatuses).count,
+    deliveredPackages: countTable("packages", packageWhere ? `${packageWhere} AND status = ?` : "status = ?", [...packageParams, DELIVERED_STATUS]),
+  };
+}
+
 function decorateState(filter = {}) {
-  const state = currentState(filter);
+  const pagination = filter.pagination || paginationFromRequest(filter.req, { limit: DEFAULT_PAGE_LIMIT, offset: 0 });
+  const paginatedFilter = { ...filter, pagination };
+  const state = currentState(paginatedFilter);
   const restaurantMap = new Map(state.restaurants.map((item) => [item.id, item.name]));
+  const activeLoadMap = buildActiveLoadMap(state.packages);
 
   const couriers = state.couriers.map((courier) => ({
     ...sanitizeCourier(courier),
-    activeLoad: activeAssignmentsForCourier(state.packages, courier.id),
+    activeLoad: activeLoadMap.get(courier.id) || 0,
   }));
 
   const packages = state.packages.map((pkg) => ({
@@ -3982,7 +4571,13 @@ function decorateState(filter = {}) {
         ? getNotifications("restaurant", filter.restaurantId, 20)
         : getNotifications("admin", null, 20),
     webhookLogs: state.webhookLogs,
-    stats: stats(state),
+    pagination: {
+      packages: packagePagination(filter, pagination),
+      platformOrders: platformOrdersPagination(filter, pagination),
+      webhookLogs: pageMeta(filter.restaurantId ? countTable("webhook_logs", "restaurant_id = ?", [filter.restaurantId]) : countTable("webhook_logs"), { limit: 20, offset: 0 }),
+      auditLogs: pageMeta(filter.restaurantId ? countTable("audit_logs", "restaurant_id = ?", [filter.restaurantId]) : countTable("audit_logs"), { limit: 20, offset: 0 }),
+    },
+    stats: statsFromDb(filter),
     restaurantPerformance: filter.restaurantId ? buildRestaurantPerformance(packages) : null,
     integrationWizard: filter.restaurantId ? buildRestaurantIntegrationWizard(filter.req || { headers: {}, url: "/" }, state.restaurants[0] || null, sanitizedPlatformAccounts) : null,
   };
@@ -3992,8 +4587,9 @@ function logWebhookAttempt(entry) {
   const safeRequestBody = redactSecretsFromText(entry.requestBody);
   db.prepare(`
     INSERT INTO webhook_logs (
-      restaurant_id, source_platform, external_order_no, signature_valid, response_status, request_body, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      restaurant_id, source_platform, external_order_no, signature_valid, response_status, request_body,
+      retry_count, next_retry_at, dead_lettered_at, last_error, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.restaurantId || null,
     entry.sourcePlatform || null,
@@ -4001,6 +4597,10 @@ function logWebhookAttempt(entry) {
     entry.signatureValid ? 1 : 0,
     entry.responseStatus,
     safeRequestBody,
+    Number(entry.retryCount || 0),
+    entry.nextRetryAt || null,
+    entry.deadLetteredAt || null,
+    entry.lastError || null,
     new Date().toISOString()
   );
 
@@ -4102,9 +4702,9 @@ function buildIntegrationInfo(req, restaurant) {
     signatureHeader: "x-platform-secret",
     samplePayload: {
       platform: platformSlug(restaurant.platforms[0] || "Trendyol Yemek").replace(/-/g, "_"),
-      platformRestaurantId: "TEST-STORE-1",
-      orderId: "TEST-ORDER-1",
-      customerName: "Ayse Demir",
+      platformRestaurantId: restaurant.id,
+      orderId: "PLATFORM-ORDER-ID",
+      customerName: "Musteri Adi",
       phone: "5551234567",
       address: "Mersin teslimat adresi",
       totalPrice: 250,
@@ -4343,7 +4943,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pkg.id,
-    pkg.trackingNo,
+    ensureUniqueTrackingNo(pkg.trackingNo),
     pkg.restaurantId,
     pkg.source,
     pkg.deliveryAddress || pkg.address,
@@ -4473,7 +5073,12 @@ function extractPlatformIdentifiers(body) {
   ].filter(Boolean);
 }
 
-function verifyPlatformWebhookAuth(account, req) {
+function verifyPlatformWebhookAuth(account, req, rawBody = undefined) {
+  const signature = verifyPlatformSignature({ req, account, rawBody });
+  if (signature.ok) {
+    return true;
+  }
+
   if (account.webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.BASIC_AUTH) {
     const basic = parseBasicAuthHeader(req);
     return Boolean(
@@ -4487,7 +5092,7 @@ function verifyPlatformWebhookAuth(account, req) {
     const authorization = String(req.headers.authorization || "");
     const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
     const tokens = candidateHeaderValues(req, ["x-webhook-token", "x-static-token", "x-partner-token", "x-yemeksepeti-token"]);
-    return [bearerToken, ...tokens].includes(account.staticToken);
+    return [bearerToken, ...tokens].some((token) => token === account.staticToken);
   }
 
   const apiKeys = candidateHeaderValues(req, ["x-api-key", "api-key", "x-platform-api-key"]);
@@ -4671,87 +5276,89 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
 }
 
 function upsertPlatformPackage(platform, restaurant, payload) {
-  const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
-  upsertPlatformOrderRecord({
-    platform,
-    orderId: payload.externalOrderId || payload.externalOrderNo,
-    customerName: payload.recipient,
-    phone: payload.phone,
-    address: payload.address,
-    totalPrice: payload.orderAmount,
-    note: payload.customerNote || payload.note,
-    rawPayload: payload.rawPayload || payload,
-  }, restaurant.id, payload.status === CANCELED_STATUS ? "cancelled" : "pending_approval");
+  return withImmediateTransaction(() => {
+    const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
+    upsertPlatformOrderRecord({
+      platform,
+      orderId: payload.externalOrderId || payload.externalOrderNo,
+      customerName: payload.recipient,
+      phone: payload.phone,
+      address: payload.address,
+      totalPrice: payload.orderAmount,
+      note: payload.customerNote || payload.note,
+      rawPayload: payload.rawPayload || payload,
+    }, restaurant.id, payload.status === CANCELED_STATUS ? "cancelled" : "pending_approval");
 
-  if (!existing) {
-    const pkg = validateIntegrationDraft(payload, restaurant);
-    createPackageRecord(pkg, "Platform Siparisi");
-    if (normalizeStatus(pkg.status) !== PENDING_APPROVAL_STATUS) {
-      rebalancePackages();
+    if (!existing) {
+      const pkg = validateIntegrationDraft(payload, restaurant);
+      createPackageRecord(pkg, "Platform Siparisi");
+      if (normalizeStatus(pkg.status) !== PENDING_APPROVAL_STATUS) {
+        rebalancePackages();
+      }
+      writeAuditLog({
+        actorRole: "integration",
+        actorId: restaurant.id,
+        action: "package_created_integration",
+        packageId: pkg.id,
+        restaurantId: restaurant.id,
+        details: {
+          sourcePlatform: pkg.sourcePlatform,
+          externalOrderNo: pkg.externalOrderNo,
+        },
+      });
+      return { ...getPackageById(pkg.id), duplicate: false };
     }
-    writeAuditLog({
-      actorRole: "integration",
-      actorId: restaurant.id,
-      action: "package_created_integration",
-      packageId: pkg.id,
+
+    logger.info("Duplicate order skipped", {
+      platform,
       restaurantId: restaurant.id,
-      details: {
-        sourcePlatform: pkg.sourcePlatform,
-        externalOrderNo: pkg.externalOrderNo,
-      },
-    });
-    return decorateState({ restaurantId: restaurant.id }).packages.find((item) => item.id === pkg.id);
-  }
-
-  console.log("Duplicate order skipped", {
-    platform,
-    restaurantId: restaurant.id,
-    externalOrderNo: payload.externalOrderNo,
-    packageId: existing.id,
-  });
-
-  const currentStatus = normalizeStatus(existing.status);
-  const incomingStatus = normalizeStatus(payload.status || currentStatus);
-  const incomingPaymentStatus = normalizePaymentStatus(payload.paymentStatus, payload.paymentMethod);
-  if (incomingStatus !== currentStatus && canTransitionStatus(currentStatus, incomingStatus)) {
-    updatePackageLifecycle(existing.id, {
-      status: incomingStatus,
-      paymentStatus: incomingPaymentStatus,
-      failureReason: payload.failureReason || existing.failure_reason || "",
-    }, {
-      status: existing.status,
-      paymentStatus: existing.payment_status,
-      failureReason: existing.failure_reason,
-      assignedCourierId: existing.assigned_courier_id,
-      assignedCourierName: existing.assigned_courier_name,
-      assignedAt: existing.assigned_at,
-      acceptedAt: existing.accepted_at,
-      onRouteAt: existing.on_route_at,
-      deliveredAt: existing.delivered_at,
-      failedAt: existing.failed_at,
-      lastAssignmentAttemptAt: existing.last_assignment_attempt_at,
-      lastAssignmentError: existing.last_assignment_error,
-      paymentMethod: existing.payment_method,
-    });
-    if (incomingStatus !== PENDING_APPROVAL_STATUS && incomingStatus !== REJECTED_STATUS) {
-      rebalancePackages();
-    }
-    writeAuditLog({
-      actorRole: "integration",
-      actorId: restaurant.id,
-      action: "package_updated_integration",
+      externalOrderNo: payload.externalOrderNo,
       packageId: existing.id,
-      restaurantId: restaurant.id,
-      details: {
-        sourcePlatform: platform,
-        externalOrderNo: payload.externalOrderNo,
-        from: currentStatus,
-        to: incomingStatus,
-      },
     });
-  }
 
-  return decorateState({ restaurantId: restaurant.id }).packages.find((item) => item.id === existing.id);
+    const currentStatus = normalizeStatus(existing.status);
+    const incomingStatus = normalizeStatus(payload.status || currentStatus);
+    const incomingPaymentStatus = normalizePaymentStatus(payload.paymentStatus, payload.paymentMethod);
+    if (incomingStatus !== currentStatus && canTransitionStatus(currentStatus, incomingStatus)) {
+      updatePackageLifecycle(existing.id, {
+        status: incomingStatus,
+        paymentStatus: incomingPaymentStatus,
+        failureReason: payload.failureReason || existing.failure_reason || "",
+      }, {
+        status: existing.status,
+        paymentStatus: existing.payment_status,
+        failureReason: existing.failure_reason,
+        assignedCourierId: existing.assigned_courier_id,
+        assignedCourierName: existing.assigned_courier_name,
+        assignedAt: existing.assigned_at,
+        acceptedAt: existing.accepted_at,
+        onRouteAt: existing.on_route_at,
+        deliveredAt: existing.delivered_at,
+        failedAt: existing.failed_at,
+        lastAssignmentAttemptAt: existing.last_assignment_attempt_at,
+        lastAssignmentError: existing.last_assignment_error,
+        paymentMethod: existing.payment_method,
+      });
+      if (incomingStatus !== PENDING_APPROVAL_STATUS && incomingStatus !== REJECTED_STATUS) {
+        rebalancePackages();
+      }
+      writeAuditLog({
+        actorRole: "integration",
+        actorId: restaurant.id,
+        action: "package_updated_integration",
+        packageId: existing.id,
+        restaurantId: restaurant.id,
+        details: {
+          sourcePlatform: platform,
+          externalOrderNo: payload.externalOrderNo,
+          from: currentStatus,
+          to: incomingStatus,
+        },
+      });
+    }
+
+    return { ...getPackageById(existing.id), duplicate: true };
+  });
 }
 
 function findPlatformRestaurant(platform, platformRestaurantId) {
@@ -4815,7 +5422,7 @@ function handleSimplePlatformOrder(order) {
     return { ok: false, error: "Restaurant not found", statusCode: 404 };
   }
 
-  console.log("Platform matched", {
+  logger.info("Platform matched", {
     platform: match.account.platform,
     restaurantId: match.restaurant.id,
     platformRestaurantId: match.account.externalStoreId,
@@ -4827,7 +5434,7 @@ function handleSimplePlatformOrder(order) {
   }, match.restaurant);
   upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, "pending_approval");
   const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
-  console.log("Package created", {
+  logger.info("Package created from platform order", {
     platform: match.account.platform,
     restaurantId: match.restaurant.id,
     orderId: order.orderId,
@@ -4856,6 +5463,15 @@ function connectorForPlatform(platform) {
 async function testPlatformAccountAutomatically(account) {
   const strategy = testStrategyForAccount(account);
   if (strategy === "local_webhook") {
+    if (IS_PRODUCTION) {
+      return {
+        ok: true,
+        status: 200,
+        strategy,
+        optional: true,
+        message: "Webhook bilgileri kaydedildi. Hesap ilk gercek platform siparisi geldiginde otomatik dogrulanacak.",
+      };
+    }
     const result = handleSimplePlatformOrder({
       platform: account.platform,
       platformRestaurantId: account.externalStoreId,
@@ -4873,7 +5489,7 @@ async function testPlatformAccountAutomatically(account) {
           ok: true,
           status: 200,
           strategy,
-          message: "Bağlantı başarılı. Webhook test siparişi oluşturuldu.",
+          message: "Bağlantı başarılı. Webhook dogrulama siparisi olusturuldu.",
           package: result.package,
         }
       : {
@@ -4886,7 +5502,7 @@ async function testPlatformAccountAutomatically(account) {
 
   const connector = connectorForPlatform(account.platform);
   if (!connector || typeof connector.testConnection !== "function") {
-    return optionalIntegrationResult("Bu platform için otomatik test bulunamadı. Webhook modu kullanılacak.");
+    return optionalIntegrationResult("Bu platform için otomatik bağlantı doğrulaması bulunamadı. Webhook modu kullanılacak.");
   }
   if (platformAccountMissingCredentials(account)) {
     return {
@@ -4916,7 +5532,7 @@ const posMissingEndpointLogKeys = new Set();
 
 async function pollPlatformAccount(account, options = {}) {
   if (!account.pollingEnabled) {
-    console.log("Polling skipped", {
+    logger.info("Polling skipped", {
       platform: account.platform,
       accountId: account.id,
       reason: "polling_enabled false",
@@ -4951,7 +5567,7 @@ async function pollPlatformAccount(account, options = {}) {
     const logKey = `${account.id}:missing_endpoint`;
     if (!posMissingEndpointLogKeys.has(logKey)) {
       posMissingEndpointLogKeys.add(logKey);
-      console.warn("POS polling skipped", {
+      logger.warn("POS polling skipped", {
         accountId: account.id,
         platformRestaurantId: account.externalStoreId,
         endpointConfigured: false,
@@ -4974,7 +5590,7 @@ async function pollPlatformAccount(account, options = {}) {
       const logKey = `${account.id}:missing_endpoint`;
       if (options.manual || !posMissingEndpointLogKeys.has(logKey)) {
         posMissingEndpointLogKeys.add(logKey);
-        console.warn("POS polling skipped", {
+        logger.warn("POS polling skipped", {
           accountId: account.id,
           platformRestaurantId: account.externalStoreId,
           endpointConfigured: false,
@@ -4988,10 +5604,10 @@ async function pollPlatformAccount(account, options = {}) {
         reason: "POS API endpoint eksik. ADISYO_API_BASE_URL veya ADISYO_POLLING_URL tanimlayin.",
       };
     }
-    console.error("Platform polling connector failed", {
+    logger.error("Platform polling connector failed", {
       platform: account.platform,
       accountId: account.id,
-      message: error.message,
+      error,
     });
     return { ok: false, skipped: true, reason: "Platform polling tamamlanamadi, manuel paket sistemi kullanilabilir." };
   }
@@ -5015,7 +5631,7 @@ async function pollPlatformAccount(account, options = {}) {
     const result = handleSimplePlatformOrder(order);
     if (result.ok && !existing) {
       createdCount += 1;
-      console.log("Sipariş DB’ye kaydedildi", {
+      logger.info("Platform order saved from polling", {
         platform: account.platform,
         accountId: account.id,
         restaurantId: account.restaurantId,
@@ -5065,7 +5681,12 @@ async function pollPlatformAccounts() {
 }
 
 function getPackageById(packageId) {
-  return currentState().packages.find((item) => item.id === packageId) || null;
+  const row = db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId);
+  if (!row) {
+    return null;
+  }
+  const restaurant = db.prepare("SELECT name FROM restaurants WHERE id = ?").get(row.restaurant_id);
+  return mapPackageRow(row, new Map([[row.restaurant_id, restaurant?.name || "Bilinmeyen Restoran"]]));
 }
 
 function appendPlatformStatusLog(packageId, entry) {
@@ -5104,7 +5725,12 @@ function callPlatformStatusCallback(packageRecord, status, meta = {}) {
     status,
     meta,
   };
-  const result = adapter.sendStatusUpdate(status, orderData);
+  let result;
+  try {
+    result = adapter.sendStatusUpdate(status, orderData);
+  } catch (error) {
+    result = { ok: false, error: error.message };
+  }
   const message = `platforma ${status} bildirildi`;
   appendPlatformStatusLog(packageRecord.id, {
     status,
@@ -5124,31 +5750,50 @@ function callPlatformStatusCallback(packageRecord, status, meta = {}) {
       meta,
     },
   });
+  if (!result?.ok) {
+    queueService.enqueue(JOB_TYPES.WEBHOOK_CALLBACK_RETRY, {
+      packageId: packageRecord.id,
+      platform: packageRecord.sourcePlatform,
+      status,
+      orderData,
+      lastError: result?.error || "callback_failed",
+      createdAt: nowIso(),
+    }).then((queueResult) => {
+      if (queueResult.ok) {
+        logger.warn("Platform callback retry queued", {
+          packageId: packageRecord.id,
+          platform: packageRecord.sourcePlatform,
+          status,
+          jobId: queueResult.jobId,
+        });
+      }
+    });
+  }
   return result;
 }
 
 function notifyPlatformOrderAccepted(platform, orderId, restaurantId, packageRecord = null) {
-  console.log("Platform status callback called", { platform, status: "accepted", orderId, restaurantId });
+  logger.info("Platform status callback requested", { platform, status: "accepted", orderId, restaurantId });
   return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "accepted", { orderId, restaurantId });
 }
 
 function notifyPlatformOrderRejected(platform, orderId, reason, packageRecord = null) {
-  console.log("Platform status callback called", { platform, status: "rejected", orderId, reason });
+  logger.info("Platform status callback requested", { platform, status: "rejected", orderId, reason });
   return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "rejected", { orderId, reason });
 }
 
 function notifyPlatformOrderPreparing(platform, orderId, packageRecord = null) {
-  console.log("Platform status callback called", { platform, status: "preparing", orderId });
+  logger.info("Platform status callback requested", { platform, status: "preparing", orderId });
   return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "preparing", { orderId });
 }
 
 function notifyPlatformOrderAssigned(platform, orderId, courierId, packageRecord = null) {
-  console.log("Platform status callback called", { platform, status: "assigned", orderId, courierId });
+  logger.info("Platform status callback requested", { platform, status: "assigned", orderId, courierId });
   return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "assigned", { orderId, courierId });
 }
 
 function notifyPlatformOrderDelivered(platform, orderId, packageRecord = null) {
-  console.log("Platform status callback called", { platform, status: "delivered", orderId });
+  logger.info("Platform status callback requested", { platform, status: "delivered", orderId });
   return callPlatformStatusCallback(packageRecord || getPackageById(orderId), "delivered", { orderId });
 }
 
@@ -5201,10 +5846,29 @@ if (!existingAdmin) {
 }
 
 async function handleApi(req, res, pathname) {
-  const generalRetry = applyRateLimit(req, "general", RATE_LIMITS.general);
+  const generalRetry = await applyRateLimit(req, "general", RATE_LIMITS.general);
   if (generalRetry !== null) {
-    res.setHeader("Retry-After", String(generalRetry));
-    sendJson(res, 429, { error: "Cok fazla istek gonderildi. Lutfen biraz bekleyip tekrar dene." });
+    sendRateLimited(res, generalRetry);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/system-status") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, systemStatusPayload());
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/performance-summary") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, performanceSummaryPayload());
     return;
   }
 
@@ -5218,10 +5882,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/admin/login") {
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminLogin", RATE_LIMITS.adminLogin);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { error: "Admin giris limiti asildi." });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
@@ -5432,10 +6095,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/session") {
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "restaurantLogin", RATE_LIMITS.restaurantLogin);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { error: "Restoran giris limiti asildi." });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
@@ -5525,7 +6187,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Platform entegrasyon limiti asildi." });
@@ -5550,7 +6212,7 @@ async function handleApi(req, res, pathname) {
       note: "Webhook modu aktif. Polling API kapalı — webhook ile sipariş bekleniyor.",
       mode: `${draftConfig.mode}_auto`,
     };
-    verification.note = `${draft.platform} entegrasyonu ${draftConfig.mode} modunda kaydedildi. Test bekleniyor.`;
+    verification.note = `${draft.platform} entegrasyonu ${draftConfig.mode} modunda kaydedildi. Ilk gercek siparis bekleniyor.`;
     db.prepare("UPDATE restaurants SET webhook_secret = ? WHERE id = ?").run(draft.webhookSecret, session.restaurant_id);
     const existing = db.prepare(`
       SELECT * FROM platform_accounts
@@ -5689,7 +6351,7 @@ async function handleApi(req, res, pathname) {
         verificationStatus: verification.status,
       },
     });
-    console.log("Platform account saved", {
+    logger.info("Platform account saved", {
       restaurantId: session.restaurant_id,
       platform: draft.platform,
       externalStoreId: draft.externalStoreId,
@@ -5719,6 +6381,10 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts/test") {
+    if (IS_PRODUCTION) {
+      productionDisabled(res);
+      return;
+    }
     const session = getRestaurantSession(req);
     if (!session) {
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
@@ -5823,6 +6489,10 @@ async function handleApi(req, res, pathname) {
 
   const restaurantPollTestMatch = pathname.match(/^\/api\/restaurant\/platform-accounts\/([^/]+)\/poll-test$/);
   if (req.method === "POST" && restaurantPollTestMatch) {
+    if (IS_PRODUCTION) {
+      productionDisabled(res);
+      return;
+    }
     const session = getRestaurantSession(req);
     if (!session) {
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
@@ -5834,7 +6504,7 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
       return;
     }
-    const result = await platformService.pollPlatformAccount(account, { manual: true, test: true });
+    const result = await platformService.pollPlatformAccount(account, { manual: true });
     const message = !account.pollingEnabled
       ? "Polling kapalı"
       : platformAccountMissingCredentials(account)
@@ -5863,7 +6533,7 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
       return;
     }
-    const result = await platformService.pollPlatformAccount(account, { manual: true, test: true });
+    const result = await platformService.pollPlatformAccount(account, { manual: true });
     sendJson(res, result.ok || result.optional || result.skipped ? 200 : 400, {
       ok: result.ok,
       error: result.ok ? undefined : result.reason,
@@ -5924,7 +6594,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Paket olusturma limiti asildi." });
@@ -6001,10 +6671,9 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "quickPaste", RATE_LIMITS.quickPaste);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { error: "Hizli siparis limiti asildi." });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
@@ -6142,21 +6811,24 @@ async function handleApi(req, res, pathname) {
         notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
         notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
       }
-      console.log("Assignment triggered", {
+      logger.info("Assignment triggered after restaurant approval", {
         packageId,
         sourcePlatform: target.source_platform || null,
         restaurantId: session.restaurant_id,
       });
-      console.log("Assignment triggered after approval", {
+      logger.info("Assignment state before approval assignment", {
         packageId,
         previousStatus: target.status,
         nextStatus: PREPARING_STATUS,
         restaurantId: session.restaurant_id,
         zone: target.zone,
       });
-      rebalancePackages();
+      const confirmedForAssignment = getPackageById(packageId);
+      if (confirmedForAssignment) {
+        persistPackageAssignment(assignPackage(assignmentStateForPackage(confirmedForAssignment), confirmedForAssignment));
+      }
       const packageAfterAssignmentAttempt = getPackageById(packageId);
-      console.log("Assignment result after approval", {
+      logger.info("Assignment result after approval", {
         packageId,
         status: packageAfterAssignmentAttempt?.status,
         assignmentStatus: packageAfterAssignmentAttempt?.assignmentStatus,
@@ -6164,13 +6836,13 @@ async function handleApi(req, res, pathname) {
         lastAssignmentError: packageAfterAssignmentAttempt?.lastAssignmentError || "",
       });
       if (packageAfterAssignmentAttempt?.assignedCourierId) {
-        console.log("Assignment success", {
+        logger.info("Assignment success after approval", {
           packageId,
           courierId: packageAfterAssignmentAttempt.assignedCourierId,
           status: packageAfterAssignmentAttempt.status,
         });
       } else {
-        console.log("Assignment failed", {
+        logger.warn("Assignment failed after approval", {
           packageId,
           status: packageAfterAssignmentAttempt?.status || null,
           assignmentStatus: packageAfterAssignmentAttempt?.assignmentStatus || null,
@@ -6234,7 +6906,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Restoran olusturma limiti asildi." });
@@ -6279,7 +6951,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Kurye olusturma limiti asildi." });
@@ -6334,7 +7006,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/integrations/orders") {
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Entegrasyon istek limiti asildi." });
@@ -6463,7 +7135,7 @@ async function handleApi(req, res, pathname) {
       },
     });
 
-    console.log("Integration order received from worker", {
+    logger.info("Integration order received from worker", {
       restaurantId: restaurant.id,
       platform: pkg.sourcePlatform,
       orderId: pkg.externalOrderId,
@@ -6505,18 +7177,18 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/platform/order") {
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "platformOrder", RATE_LIMITS.platformOrder);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { ok: false, error: "Rate limited" });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
     const { raw, json: body } = await readRequestBody(req);
-    console.log("Webhook received", {
+    logger.info("Webhook received", {
       platform: body?.platform || null,
       platformRestaurantId: body?.platformRestaurantId || body?.externalStoreId || body?.external_store_id || null,
       orderId: body?.orderId || body?.order_id || body?.externalOrderId || null,
+      requestId: req.requestId,
     });
     const order = normalizeOrder(body.platform, body);
     const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
@@ -6550,7 +7222,13 @@ async function handleApi(req, res, pathname) {
     }
 
     const adapter = getPlatformAdapter(normalizePlatformKey(match.account.platform));
-    if (!adapter.verifyWebhook(req, match.account) && !verifySimplePlatformSecret(match.account, match.restaurant, req)) {
+    const signature = verifyPlatformSignature({
+      req,
+      account: match.account,
+      restaurant: match.restaurant,
+      rawBody: raw,
+    });
+    if (!signature.ok && !adapter.verifyWebhook(req, match.account) && !verifySimplePlatformSecret(match.account, match.restaurant, req)) {
       db.prepare("UPDATE platform_accounts SET last_error = ?, updated_at = ? WHERE id = ?")
         .run("Invalid platform secret", nowIso(), match.account.id);
       logWebhookAttempt({
@@ -6573,27 +7251,30 @@ async function handleApi(req, res, pathname) {
       sourcePlatform: match.account.platform,
       externalOrderNo: order.orderId,
       signatureValid: true,
-      responseStatus: result.package?.createdAt === result.package?.updatedAt ? 201 : 200,
+      responseStatus: result.package?.duplicate ? 200 : 201,
       requestBody: raw,
     });
-    sendJson(res, result.package?.createdAt === result.package?.updatedAt ? 201 : 200, {
+    sendJson(res, result.package?.duplicate ? 200 : 201, {
       ok: true,
       trackingNo: result.package?.trackingNo || "",
       source: "platform_webhook",
+      duplicate: Boolean(result.package?.duplicate),
       package: result.package,
     });
-    console.log("Webhook test successful", {
+    logger.info("Webhook accepted successfully", {
       platform: match.account.platform,
       restaurantId: match.restaurant.id,
       orderId: order.orderId,
       trackingNo: result.package?.trackingNo || null,
+      signatureMode: signature.ok ? signature.mode : "adapter_or_legacy_token",
+      requestId: req.requestId,
     });
     return;
   }
 
   const platformWebhookMatch = pathname.match(/^\/api\/platforms\/([^/]+)\/webhook$/);
   if (req.method === "POST" && platformWebhookMatch) {
-    const retryAfter = applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Platform webhook limiti asildi." });
@@ -6621,7 +7302,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if (!verifyPlatformWebhookAuth(account, req)) {
+    if (!verifyPlatformWebhookAuth(account, req, raw)) {
       logWebhookAttempt({
         restaurantId: account.restaurantId,
         sourcePlatform: normalizedPlatform,
@@ -6681,10 +7362,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/courier/login") {
-    const retryAfter = applyRateLimit(req, "courierLogin", RATE_LIMITS.courierLogin);
+    const retryAfter = await applyRateLimit(req, "courierLogin", RATE_LIMITS.courierLogin);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { error: "Cok fazla giris denemesi yapildi." });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
@@ -6747,7 +7427,9 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const workspace = buildCourierWorkspace(session.courier_id);
+    const workspace = buildCourierWorkspace(session.courier_id, {
+      pagination: paginationFromRequest(req, { limit: DEFAULT_PAGE_LIMIT, offset: 0 }),
+    });
     if (!workspace) {
       sendJson(res, 401, { error: "Kurye bulunamadi." });
       return;
@@ -6815,7 +7497,6 @@ async function handleApi(req, res, pathname) {
       session.courier_id
     );
 
-    rebalancePackages();
     const workspace = buildCourierWorkspace(session.courier_id);
     const courier = workspace?.courier;
     writeAuditLog({
@@ -6847,7 +7528,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "courierStatus", RATE_LIMITS.courierStatus);
+    const retryAfter = await applyRateLimit(req, "courierStatus", RATE_LIMITS.courierStatus);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Vardiya onay limiti asildi." });
@@ -7011,7 +7692,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Vardiya planlama limiti asildi." });
@@ -7052,6 +7733,10 @@ async function handleApi(req, res, pathname) {
 
   const adminTestPlatformOrderMatch = pathname.match(/^\/api\/admin\/restaurants\/([^/]+)\/test-platform-order$/);
   if (req.method === "POST" && adminTestPlatformOrderMatch) {
+    if (IS_PRODUCTION) {
+      productionDisabled(res);
+      return;
+    }
     const adminSession = getAdminSession(req);
     if (!adminSession) {
       sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
@@ -7115,7 +7800,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Duyuru gonderme limiti asildi." });
@@ -7213,7 +7898,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Nakit mutabakat limiti asildi." });
@@ -7252,7 +7937,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Kurye guncelleme limiti asildi." });
@@ -7300,7 +7985,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Paket guncelleme limiti asildi." });
@@ -7380,7 +8065,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const retryAfter = applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Yeniden atama limiti asildi." });
@@ -7491,27 +8176,43 @@ async function handleApi(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const requestStartedAt = Date.now();
+  const incomingRequestId = trimmed(req.headers["x-request-id"] || req.headers["x-correlation-id"]).slice(0, 80);
+  const requestId = incomingRequestId || uid("req");
+  req.requestId = requestId;
+  res._deliveraRequestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  res.on("finish", () => {
+    recordRequestMetrics(requestStartedAt, res.statusCode || 0);
+    recordRequestLog(req, res, requestStartedAt);
+  });
   try {
+    res._deliveraRequest = req;
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const { pathname } = requestUrl;
 
+    if (req.method === "OPTIONS" && pathname.startsWith("/api/")) {
+      if (!originForCors(req)) {
+        sendJson(res, 403, { error: "CORS origin not allowed." });
+        return;
+      }
+      writeSecurityHeaders(res);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/health") {
-      const state = currentState();
       sendJson(res, 200, {
-        ok: true,
-        app: "Delivera Express",
-        env: NODE_ENV,
+        ...systemStatusPayload(),
         secure: isSecureRequest(req),
-        dbMode: "sqlite",
-        dbFile: DB_FILE,
         assignmentRetryMs: ASSIGNMENT_RETRY_INTERVAL_MS,
-        operations: {
-          totalPackages: state.packages.length,
-          waitingPackages: state.packages.filter((item) => [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(item.status)).length,
-          activeCouriers: state.couriers.filter((item) => item.status === COURIER_ONLINE_STATUS || item.status === COURIER_BUSY_STATUS).length,
-        },
-        timestamp: new Date().toISOString(),
       });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/metrics") {
+      sendText(res, 200, metricsTextPayload(), "text/plain; version=0.0.4; charset=utf-8");
       return;
     }
 
@@ -7528,14 +8229,34 @@ const server = http.createServer(async (req, res) => {
 
     notFound(res);
   } catch (error) {
-    sendJson(res, error.statusCode || 500, { error: error.message || "Bilinmeyen sunucu hatasi." });
+    const statusCode = error.statusCode || 500;
+    const logPayload = {
+      endpoint: (() => {
+        try {
+          return new URL(req.url, `http://${req.headers.host || "localhost"}`).pathname;
+        } catch {
+          return req.url || "";
+        }
+      })(),
+      method: req.method,
+      requestId,
+      statusCode,
+      error,
+    };
+    if (statusCode >= 500) {
+      logger.error("Unhandled request error", logPayload);
+    } else if (statusCode === 401 || statusCode === 403 || statusCode === 429) {
+      logger.warn("Request rejected", logPayload);
+    }
+    sendJson(res, statusCode, { error: error.message || "Bilinmeyen sunucu hatasi." });
   }
 });
 
 setInterval(() => {
   try {
     retryAwaitingAssignmentPackages();
-  } catch {
+  } catch (error) {
+    logger.warn("Assignment retry sweep failed", { error });
     // Retry sweep should not crash the server loop.
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
@@ -7549,18 +8270,18 @@ platformService = createPlatformService({
   platformAccountMissingCredentials,
   nowIso,
   db,
-  log: console,
+  log: logger,
 });
 
 if (PLATFORM_POLLING_ENABLED) {
   setInterval(() => {
     platformService.pollAllPlatformAccounts().catch((error) => {
-      console.error("Platform polling failed", { message: error.message });
+      logger.error("Platform polling failed", { error });
     });
   }, PLATFORM_POLL_INTERVAL_MS).unref();
 } else {
-  console.log("Platform polling disabled; webhook flow is active.");
-  console.log("Polling skipped because global disabled");
+  logger.info("Platform polling disabled; webhook flow is active.");
+  logger.info("Polling skipped because global disabled");
 }
 
 currentState().packages
@@ -7568,5 +8289,5 @@ currentState().packages
   .forEach((pkg) => syncAssignmentRetryForPackage(pkg));
 
 server.listen(PORT, () => {
-  console.log(`Delivera Express hazir: http://localhost:${PORT}`);
+  logger.info("Delivera Express ready", { url: `http://localhost:${PORT}`, port: PORT });
 });

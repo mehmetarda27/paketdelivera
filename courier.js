@@ -13,6 +13,8 @@ const courierState = {
   workspacePollId: null,
   historyRange: "7d",
   historyVisibleCount: 50,
+  packageLimit: 100,
+  packageCursor: "0",
   lastPackageSnapshot: new Map(),
   packageActionDrafts: new Map(),
   liveStream: null,
@@ -168,10 +170,8 @@ function openOrderMap(order, target = "customer") {
   const url = buildOrderMapUrl(order, target);
   if (!url) {
     showToast("Adres bulunamadi.", "error");
-    console.log("Map link skipped", { target, reason: "missing_location" });
     return;
   }
-  console.log("Map link opened", { target, mode: url.includes("%") ? "address" : "coordinates" });
   window.open(url, "_blank");
 }
 
@@ -1052,7 +1052,11 @@ async function loadCourierWorkspace(options = {}) {
   courierState.lastWorkspaceLoadAt = now;
 
   try {
-    const data = await api("/api/courier/me", {
+    const params = new URLSearchParams({
+      limit: String(courierState.packageLimit),
+      cursor: courierState.packageCursor || "0",
+    });
+    const data = await api(`/api/courier/me?${params.toString()}`, {
       headers: authHeaders(courierState.token),
       retryWithRefresh: refreshCourierAccess,
     });

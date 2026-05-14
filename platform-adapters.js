@@ -1,3 +1,6 @@
+const { verifyTokenFallback } = require("./services/platformSignature");
+const logger = require("./services/logger");
+
 function trimmed(value) {
   return String(value ?? "").trim();
 }
@@ -89,24 +92,20 @@ function createAdapter(platformKey, mapper) {
       return mapper(rawBody || {});
     },
     verifyWebhook(req, account) {
-      const incomingSecret = [
-        req?.headers?.["x-platform-secret"],
-        req?.headers?.["x-webhook-secret"],
-        req?.headers?.["x-api-key"],
-      ].map(trimmed).find(Boolean);
-      return Boolean(incomingSecret && incomingSecret === trimmed(account?.webhookSecret ?? account?.staticToken));
+      return verifyTokenFallback({ req, account });
     },
     sendStatusUpdate(status, orderData) {
-      console.log("Platform status callback called", {
+      logger.warn("Platform status callback adapter is not configured", {
         platform: platformKey,
         status,
         orderId: orderData?.orderId || orderData?.externalOrderNo || null,
       });
       return {
-        ok: true,
+        ok: false,
         platform: platformKey,
         status,
-        mode: "placeholder",
+        mode: "not_configured",
+        error: "Platform callback adapter not configured",
       };
     },
   };

@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-partner-token": "fixture-secret",
+    "x-platform-signature": "hmac-sha256-hex-placeholder"
+  },
+  "body": {
+    "platform": "Migros Yemek",
+    "platformRestaurantId": "fixture-store-4",
+    "orderId": "fixture-migros-1",
+    "customerName": "Fixture Musteri",
+    "phone": "+905550000004",
+    "address": "Fixture Mahallesi 4",
+    "totalPrice": 195
+  }
+}

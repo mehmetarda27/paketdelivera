@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-yemeksepeti-token": "fixture-secret",
+    "x-webhook-signature": "hmac-sha256-hex-placeholder"
+  },
+  "body": {
+    "platform": "Yemeksepeti",
+    "platformRestaurantId": "fixture-store-3",
+    "orderId": "fixture-yemeksepeti-1",
+    "customerName": "Fixture Musteri",
+    "phone": "+905550000003",
+    "address": "Fixture Mahallesi 3",
+    "totalPrice": 210
+  }
+}

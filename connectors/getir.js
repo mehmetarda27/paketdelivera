@@ -1,4 +1,5 @@
 const { getPlatformAdapter, normalizePlatformKey } = require("../platform-adapters");
+const logger = require("../services/logger");
 
 const PLATFORM = "Getir Yemek";
 const ENV_PREFIX = "GETIR";
@@ -51,11 +52,11 @@ async function testConnection(account) {
 async function fetchOrders(account) {
   const url = endpoint(account, "orders");
   if (!hasPollingCredentials(account)) {
-    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "polling_endpoint_or_credentials_missing" });
+    logger.warn("Connector skipped because polling config is missing", { platform: PLATFORM, reason: "polling_endpoint_or_credentials_missing" });
     return [];
   }
   if (!url) {
-    console.warn("Polling endpoint not configured", { platform: PLATFORM, accountId: account?.id || null });
+    logger.warn("Polling endpoint not configured", { platform: PLATFORM, accountId: account?.id || null });
     const error = new Error("Polling endpoint ayarlı değil");
     error.code = "POLLING_ENDPOINT_NOT_CONFIGURED";
     throw error;
@@ -93,11 +94,11 @@ function normalizeOrder(raw, account = {}) {
 }
 
 async function acknowledgeOrder(order) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null };
+  return { ok: false, mode: "not_configured", orderId: order?.orderId || order?.platformOrderId || null };
 }
 
 async function updateOrderStatus(account, orderId, status) {
-  return { ok: true, mode: "local", orderId, status };
+  return { ok: false, mode: "not_configured", orderId, status };
 }
 
 module.exports = { testConnection, fetchOrders, normalizeOrder, acknowledgeOrder, updateOrderStatus };

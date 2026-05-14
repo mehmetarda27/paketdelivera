@@ -1,5 +1,5 @@
 const { getPlatformAdapter, normalizePlatformKey } = require("../platform-adapters");
-const fs = require("fs");
+const logger = require("../services/logger");
 
 const PLATFORM = "POS";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -73,12 +73,10 @@ function logEnvCheck() {
     return;
   }
   envCheckLogged = true;
-  console.log("ENV CHECK:", {
+  logger.debug("POS connector environment checked", {
     baseUrl: process.env.ADISYO_API_BASE_URL || process.env["ADİSYO_API_BASE_URL"],
     path: process.env.ADISYO_POLLING_PATH || process.env["ADİSYO_POLLING_PATH"],
   });
-  console.log("CWD:", process.cwd());
-  console.log(".env exists:", fs.existsSync(".env"));
 }
 
 function endpointConfigured(account) {
@@ -134,7 +132,7 @@ async function testConnection(account) {
   const hasToken = Boolean(trimmed(account?.token || account?.accessToken));
   const hasApiSecret = Boolean(trimmed(account?.apiSecret || account?.webhookSecret));
 
-  console.log("POS verify basladi", {
+  logger.info("POS verify started", {
     accountId: account?.id || null,
     platformRestaurantId: sellerId(account) || null,
     endpointConfigured: Boolean(url),
@@ -177,7 +175,7 @@ async function testConnection(account) {
 
 async function fetchOrders(account) {
   const url = endpoint(account, "orders");
-  console.log("POS polling basladi", {
+  logger.info("POS polling started", {
     accountId: account?.id || null,
     platformRestaurantId: sellerId(account) || null,
     endpointConfigured: Boolean(url),
@@ -192,7 +190,7 @@ async function fetchOrders(account) {
   const data = await response.json();
   const orders = Array.isArray(data) ? data : (data.orders || data.items || data.content || data.data || []);
   orders.forEach((order) => {
-    console.log("POS siparis bulundu", {
+    logger.debug("POS order found", {
       orderId: order?.orderId || order?.order_id || order?.receiptNo || order?.ticketNo || order?.id || null,
       platformRestaurantId: order?.platformRestaurantId || order?.platform_restaurant_id || order?.posStoreId || order?.storeId || sellerId(account) || null,
     });
@@ -205,11 +203,11 @@ function normalizeOrder(raw) {
 }
 
 async function acknowledgeOrder(order) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null };
+  return { ok: false, mode: "not_configured", orderId: order?.orderId || order?.platformOrderId || null };
 }
 
 async function updateOrderStatus(order, status) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null, status };
+  return { ok: false, mode: "not_configured", orderId: order?.orderId || order?.platformOrderId || null, status };
 }
 
 module.exports = { testConnection, fetchOrders, normalizeOrder, acknowledgeOrder, updateOrderStatus, endpointConfigured };

@@ -1,0 +1,8 @@
+.git
+node_modules
+logs
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+load-test.sqlite

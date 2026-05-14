@@ -37,15 +37,14 @@
         <form id="restaurantAccessForm" class="login-form">
           <label>
             Kullanıcı Adı
-            <input name="username" type="text" placeholder="burgerstation101" autocomplete="username" required>
+            <input name="username" type="text" placeholder="restoran_kullanici" autocomplete="username" required>
           </label>
           <label>
             Şifre
-            <input name="password" type="password" placeholder="Rest1234!" autocomplete="current-password" required>
+            <input name="password" type="password" placeholder="Restoran portal şifresi" autocomplete="current-password" required>
           </label>
           <button class="ghost-btn" type="submit">Restoran Girişi</button>
           <button id="restaurantLogoutButton" class="ghost-btn hidden" type="button">Çıkış Yap</button>
-          <button id="copyExtensionTokenButton" class="ghost-btn" type="button">Extension Token Kopyala</button>
         </form>
       </section>
 
@@ -131,9 +130,8 @@
             <code id="integrationWizardWebhook">Platform seçildiğinde webhook URL burada hazır olur.</code>
             <div class="badge-row">
               <button id="copyWebhookButton" class="ghost-btn" type="button">Webhook URL Kopyala</button>
-              <button id="testIntegrationButton" class="primary-btn" type="button">Bağlantıyı Test Et</button>
             </div>
-            <p id="integrationWizardStatus" class="subtle-text">Kayıtlı platform hesabı olunca canlı test burada görünür.</p>
+            <p id="integrationWizardStatus" class="subtle-text">Kayıtlı platform hesabı olunca canlı webhook durumu burada görünür.</p>
           </div>
         </article>
       </section>
@@ -209,11 +207,11 @@
         <article class="glass-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow accent-coral">Payload Ornegi</p>
-              <h3>Platformdan Gelecek JSON</h3>
+              <p class="eyebrow accent-coral">Webhook Bilgisi</p>
+              <h3>Platformdan Beklenen Sipariş Gövdesi</h3>
             </div>
           </div>
-          <pre class="code-block" id="samplePayload">Restoran secilince ornek payload gorunecek.</pre>
+          <pre class="code-block" id="samplePayload">Restoran secilince webhook gövdesi bilgisi gorunecek.</pre>
         </article>
       </section>
 
@@ -337,7 +335,7 @@
               <input name="active" type="checkbox" checked>
               <span>Aktif</span>
             </label>
-            <button id="savePlatformAccountButton" class="primary-btn full-width" type="submit">Kaydet ve Test Et</button>
+            <button id="savePlatformAccountButton" class="primary-btn full-width" type="submit">Platform Hesabını Kaydet</button>
           </form>
         </article>
 

@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-platform-secret": "fixture-secret",
+    "x-platform-signature": "hmac-sha256-hex-placeholder"
+  },
+  "body": {
+    "platform": "Trendyol Yemek",
+    "platformRestaurantId": "fixture-store-1",
+    "orderId": "fixture-trendyol-1",
+    "customerName": "Fixture Musteri",
+    "phone": "+905550000001",
+    "address": "Fixture Mahallesi 1",
+    "totalPrice": 250
+  }
+}

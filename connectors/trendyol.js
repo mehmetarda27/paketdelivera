@@ -1,4 +1,5 @@
 const { getPlatformAdapter, normalizePlatformKey } = require("../platform-adapters");
+const logger = require("../services/logger");
 
 const PLATFORM = "Trendyol Yemek";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -154,20 +155,20 @@ async function fetchOrders(account) {
   const sid = sellerId(account);
 
   if (!sid) {
-    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "seller_id_missing" });
+    logger.warn("Connector skipped because seller id is missing", { platform: PLATFORM, reason: "seller_id_missing" });
     return [];
   }
 
   try {
     authHeaders(account);
   } catch {
-    console.warn("Connector skipped (missing config)", { platform: PLATFORM, reason: "api_credentials_missing" });
+    logger.warn("Connector skipped because API credentials are missing", { platform: PLATFORM, reason: "api_credentials_missing" });
     return [];
   }
 
   const endpoint = ordersEndpoint(account, { status: "Created" });
   if (!endpoint) {
-    console.warn("Polling endpoint not configured", { platform: PLATFORM, accountId: account?.id || null });
+    logger.warn("Polling endpoint not configured", { platform: PLATFORM, accountId: account?.id || null });
     throw endpointNotConfiguredError();
   }
 
@@ -218,16 +219,16 @@ function normalizeOrder(raw, account = {}) {
 
 async function acknowledgeOrder(order) {
   return {
-    ok: true,
-    mode: "local",
+    ok: false,
+    mode: "not_configured",
     orderId: order?.orderId || order?.platformOrderId || null,
   };
 }
 
 async function updateOrderStatus(account, orderId, status) {
   return {
-    ok: true,
-    mode: "local",
+    ok: false,
+    mode: "not_configured",
     orderId,
     status,
   };

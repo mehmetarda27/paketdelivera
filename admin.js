@@ -7,6 +7,8 @@ const adminState = {
   token: localStorage.getItem(ADMIN_TOKEN_KEY) || "",
   refreshToken: localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "",
   selectedRestaurantId: "",
+  packageLimit: 100,
+  packageCursor: "0",
   liveStream: null,
   activeWorkspaceCard: "admin-announcements",
 };
@@ -214,11 +216,13 @@ function bootstrapPath() {
   if (adminState.selectedRestaurantId) {
     params.set("restaurantId", adminState.selectedRestaurantId);
   }
+  params.set("limit", String(adminState.packageLimit));
+  params.set("cursor", adminState.packageCursor || "0");
   const query = params.toString();
   return query ? `/api/admin/bootstrap?${query}` : "/api/admin/bootstrap";
 }
 
-async function loadAdminState() {
+async function loadAdminState(options = {}) {
   if (!adminState.token) {
     if (adminState.refreshToken) {
       try {
@@ -234,10 +238,16 @@ async function loadAdminState() {
     return;
   }
 
+  if (!options.append) {
+    adminState.packageCursor = "0";
+  }
   const data = await api(bootstrapPath(), {
     headers: adminHeaders(),
     retryWithRefresh: refreshAdminAccess,
   });
+  if (options.append && adminState.data?.packages?.length) {
+    data.packages = [...adminState.data.packages, ...(data.packages || [])];
+  }
   hydrateAdmin(data);
   startAdminLiveStream();
 }
@@ -297,17 +307,6 @@ function renderRestaurantStats(restaurants, stats, packages) {
       label: "Teslim Edilen",
       value: deliveredCount,
       detail: "Filtrelenen listeye gore",
-    },
-    {
-      label: "Test Platform Siparisi",
-      value: selectedRestaurant && selectedPlatformAccount
-        ? `<button class="ghost-btn" type="button" data-test-platform-order="${selectedRestaurant.id}">Test Platform Siparisi Gonder</button>`
-        : "Restoran sec",
-      detail: selectedPlatformAccount
-        ? `${selectedPlatformAccount.platform} / ${selectedPlatformAccount.externalStoreId}`
-        : selectedRestaurant
-          ? "Secili restoran icin aktif platform hesabi yok"
-          : "Bu buton icin restoran filtresi sec",
     },
   ];
 
@@ -674,6 +673,7 @@ function buildPackageCard(pkg) {
 function renderAdminPackages(packages) {
   adminRefs.packageList.innerHTML = "";
   const visible = packages.filter(packageVisible);
+  const packagePage = adminState.data?.pagination?.packages || null;
 
   if (visible.length === 0) {
     adminRefs.packageList.innerHTML = '<div class="empty-state">Aramana uyan paket bulunamadi.</div>';
@@ -682,6 +682,17 @@ function renderAdminPackages(packages) {
 
   const fragment = document.createDocumentFragment();
   visible.forEach((pkg) => fragment.appendChild(buildPackageCard(pkg)));
+  if (packagePage?.hasMore) {
+    const moreButton = document.createElement("button");
+    moreButton.className = "ghost-btn";
+    moreButton.type = "button";
+    moreButton.textContent = `Daha fazla yükle (${packages.length}/${packagePage.total})`;
+    moreButton.addEventListener("click", async () => {
+      adminState.packageCursor = packagePage.nextCursor;
+      await loadAdminState({ append: true });
+    });
+    fragment.appendChild(moreButton);
+  }
   adminRefs.packageList.appendChild(fragment);
 }
 
@@ -1140,29 +1151,8 @@ adminRefs.searchInput.addEventListener("input", () => {
 
 adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   adminState.selectedRestaurantId = event.target.value;
+  adminState.packageCursor = "0";
   await loadAdminState();
-});
-
-adminRefs.restaurantStatsBoard?.addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-test-platform-order]");
-  if (!button) {
-    return;
-  }
-
-  const restaurantId = button.dataset.testPlatformOrder;
-  button.disabled = true;
-  try {
-    const data = await api(`/api/admin/restaurants/${restaurantId}/test-platform-order`, {
-      method: "POST",
-      headers: adminHeaders(),
-      retryWithRefresh: refreshAdminAccess,
-      body: JSON.stringify({}),
-    });
-    hydrateAdmin(data);
-    showToast("Test platform siparisi gonderildi.");
-  } finally {
-    button.disabled = false;
-  }
 });
 
 adminRefs.logoutButton?.addEventListener("click", () => {

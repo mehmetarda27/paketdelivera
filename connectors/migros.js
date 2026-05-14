@@ -45,11 +45,11 @@ function normalizeOrder(raw) {
 }
 
 async function acknowledgeOrder(order) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null };
+  return { ok: false, mode: "not_configured", orderId: order?.orderId || order?.platformOrderId || null };
 }
 
 async function updateOrderStatus(order, status) {
-  return { ok: true, mode: "local", orderId: order?.orderId || order?.platformOrderId || null, status };
+  return { ok: false, mode: "not_configured", orderId: order?.orderId || order?.platformOrderId || null, status };
 }
 
 module.exports = { testConnection, fetchOrders, normalizeOrder, acknowledgeOrder, updateOrderStatus };

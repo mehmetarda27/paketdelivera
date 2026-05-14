@@ -1,7 +1,8 @@
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { DatabaseSync } = require("node:sqlite");
 const extensionShared = require("./chrome-extension/shared.js");
 
 const PORT = 3210;
@@ -45,6 +46,79 @@ async function request(path, options = {}) {
   return body;
 }
 
+async function requestText(path, options = {}) {
+  const response = await fetch(`${BASE_URL}${path}`, options);
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`${path} -> ${response.status}: ${body || "Bilinmeyen hata"}`);
+  }
+  return body;
+}
+
+function parseToolJsonOutput(output) {
+  const text = String(output || "");
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const candidate = lines.slice(index).join("\n").trim();
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+  throw new Error(`JSON ciktisi bulunamadi: ${text}`);
+}
+
+function runMigrationForSmoke(tempDbFile) {
+  const result = spawnSync(process.execPath, ["scripts/migrate.js"], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      DATABASE_PATH: tempDbFile,
+      DB_PATH: tempDbFile,
+      DELIVERA_DB_FILE: tempDbFile,
+    },
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(`Migration smoke komutu basarisiz: ${result.stderr || result.stdout}`);
+  }
+  return parseToolJsonOutput(result.stdout);
+}
+
+function smokeMigrationCount(tempDbFile) {
+  const db = new DatabaseSync(tempDbFile);
+  try {
+    return db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get().count;
+  } finally {
+    db.close();
+  }
+}
+
+function runBackupForSmoke(tempDbFile, tempDir) {
+  const backupDir = path.join(tempDir, "backups");
+  const result = spawnSync(process.execPath, ["scripts/backup-sqlite.js"], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      DATABASE_PATH: tempDbFile,
+      DB_PATH: tempDbFile,
+      DELIVERA_DB_FILE: tempDbFile,
+      DELIVERA_BACKUP_DIR: backupDir,
+    },
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(`Backup smoke komutu basarisiz: ${result.stderr || result.stdout}`);
+  }
+  const payload = parseToolJsonOutput(result.stdout);
+  if (!payload.ok || !fs.existsSync(payload.backup) || !payload.backup.includes("delivera-")) {
+    throw new Error("Backup smoke beklenen tarihli backup dosyasini uretmedi.");
+  }
+  return payload;
+}
+
 function smokeMapUrl(order, target = "customer") {
   const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
   const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
@@ -84,6 +158,17 @@ async function run() {
   const secondAddress = `Mersin Erdemli ikinci teslim noktasi ${Date.now()} no 20`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-smoke-"));
   const tempDbFile = path.join(tempDir, "delivera.sqlite");
+  const firstMigrationRun = runMigrationForSmoke(tempDbFile);
+  const firstMigrationCount = smokeMigrationCount(tempDbFile);
+  if (!firstMigrationRun.ok || firstMigrationRun.applied.length < 1 || firstMigrationCount < 1) {
+    throw new Error("Migration runner ilk calismada schema_migrations kaydi olusturmadi.");
+  }
+  const secondMigrationRun = runMigrationForSmoke(tempDbFile);
+  const secondMigrationCount = smokeMigrationCount(tempDbFile);
+  if (!secondMigrationRun.ok || secondMigrationRun.applied.length !== 0 || secondMigrationCount !== firstMigrationCount) {
+    throw new Error("Migration runner ikinci calismada idempotent davranmadi.");
+  }
+  runBackupForSmoke(tempDbFile, tempDir);
   const server = spawn(process.execPath, ["server.js"], {
     env: {
       ...process.env,
@@ -92,6 +177,8 @@ async function run() {
       DELIVERA_ADMIN_PASSWORD: adminPassword,
       DELIVERA_ASSIGNMENT_RETRY_MS: "1000",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "2500",
+      DATABASE_PATH: tempDbFile,
+      DB_PATH: tempDbFile,
       DELIVERA_DB_FILE: tempDbFile,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -111,6 +198,45 @@ async function run() {
       }),
     });
     const adminHeaders = { Authorization: `Bearer ${adminLogin.token}` };
+
+    const health = await request("/health");
+    if (!health.ok || health.database?.mode !== "sqlite" || !health.queues || !health.cache) {
+      throw new Error("Health endpoint production durum alanlarini dondurmedi.");
+    }
+    const metrics = await requestText("/metrics");
+    if (!metrics.includes("delivera_up 1") || !metrics.includes("delivera_requests_total") || !metrics.includes("delivera_table_rows")) {
+      throw new Error("Prometheus metrics endpoint beklenen metrikleri dondurmedi.");
+    }
+    const systemStatus = await request("/api/admin/system-status", {
+      headers: adminHeaders,
+    });
+    if (!systemStatus.ok || !systemStatus.queues || !systemStatus.cache || typeof systemStatus.database?.postgresUrlConfigured !== "boolean") {
+      throw new Error("Admin system-status production hazirlik alanlarini dondurmedi.");
+    }
+    const performanceSummary = await request("/api/admin/performance-summary", {
+      headers: adminHeaders,
+    });
+    if (!performanceSummary.ok || typeof performanceSummary.p95ResponseTimeMs !== "number" || !performanceSummary.queues) {
+      throw new Error("Admin performance-summary metrik alanlari eksik.");
+    }
+    let rateLimited = false;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      try {
+        await request("/api/admin/login", {
+          method: "POST",
+          headers: { "X-Forwarded-For": "10.200.10.10" },
+          body: JSON.stringify({ username: `wrong-${attempt}`, password: "Wrong123!" }),
+        });
+      } catch (error) {
+        if (String(error.message).includes("429") && String(error.message).includes("Too many requests")) {
+          rateLimited = true;
+          break;
+        }
+      }
+    }
+    if (!rateLimited) {
+      throw new Error("Login rate limit temel kontrolu 429 dondurmedi.");
+    }
 
     const restaurantUsername = `smokerest${Math.floor(Math.random() * 100000)}`;
     const restaurantPassword = "Rest12345!";
@@ -306,6 +432,18 @@ async function run() {
     if (!thirdWaitingPackage.lastAssignmentError) {
       throw new Error("Atama basarisizlik nedeni kaydedilmedi.");
     }
+    const pagedAdminBootstrap = await request("/api/admin/bootstrap?limit=2&cursor=0", {
+      headers: adminHeaders,
+    });
+    if (!pagedAdminBootstrap.pagination?.packages || pagedAdminBootstrap.packages.length > 2 || !pagedAdminBootstrap.pagination.packages.hasMore) {
+      throw new Error("Admin bootstrap pagination metadata veya limit davranisi calismadi.");
+    }
+    const pagedRestaurantBootstrap = await request("/api/restaurant/bootstrap?limit=2&cursor=0", {
+      headers: restaurantHeaders,
+    });
+    if (!pagedRestaurantBootstrap.pagination?.packages || pagedRestaurantBootstrap.packages.length > 2 || !pagedRestaurantBootstrap.pagination.packages.hasMore) {
+      throw new Error("Restoran bootstrap pagination metadata veya limit davranisi calismadi.");
+    }
 
     await request("/api/platform/order", {
       method: "POST",
@@ -438,6 +576,12 @@ async function run() {
     let courierWorkspace = await request("/api/courier/me", {
       headers: courierHeaders,
     });
+    const pagedCourierWorkspace = await request("/api/courier/me?limit=1&cursor=0", {
+      headers: courierHeaders,
+    });
+    if (!pagedCourierWorkspace.pagination?.packages || pagedCourierWorkspace.packages.length > 1) {
+      throw new Error("Kurye workspace pagination metadata veya limit davranisi calismadi.");
+    }
     const courierShiftPlan = (courierWorkspace.shiftSummary?.shiftPlans || []).find((plan) => plan.id === pendingShiftPlan.id);
     if (!courierShiftPlan || courierShiftPlan.status !== "awaiting_courier_acceptance") {
       throw new Error("Kurye panelinde vardiya teklifi gorunmedi.");

@@ -68,10 +68,16 @@ async function api(path, options = {}) {
       }
     }
 
-    const response = await fetch(requestPath, {
-      ...options,
-      headers: mergedHeaders,
-    });
+    let response;
+    try {
+      response = await fetch(requestPath, {
+        ...options,
+        headers: mergedHeaders,
+      });
+    } catch (error) {
+      showToast("Baglanti kurulamadı. Interneti veya sunucu durumunu kontrol et.", "error");
+      throw error;
+    }
 
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")
@@ -89,7 +95,14 @@ async function api(path, options = {}) {
   }
 
   if (!result.response.ok) {
-    throw new Error(result.data.error || "Bir hata olu\u015ftu.");
+    const message = result.response.status === 429 && result.data.retryAfter
+      ? `Cok hizli istek gonderildi. ${result.data.retryAfter} sn sonra tekrar dene.`
+      : result.data.error || "Bir hata olu\u015ftu.";
+    const error = new Error(message);
+    error.status = result.response.status;
+    error.code = result.data.code || "";
+    error.requestId = result.data.requestId || result.response.headers.get("x-request-id") || "";
+    throw error;
   }
 
   return result.data;
