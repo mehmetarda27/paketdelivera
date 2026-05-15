@@ -1,7 +1,7 @@
 {
   "headers": {
     "x-yemeksepeti-token": "fixture-secret",
-    "x-webhook-signature": "hmac-sha256-hex-placeholder"
+    "x-webhook-signature": "127a2353c813a136babe1b648396f01419ad357fda5e15d7545856871c735f9e"
   },
   "body": {
     "platform": "Yemeksepeti",

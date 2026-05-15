@@ -284,6 +284,62 @@ async function run() {
     if (!platformAccount.hasStaticToken || platformAccount.staticToken) {
       throw new Error("Static Token frontend yanitinda gizlenmedi.");
     }
+    const initialPlatformHealth = await request(`/api/restaurant/platform-accounts/${platformAccount.id}/health`, {
+      headers: restaurantHeaders,
+    });
+    if (!initialPlatformHealth.health || !["unknown", "warning"].includes(initialPlatformHealth.health.status)) {
+      throw new Error("Yeni kaydedilen platform hesabi bagli gibi gorunmemeli.");
+    }
+    const checkedPlatformHealth = await request(`/api/restaurant/platform-accounts/${platformAccount.id}/check-connection`, {
+      method: "POST",
+      headers: restaurantHeaders,
+    });
+    if (!checkedPlatformHealth.health || !["warning", "connected", "unknown"].includes(checkedPlatformHealth.health.status)) {
+      throw new Error("Restoran platform check-connection health payload dondurmedi.");
+    }
+    const adminPlatformHealth = await request(`/api/admin/platform-accounts/${platformAccount.id}/health`, {
+      headers: adminHeaders,
+    });
+    if (!adminPlatformHealth.account || !adminPlatformHealth.health) {
+      throw new Error("Admin platform health endpoint detay dondurmedi.");
+    }
+    const adminPlatformSummary = await request("/api/admin/platform-health-summary", {
+      headers: adminHeaders,
+    });
+    if (!adminPlatformSummary.ok || !adminPlatformSummary.summary || !Array.isArray(adminPlatformSummary.accounts)) {
+      throw new Error("Admin platform-health-summary endpoint beklenen ozeti dondurmedi.");
+    }
+    const otherRestaurantUsername = `smokeother${Math.floor(Math.random() * 100000)}`;
+    const otherRestaurantPassword = "Rest12345!";
+    await request("/api/admin/restaurants", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: `Smoke Diger Restoran ${Date.now()}`,
+        portalUsername: otherRestaurantUsername,
+        portalPassword: otherRestaurantPassword,
+        zone: "Erdemli",
+        latitude: restaurantLatitude + 0.01,
+        longitude: restaurantLongitude + 0.01,
+        platforms: ["Yemeksepeti"],
+      }),
+    });
+    const otherRestaurantLogin = await request("/api/restaurant/session", {
+      method: "POST",
+      body: JSON.stringify({
+        username: otherRestaurantUsername,
+        password: otherRestaurantPassword,
+      }),
+    });
+    await request(`/api/restaurant/platform-accounts/${platformAccount.id}/health`, {
+      headers: { Authorization: `Bearer ${otherRestaurantLogin.token}` },
+    }).then(() => {
+      throw new Error("Restoran baska restoranin platform health bilgisini gorebildi.");
+    }).catch((error) => {
+      if (!String(error.message).includes("404")) {
+        throw error;
+      }
+    });
 
     const courierState = await request("/api/admin/couriers", {
       method: "POST",
@@ -497,6 +553,12 @@ async function run() {
     if (webhookResponse.package.assignedCourierId) {
       throw new Error("Platform siparisi restoran onayi olmadan kuryeye atandi.");
     }
+    const connectedPlatformHealth = await request(`/api/admin/platform-accounts/${platformAccount.id}/health`, {
+      headers: adminHeaders,
+    });
+    if (connectedPlatformHealth.health?.status !== "connected") {
+      throw new Error("Basarili webhook sonrasi platform health connected olmadi.");
+    }
 
     const duplicateWebhookResponse = await request("/api/platform/order", {
       method: "POST",
@@ -515,6 +577,12 @@ async function run() {
     });
     if (duplicateWebhookResponse.package.id !== webhookResponse.package.id) {
       throw new Error("Duplicate platform siparisi ikinci kez olustu.");
+    }
+    const duplicateEventSummary = await request("/api/admin/platform-health-summary", {
+      headers: adminHeaders,
+    });
+    if (!duplicateEventSummary.recentEvents?.some((event) => event.status === "duplicate")) {
+      throw new Error("Duplicate order controlled event olarak loglanmadi.");
     }
 
     const rejectedWebhookResponse = await request("/api/platform/order", {

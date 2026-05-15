@@ -28,6 +28,15 @@ const logger = require("./services/logger");
 const { createPlatformService } = require("./services/platformService");
 const { createRateLimitStore } = require("./services/rateLimitStore");
 const { createQueueService, JOB_TYPES } = require("./services/queueService");
+const { createSessionRevocationService } = require("./services/sessionRevocationService");
+const { sendPlatformStatusCallback } = require("./services/platformCallbackService");
+const {
+  createConnectionHealthService,
+  HEALTH_STATUS,
+  HEALTH_ERROR_CODES,
+  buildHealthPayload,
+  normalizeErrorCode,
+} = require("./services/connectionHealthService");
 const { verifyPlatformSignature } = require("./services/platformSignature");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -216,6 +225,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 const db = getDb({ filename: DB_FILE });
 const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger });
 const queueService = createQueueService({ redisUrl: REDIS_URL, logger });
+const sessionRevocationService = createSessionRevocationService({ redisUrl: REDIS_URL, logger });
 const liveStreams = new Map();
 const performanceMetrics = {
   startedAt: Date.now(),
@@ -231,6 +241,7 @@ let assignmentSweepRunning = false;
 let assignmentSweepQueued = false;
 const assignmentRetryTimers = new Map();
 let platformService = null;
+let connectionHealthService = null;
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
@@ -414,8 +425,18 @@ db.exec(`
     integration_reference_code TEXT,
     pos_secret_key TEXT,
     is_active INTEGER,
-    last_sync_at TEXT,
-    webhook_id TEXT,
+        last_sync_at TEXT,
+        connection_status TEXT NOT NULL DEFAULT 'unknown',
+        last_check_at TEXT,
+        last_success_at TEXT,
+        last_error_at TEXT,
+        last_error_code TEXT,
+        last_error_message TEXT,
+        last_http_status INTEGER,
+        last_latency_ms INTEGER,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_callback_at TEXT,
+        webhook_id TEXT,
     settings_json TEXT NOT NULL,
     verification_status TEXT NOT NULL DEFAULT 'pending',
     verification_note TEXT,
@@ -428,7 +449,7 @@ db.exec(`
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
   );
 
-  CREATE TABLE IF NOT EXISTS platform_orders (
+      CREATE TABLE IF NOT EXISTS platform_orders (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL,
     platform_order_id TEXT NOT NULL,
@@ -752,6 +773,22 @@ if (!platformAccountColumns.includes("last_poll_at")) {
 if (!platformAccountColumns.includes("last_error")) {
   db.exec("ALTER TABLE platform_accounts ADD COLUMN last_error TEXT");
 }
+[
+  ["connection_status", "TEXT NOT NULL DEFAULT 'unknown'"],
+  ["last_check_at", "TEXT"],
+  ["last_success_at", "TEXT"],
+  ["last_error_at", "TEXT"],
+  ["last_error_code", "TEXT"],
+  ["last_error_message", "TEXT"],
+  ["last_http_status", "INTEGER"],
+  ["last_latency_ms", "INTEGER"],
+  ["consecutive_failures", "INTEGER NOT NULL DEFAULT 0"],
+  ["last_callback_at", "TEXT"],
+].forEach(([columnName, definition]) => {
+  if (!platformAccountColumns.includes(columnName)) {
+    db.exec(`ALTER TABLE platform_accounts ADD COLUMN ${columnName} ${definition}`);
+  }
+});
 
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_orders_unique
@@ -795,6 +832,36 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_webhook_logs_restaurant_id_desc
   ON webhook_logs (restaurant_id, id DESC);
+
+  CREATE TABLE IF NOT EXISTS platform_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT,
+    restaurant_id TEXT,
+    platform_account_id TEXT,
+    event_type TEXT NOT NULL,
+    request_id TEXT,
+    status TEXT NOT NULL,
+    http_status INTEGER,
+    error_code TEXT,
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    dead_lettered_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_platform_events_account_created
+  ON platform_events (platform_account_id, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_events_restaurant_created
+  ON platform_events (restaurant_id, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_events_type_status_created
+  ON platform_events (event_type, status, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_platform_accounts_connection_status
+  ON platform_accounts (connection_status, updated_at DESC);
 
   CREATE INDEX IF NOT EXISTS idx_notification_logs_target_created
   ON notification_logs (target_role, target_id, created_at DESC);
@@ -1694,6 +1761,15 @@ function originForCors(req) {
 async function applyRateLimit(req, scope, rule) {
   const key = `${scope}:${clientIp(req)}`;
   const result = await rateLimitStore.increment(key, rule);
+  if (result.limited) {
+    logger.warn("Rate limit exceeded", {
+      scope,
+      ip: clientIp(req),
+      retryAfter: result.retryAfter,
+      requestId: req.requestId,
+      store: rateLimitStore.health().mode,
+    });
+  }
   return result.limited ? result.retryAfter : null;
 }
 
@@ -1857,6 +1933,17 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
     lastWebhookAt: account.lastWebhookAt || null,
     lastPollAt: account.lastPollAt || account.lastSyncAt || null,
     lastError: account.lastError || "",
+    connectionStatus: account.connectionStatus || HEALTH_STATUS.UNKNOWN,
+    connectionHealth: buildHealthPayload(account),
+    lastCheckAt: account.lastCheckAt || null,
+    lastSuccessAt: account.lastSuccessAt || null,
+    lastErrorAt: account.lastErrorAt || null,
+    lastErrorCode: account.lastErrorCode || "",
+    lastErrorMessage: account.lastErrorMessage || "",
+    lastHttpStatus: account.lastHttpStatus ?? null,
+    lastLatencyMs: account.lastLatencyMs ?? null,
+    consecutiveFailures: account.consecutiveFailures || 0,
+    lastCallbackAt: account.lastCallbackAt || null,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
@@ -2321,6 +2408,16 @@ function getPlatformAccounts(filter = {}) {
     lastWebhookAt: row.last_webhook_at || null,
     lastPollAt: row.last_poll_at || row.last_sync_at || null,
     lastError: row.last_error || "",
+    connectionStatus: row.connection_status || HEALTH_STATUS.UNKNOWN,
+    lastCheckAt: row.last_check_at || null,
+    lastSuccessAt: row.last_success_at || null,
+    lastErrorAt: row.last_error_at || null,
+    lastErrorCode: row.last_error_code || "",
+    lastErrorMessage: row.last_error_message || "",
+    lastHttpStatus: row.last_http_status ?? null,
+    lastLatencyMs: row.last_latency_ms ?? null,
+    consecutiveFailures: row.consecutive_failures || 0,
+    lastCallbackAt: row.last_callback_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -2733,7 +2830,32 @@ function cacheHealthPayload() {
     mode: rateLimitHealth.mode,
     redisUrlConfigured: Boolean(REDIS_URL),
     rateLimitStore: rateLimitHealth,
+    sessionRevocation: sessionRevocationService.health(),
     responseCache: "not_enabled",
+  };
+}
+
+function platformHealthSummaryPayload() {
+  const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT COALESCE(connection_status, 'unknown') AS status, COUNT(*) AS count
+    FROM platform_accounts
+    GROUP BY COALESCE(connection_status, 'unknown')
+  `).all();
+  const counts = rows.reduce((acc, row) => {
+    acc[row.status] = row.count;
+    return acc;
+  }, {});
+  return {
+    total: tableCountSafe("platform_accounts"),
+    connected: counts.connected || 0,
+    warning: counts.warning || 0,
+    error: counts.error || 0,
+    disabled: counts.disabled || 0,
+    unknown: counts.unknown || 0,
+    webhookErrorsLast24h: tableCountSafe("platform_events", "event_type = ? AND status = ? AND created_at >= ?", ["webhook", "error", last24h]),
+    callbackErrorsLast24h: tableCountSafe("platform_events", "event_type = ? AND status = ? AND created_at >= ?", ["callback", "error", last24h]),
+    lastCheckedAt: db.prepare("SELECT MAX(last_check_at) AS value FROM platform_accounts").get()?.value || null,
   };
 }
 
@@ -2761,6 +2883,8 @@ function systemStatusPayload() {
       activePackages: db.prepare(`SELECT COUNT(*) AS count FROM packages WHERE status IN (${activeStatuses.map(() => "?").join(",")})`).get(...activeStatuses).count,
       packagesLast24h: tableCountSafe("packages", "created_at >= ?", [last24h]),
       platformOrders: tableCountSafe("platform_orders"),
+      failedWebhooks: tableCountSafe("webhook_logs", "(response_status >= 400 OR dead_lettered_at IS NOT NULL)"),
+      deadLetteredWebhooks: tableCountSafe("webhook_logs", "dead_lettered_at IS NOT NULL"),
     },
     operations: {
       onlineCouriers: tableCountSafe("couriers", "status = ?", [COURIER_ONLINE_STATUS]),
@@ -2772,6 +2896,7 @@ function systemStatusPayload() {
     },
     queues: queueHealthPayload(),
     cache: cacheHealthPayload(),
+    platformHealth: platformHealthSummaryPayload(),
     timestamp: nowIso(),
   };
 }
@@ -2804,6 +2929,7 @@ function performanceSummaryPayload() {
     databaseSizeBytes: databaseSizeBytes(),
     queues: queueHealthPayload(),
     cache: cacheHealthPayload(),
+    platformHealth: platformHealthSummaryPayload(),
     recentRequests: recentRequestLogs.slice(-10),
     timestamp: nowIso(),
   };
@@ -3446,6 +3572,10 @@ function getWebhookLogs(limit = 20, filter = {}) {
     signatureValid: Boolean(row.signature_valid),
     responseStatus: row.response_status,
     requestBody: row.request_body,
+    retryCount: row.retry_count || 0,
+    nextRetryAt: row.next_retry_at,
+    deadLetteredAt: row.dead_lettered_at,
+    lastError: row.last_error,
     createdAt: row.created_at,
   }));
 }
@@ -3579,6 +3709,7 @@ function currentState(filter = {}) {
     platformAccounts: getPlatformAccounts(filter),
     platformOrders: getPlatformOrders(filter),
     webhookLogs: getWebhookLogs(20, filter),
+    platformEvents: getPlatformEvents(20, filter),
   };
 }
 
@@ -4571,6 +4702,7 @@ function decorateState(filter = {}) {
         ? getNotifications("restaurant", filter.restaurantId, 20)
         : getNotifications("admin", null, 20),
     webhookLogs: state.webhookLogs,
+    platformEvents: state.platformEvents,
     pagination: {
       packages: packagePagination(filter, pagination),
       platformOrders: platformOrdersPagination(filter, pagination),
@@ -4578,6 +4710,16 @@ function decorateState(filter = {}) {
       auditLogs: pageMeta(filter.restaurantId ? countTable("audit_logs", "restaurant_id = ?", [filter.restaurantId]) : countTable("audit_logs"), { limit: 20, offset: 0 }),
     },
     stats: statsFromDb(filter),
+    systemStatus: {
+      queues: queueHealthPayload(),
+      cache: cacheHealthPayload(),
+      totals: {
+        failedWebhooks: tableCountSafe("webhook_logs", "(response_status >= 400 OR dead_lettered_at IS NOT NULL)"),
+        deadLetteredWebhooks: tableCountSafe("webhook_logs", "dead_lettered_at IS NOT NULL"),
+      },
+      lastRequestId: recentRequestLogs.at(-1)?.requestId || null,
+      platformHealth: platformHealthSummaryPayload(),
+    },
     restaurantPerformance: filter.restaurantId ? buildRestaurantPerformance(packages) : null,
     integrationWizard: filter.restaurantId ? buildRestaurantIntegrationWizard(filter.req || { headers: {}, url: "/" }, state.restaurants[0] || null, sanitizedPlatformAccounts) : null,
   };
@@ -4585,7 +4727,7 @@ function decorateState(filter = {}) {
 
 function logWebhookAttempt(entry) {
   const safeRequestBody = redactSecretsFromText(entry.requestBody);
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO webhook_logs (
       restaurant_id, source_platform, external_order_no, signature_valid, response_status, request_body,
       retry_count, next_retry_at, dead_lettered_at, last_error, created_at
@@ -4606,6 +4748,110 @@ function logWebhookAttempt(entry) {
 
   const line = `[${new Date().toISOString()}] status=${entry.responseStatus} signature=${entry.signatureValid ? "valid" : "invalid"} restaurant=${entry.restaurantId || "-"} platform=${entry.sourcePlatform || "-"} order=${entry.externalOrderNo || "-"}${"\n"}`;
   fs.appendFileSync(WEBHOOK_LOG_FILE, line);
+  return Number(result.lastInsertRowid || 0);
+}
+
+function logPlatformEvent(entry = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO platform_events (
+        platform, restaurant_id, platform_account_id, event_type, request_id, status, http_status,
+        error_code, error_message, retry_count, next_retry_at, dead_lettered_at, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.platform || null,
+      entry.restaurantId || null,
+      entry.platformAccountId || null,
+      entry.eventType || "webhook",
+      entry.requestId || null,
+      entry.status || "error",
+      entry.httpStatus || null,
+      entry.errorCode || null,
+      entry.errorMessage || null,
+      Number(entry.retryCount || 0),
+      entry.nextRetryAt || null,
+      entry.deadLetteredAt || null,
+      json(entry.metadata || {}),
+      entry.createdAt || nowIso()
+    );
+  } catch (error) {
+    logger.warn("Platform event log failed", { error: error.message, eventType: entry.eventType });
+  }
+}
+
+function getPlatformEvents(limit = 20, filter = {}) {
+  const offset = parsePositiveInteger(filter.offset, 0);
+  const params = [];
+  const where = [];
+  if (filter.restaurantId) {
+    where.push("restaurant_id = ?");
+    params.push(filter.restaurantId);
+  }
+  if (filter.platformAccountId) {
+    where.push("platform_account_id = ?");
+    params.push(filter.platformAccountId);
+  }
+  const sql = `
+    SELECT * FROM platform_events
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY id DESC
+    LIMIT ? OFFSET ?
+  `;
+  const rows = db.prepare(sql).all(...params, limit, offset);
+  return rows.map((row) => ({
+    id: row.id,
+    platform: row.platform,
+    restaurantId: row.restaurant_id,
+    platformAccountId: row.platform_account_id,
+    eventType: row.event_type,
+    requestId: row.request_id,
+    status: row.status,
+    httpStatus: row.http_status,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    retryCount: row.retry_count || 0,
+    nextRetryAt: row.next_retry_at,
+    deadLetteredAt: row.dead_lettered_at,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+  }));
+}
+
+function providerHealthUrlForAccount(account) {
+  const slugKey = platformSlug(account?.platform).toUpperCase().replace(/-/g, "_");
+  return trimmed(
+    process.env[`DELIVERA_HEALTH_URL_${slugKey}`] ||
+    process.env[`DELIVERA_VERIFY_URL_${slugKey}`] ||
+    process.env[platformVerifyEnvKey(account?.platform)] ||
+    ""
+  );
+}
+
+async function checkPlatformAccountConnection(account, req = null) {
+  const result = await connectionHealthService.checkAccount(account);
+  if (!result.ok) {
+    logPlatformEvent({
+      platform: account.platform,
+      restaurantId: account.restaurantId,
+      platformAccountId: account.id,
+      eventType: "connection_check",
+      requestId: req?.requestId || null,
+      status: "error",
+      httpStatus: result.httpStatus || null,
+      errorCode: result.errorCode || HEALTH_ERROR_CODES.UNKNOWN_ERROR,
+      errorMessage: result.errorMessage || "Platform connection check failed",
+      metadata: {
+        latencyMs: result.latencyMs,
+        providerUrlConfigured: Boolean(result.providerUrlConfigured),
+      },
+    });
+  }
+  return {
+    ok: Boolean(result.ok),
+    result,
+    account: sanitizePlatformAccount(getPlatformAccounts().find((item) => item.id === account.id) || account, true),
+    recentEvents: getPlatformEvents(10, { platformAccountId: account.id }),
+  };
 }
 
 function logPlatformConnectionTest(account, result) {
@@ -5712,12 +5958,11 @@ function appendPlatformStatusLog(packageId, entry) {
   return nextLogs;
 }
 
-function callPlatformStatusCallback(packageRecord, status, meta = {}) {
+async function callPlatformStatusCallback(packageRecord, status, meta = {}) {
   if (!packageRecord || !packageRecord.sourcePlatform) {
     return { ok: false };
   }
 
-  const adapter = getPlatformAdapter(normalizePlatformKey(packageRecord.sourcePlatform));
   const orderData = {
     orderId: packageRecord.externalOrderId || packageRecord.externalOrderNo,
     restaurantId: packageRecord.restaurantId,
@@ -5725,18 +5970,26 @@ function callPlatformStatusCallback(packageRecord, status, meta = {}) {
     status,
     meta,
   };
+  appendPlatformStatusLog(packageRecord.id, {
+    status,
+    message: `platform ${status} callback hazirlaniyor`,
+    platform: packageRecord.sourcePlatform,
+    meta,
+  });
   let result;
   try {
-    result = adapter.sendStatusUpdate(status, orderData);
+    result = await sendPlatformStatusCallback({ db, packageRecord, status, meta });
   } catch (error) {
     result = { ok: false, error: error.message };
   }
-  const message = `platforma ${status} bildirildi`;
+  const message = result?.ok
+    ? `platforma ${status} bildirildi`
+    : `platform ${status} callback basarisiz: ${result?.error || result?.status || "unknown"}`;
   appendPlatformStatusLog(packageRecord.id, {
     status,
     message,
     platform: packageRecord.sourcePlatform,
-    meta,
+    meta: { ...meta, callbackMode: result?.mode || null, callbackStatus: result?.status || null },
   });
   writeAuditLog({
     actorRole: "integration",
@@ -5750,14 +6003,77 @@ function callPlatformStatusCallback(packageRecord, status, meta = {}) {
       meta,
     },
   });
+  logger[result?.ok ? "info" : "warn"]("Platform status callback completed", {
+    packageId: packageRecord.id,
+    platform: packageRecord.sourcePlatform,
+    status,
+    ok: Boolean(result?.ok),
+    mode: result?.mode || null,
+    callbackStatus: result?.status || null,
+    error: result?.error || null,
+  });
+  logPlatformEvent({
+    platform: packageRecord.sourcePlatform,
+    restaurantId: packageRecord.restaurantId,
+    platformAccountId: result?.platformAccountId || null,
+    eventType: "callback",
+    status: result?.ok ? "success" : "error",
+    httpStatus: Number(result?.status) || null,
+    errorCode: result?.ok ? null : HEALTH_ERROR_CODES.CALLBACK_FAILED,
+    errorMessage: result?.ok ? null : (result?.error || "callback_failed"),
+    metadata: { packageId: packageRecord.id, callbackMode: result?.mode || null, callbackStatus: result?.status || null },
+  });
+  if (result?.platformAccountId) {
+    db.prepare(`
+      UPDATE platform_accounts
+      SET last_callback_at = ?,
+          connection_status = CASE WHEN ? THEN 'connected' ELSE connection_status END,
+          last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
+          last_error_at = CASE WHEN ? THEN last_error_at ELSE ? END,
+          last_error_code = CASE WHEN ? THEN last_error_code ELSE ? END,
+          last_error_message = CASE WHEN ? THEN last_error_message ELSE ? END,
+          consecutive_failures = CASE WHEN ? THEN 0 ELSE COALESCE(consecutive_failures, 0) + 1 END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      nowIso(),
+      result.ok ? 1 : 0,
+      result.ok ? 1 : 0,
+      nowIso(),
+      result.ok ? 1 : 0,
+      nowIso(),
+      result.ok ? 1 : 0,
+      HEALTH_ERROR_CODES.CALLBACK_FAILED,
+      result.ok ? 1 : 0,
+      result?.error || "callback_failed",
+      result.ok ? 1 : 0,
+      nowIso(),
+      result.platformAccountId
+    );
+  }
   if (!result?.ok) {
+    const webhookLogId = logWebhookAttempt({
+      restaurantId: packageRecord.restaurantId,
+      sourcePlatform: packageRecord.sourcePlatform,
+      externalOrderNo: orderData.orderId,
+      signatureValid: true,
+      responseStatus: Number(result?.status) || 502,
+      requestBody: json({ type: "platform_status_callback", status, orderData, result }),
+      retryCount: 0,
+      nextRetryAt: new Date(Date.now() + 30000).toISOString(),
+      lastError: result?.error || "callback_failed",
+    });
     queueService.enqueue(JOB_TYPES.WEBHOOK_CALLBACK_RETRY, {
+      webhookLogId,
       packageId: packageRecord.id,
       platform: packageRecord.sourcePlatform,
       status,
+      meta,
       orderData,
       lastError: result?.error || "callback_failed",
       createdAt: nowIso(),
+    }, {
+      jobId: webhookLogId ? `webhook-callback-${webhookLogId}` : undefined,
     }).then((queueResult) => {
       if (queueResult.ok) {
         logger.warn("Platform callback retry queued", {
@@ -5765,6 +6081,13 @@ function callPlatformStatusCallback(packageRecord, status, meta = {}) {
           platform: packageRecord.sourcePlatform,
           status,
           jobId: queueResult.jobId,
+        });
+      } else {
+        logger.warn("Platform callback retry inline fallback", {
+          packageId: packageRecord.id,
+          platform: packageRecord.sourcePlatform,
+          status,
+          reason: queueResult.reason,
         });
       }
     });
@@ -5869,6 +6192,75 @@ async function handleApi(req, res, pathname) {
       return;
     }
     sendJson(res, 200, performanceSummaryPayload());
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/platform-health-summary") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const restaurantMap = new Map(getRestaurants().map((restaurant) => [restaurant.id, restaurant.name]));
+    const accounts = getPlatformAccounts().map((account) => ({
+      ...sanitizePlatformAccount(account, true),
+      restaurantName: restaurantMap.get(account.restaurantId) || "Bilinmeyen Restoran",
+      recentEvents: getPlatformEvents(5, { platformAccountId: account.id }),
+    }));
+    sendJson(res, 200, {
+      ok: true,
+      summary: platformHealthSummaryPayload(),
+      accounts,
+      recentEvents: getPlatformEvents(20),
+    });
+    return;
+  }
+
+  const adminPlatformHealthMatch = pathname.match(/^\/api\/admin\/platform-accounts\/([^/]+)\/health$/);
+  if (req.method === "GET" && adminPlatformHealthMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const account = getPlatformAccounts().find((item) => item.id === adminPlatformHealthMatch[1]);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      account: sanitizePlatformAccount(account, true),
+      health: buildHealthPayload(account),
+      recentEvents: getPlatformEvents(20, { platformAccountId: account.id }),
+    });
+    return;
+  }
+
+  const adminPlatformCheckMatch = pathname.match(/^\/api\/admin\/platform-accounts\/([^/]+)\/check-connection$/);
+  if (req.method === "POST" && adminPlatformCheckMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    const account = getPlatformAccounts().find((item) => item.id === adminPlatformCheckMatch[1]);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    const result = await checkPlatformAccountConnection(account, req);
+    sendJson(res, 200, {
+      ok: true,
+      account: result.account,
+      health: result.account.connectionHealth,
+      recentEvents: result.recentEvents,
+    });
     return;
   }
 
@@ -6180,6 +6572,61 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const restaurantPlatformHealthMatch = pathname.match(/^\/api\/restaurant\/platform-accounts\/([^/]+)\/health$/);
+  if (req.method === "GET" && restaurantPlatformHealthMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === restaurantPlatformHealthMatch[1]);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      account: sanitizePlatformAccount(account, true),
+      health: buildHealthPayload(account),
+      recentEvents: getPlatformEvents(5, { platformAccountId: account.id }).map((event) => ({
+        eventType: event.eventType,
+        status: event.status,
+        errorCode: event.errorCode,
+        errorMessage: event.errorMessage,
+        createdAt: event.createdAt,
+      })),
+    });
+    return;
+  }
+
+  const restaurantPlatformCheckMatch = pathname.match(/^\/api\/restaurant\/platform-accounts\/([^/]+)\/check-connection$/);
+  if (req.method === "POST" && restaurantPlatformCheckMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    const account = getPlatformAccounts({ restaurantId: session.restaurant_id }).find((item) => item.id === restaurantPlatformCheckMatch[1]);
+    if (!account) {
+      sendJson(res, 404, { error: "Platform hesabi bulunamadi." });
+      return;
+    }
+    const result = await checkPlatformAccountConnection(account, req);
+    sendJson(res, 200, {
+      ok: true,
+      account: result.account,
+      health: result.account.connectionHealth,
+      publicMessage: result.account.connectionHealth.publicMessage,
+      recentEvents: result.recentEvents.slice(0, 5),
+    });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts") {
     const session = getRestaurantSession(req);
     if (!session) {
@@ -6324,6 +6771,11 @@ async function handleApi(req, res, pathname) {
           webhook_enabled = ?,
           active = ?,
           is_active = ?,
+          connection_status = ?,
+          last_check_at = NULL,
+          last_error_code = NULL,
+          last_error_message = NULL,
+          consecutive_failures = 0,
           last_error = NULL,
           updated_at = ?
       WHERE restaurant_id = ? AND platform = ? AND external_store_id = ?
@@ -6334,6 +6786,7 @@ async function handleApi(req, res, pathname) {
       draft.webhookEnabled ? 1 : 0,
       draft.active ? 1 : 0,
       draft.active ? 1 : 0,
+      draft.active ? HEALTH_STATUS.UNKNOWN : HEALTH_STATUS.DISABLED,
       now,
       session.restaurant_id,
       draft.platform,
@@ -7179,6 +7632,17 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/platform/order") {
     const retryAfter = await applyRateLimit(req, "platformOrder", RATE_LIMITS.platformOrder);
     if (retryAfter !== null) {
+      logPlatformEvent({
+        platform: null,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 429,
+        errorCode: HEALTH_ERROR_CODES.RATE_LIMITED,
+        errorMessage: "Platform webhook rate limited",
+        retryCount: 0,
+        nextRetryAt: new Date(Date.now() + retryAfter * 1000).toISOString(),
+      });
       sendRateLimited(res, retryAfter);
       return;
     }
@@ -7202,6 +7666,18 @@ async function handleApi(req, res, pathname) {
         responseStatus: 404,
         requestBody: raw,
       });
+      logPlatformEvent({
+        platform: order.platform,
+        restaurantId: null,
+        platformAccountId: null,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 404,
+        errorCode: HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED,
+        errorMessage: "Restaurant/platform match failed",
+        metadata: { platformRestaurantId: order.platformRestaurantId, orderId: order.orderId },
+      });
       sendJson(res, 404, {
         ok: false,
         error: platformFriendlyError("Restaurant/platform match failed", order.platform),
@@ -7212,6 +7688,22 @@ async function handleApi(req, res, pathname) {
       return;
     }
     if (match.account.webhookEnabled === false) {
+      db.prepare(`
+        UPDATE platform_accounts
+        SET connection_status = ?, last_error_at = ?, last_error_code = ?, last_error_message = ?, updated_at = ?
+        WHERE id = ?
+      `).run(HEALTH_STATUS.DISABLED, nowIso(), HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED, "Webhook disabled for this platform account", nowIso(), match.account.id);
+      logPlatformEvent({
+        platform: match.account.platform,
+        restaurantId: match.restaurant.id,
+        platformAccountId: match.account.id,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 403,
+        errorCode: HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED,
+        errorMessage: "Webhook disabled for this platform account",
+      });
       sendJson(res, 403, {
         ok: false,
         error: "Webhook disabled for this platform account",
@@ -7229,8 +7721,17 @@ async function handleApi(req, res, pathname) {
       rawBody: raw,
     });
     if (!signature.ok && !adapter.verifyWebhook(req, match.account) && !verifySimplePlatformSecret(match.account, match.restaurant, req)) {
-      db.prepare("UPDATE platform_accounts SET last_error = ?, updated_at = ? WHERE id = ?")
-        .run("Invalid platform secret", nowIso(), match.account.id);
+      db.prepare(`
+        UPDATE platform_accounts
+        SET last_error = ?,
+            connection_status = ?,
+            last_error_at = ?,
+            last_error_code = ?,
+            last_error_message = ?,
+            consecutive_failures = COALESCE(consecutive_failures, 0) + 1,
+            updated_at = ?
+        WHERE id = ?
+      `).run("Invalid platform secret", HEALTH_STATUS.ERROR, nowIso(), HEALTH_ERROR_CODES.INVALID_SIGNATURE, "Invalid platform secret", nowIso(), match.account.id);
       logWebhookAttempt({
         restaurantId: match.restaurant.id,
         sourcePlatform: match.account.platform,
@@ -7239,13 +7740,35 @@ async function handleApi(req, res, pathname) {
         responseStatus: 401,
         requestBody: raw,
       });
+      logPlatformEvent({
+        platform: match.account.platform,
+        restaurantId: match.restaurant.id,
+        platformAccountId: match.account.id,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 401,
+        errorCode: HEALTH_ERROR_CODES.INVALID_SIGNATURE,
+        errorMessage: "Invalid platform secret",
+        metadata: { orderId: order.orderId },
+      });
       sendJson(res, 401, { ok: false, error: "Invalid platform secret" });
       return;
     }
 
     const result = handleSimplePlatformOrder(order);
-    db.prepare("UPDATE platform_accounts SET last_webhook_at = ?, last_error = NULL, updated_at = ? WHERE id = ?")
-      .run(nowIso(), nowIso(), match.account.id);
+    db.prepare(`
+      UPDATE platform_accounts
+      SET last_webhook_at = ?,
+          last_success_at = ?,
+          connection_status = ?,
+          last_error = NULL,
+          last_error_code = NULL,
+          last_error_message = NULL,
+          consecutive_failures = 0,
+          updated_at = ?
+      WHERE id = ?
+    `).run(nowIso(), nowIso(), HEALTH_STATUS.CONNECTED, nowIso(), match.account.id);
     logWebhookAttempt({
       restaurantId: match.restaurant.id,
       sourcePlatform: match.account.platform,
@@ -7253,6 +7776,18 @@ async function handleApi(req, res, pathname) {
       signatureValid: true,
       responseStatus: result.package?.duplicate ? 200 : 201,
       requestBody: raw,
+    });
+    logPlatformEvent({
+      platform: match.account.platform,
+      restaurantId: match.restaurant.id,
+      platformAccountId: match.account.id,
+      eventType: "webhook",
+      requestId: req.requestId,
+      status: result.package?.duplicate ? "duplicate" : "success",
+      httpStatus: result.package?.duplicate ? 200 : 201,
+      errorCode: null,
+      errorMessage: result.package?.duplicate ? "Duplicate order controlled by idempotency" : null,
+      metadata: { orderId: order.orderId, packageId: result.package?.id || null },
     });
     sendJson(res, result.package?.duplicate ? 200 : 201, {
       ok: true,
@@ -7276,8 +7811,17 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && platformWebhookMatch) {
     const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
-      res.setHeader("Retry-After", String(retryAfter));
-      sendJson(res, 429, { error: "Platform webhook limiti asildi." });
+      logPlatformEvent({
+        platform: platformWebhookMatch[1],
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 429,
+        errorCode: HEALTH_ERROR_CODES.RATE_LIMITED,
+        errorMessage: "Platform webhook rate limited",
+        nextRetryAt: new Date(Date.now() + retryAfter * 1000).toISOString(),
+      });
+      sendRateLimited(res, retryAfter);
       return;
     }
 
@@ -7298,11 +7842,28 @@ async function handleApi(req, res, pathname) {
         responseStatus: 401,
         requestBody: raw,
       });
+      logPlatformEvent({
+        platform: normalizedPlatform,
+        restaurantId: body.restaurantId,
+        platformAccountId: null,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 401,
+        errorCode: HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED,
+        errorMessage: "Platform hesabi veya store/vendor eslesmesi bulunamadi.",
+      });
       sendJson(res, 401, { error: "Platform hesabi veya store/vendor eslesmesi bulunamadi." });
       return;
     }
 
     if (!verifyPlatformWebhookAuth(account, req, raw)) {
+      db.prepare(`
+        UPDATE platform_accounts
+        SET connection_status = ?, last_error_at = ?, last_error_code = ?, last_error_message = ?,
+            consecutive_failures = COALESCE(consecutive_failures, 0) + 1, updated_at = ?
+        WHERE id = ?
+      `).run(HEALTH_STATUS.ERROR, nowIso(), HEALTH_ERROR_CODES.INVALID_SIGNATURE, "Platform webhook yetkilendirmesi dogrulanamadi.", nowIso(), account.id);
       logWebhookAttempt({
         restaurantId: account.restaurantId,
         sourcePlatform: normalizedPlatform,
@@ -7310,6 +7871,17 @@ async function handleApi(req, res, pathname) {
         signatureValid: false,
         responseStatus: 401,
         requestBody: raw,
+      });
+      logPlatformEvent({
+        platform: normalizedPlatform,
+        restaurantId: account.restaurantId,
+        platformAccountId: account.id,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 401,
+        errorCode: HEALTH_ERROR_CODES.INVALID_SIGNATURE,
+        errorMessage: "Platform webhook yetkilendirmesi dogrulanamadi.",
       });
       sendJson(res, 401, { error: "Platform webhook yetkilendirmesi dogrulanamadi." });
       return;
@@ -7335,6 +7907,17 @@ async function handleApi(req, res, pathname) {
         responseStatus: 400,
         requestBody: raw,
       });
+      logPlatformEvent({
+        platform: normalizedPlatform,
+        restaurantId: account.restaurantId,
+        platformAccountId: account.id,
+        eventType: "webhook",
+        requestId: req.requestId,
+        status: "error",
+        httpStatus: 400,
+        errorCode: HEALTH_ERROR_CODES.UNKNOWN_ERROR,
+        errorMessage: error.message,
+      });
       sendJson(res, 400, { error: error.message });
       return;
     }
@@ -7346,6 +7929,22 @@ async function handleApi(req, res, pathname) {
       signatureValid: true,
       responseStatus: 201,
       requestBody: raw,
+    });
+    db.prepare(`
+      UPDATE platform_accounts
+      SET last_webhook_at = ?, last_success_at = ?, connection_status = ?, last_error_code = NULL,
+          last_error_message = NULL, consecutive_failures = 0, updated_at = ?
+      WHERE id = ?
+    `).run(nowIso(), nowIso(), HEALTH_STATUS.CONNECTED, nowIso(), account.id);
+    logPlatformEvent({
+      platform: normalizedPlatform,
+      restaurantId: account.restaurantId,
+      platformAccountId: account.id,
+      eventType: "webhook",
+      requestId: req.requestId,
+      status: "success",
+      httpStatus: 201,
+      metadata: { packageId: created?.id || null, externalOrderNo: created?.externalOrderNo || null },
     });
     broadcastLiveEvent({
       type: "platform-order",
@@ -8260,6 +8859,13 @@ setInterval(() => {
     // Retry sweep should not crash the server loop.
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
+
+connectionHealthService = createConnectionHealthService({
+  db,
+  logger,
+  platformAccountMissingCredentials,
+  providerHealthUrlForAccount,
+});
 
 platformService = createPlatformService({
   getPlatformAccounts,

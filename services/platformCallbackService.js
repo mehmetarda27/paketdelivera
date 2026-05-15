@@ -1,0 +1,95 @@
+const crypto = require("crypto");
+
+function trimmed(value) {
+  return String(value ?? "").trim();
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function hmacHex(secret, payload) {
+  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+function normalizePlatform(value) {
+  return trimmed(value).toLowerCase().replaceAll("_", " ").replaceAll("-", " ");
+}
+
+function findCallbackAccount(db, packageRecord) {
+  if (!db || !packageRecord?.restaurantId || !packageRecord?.sourcePlatform) {
+    return null;
+  }
+
+  const rows = db.prepare(`
+    SELECT * FROM platform_accounts
+    WHERE restaurant_id = ? AND active = 1
+  `).all(packageRecord.restaurantId);
+  const target = normalizePlatform(packageRecord.sourcePlatform);
+  return rows.find((row) => normalizePlatform(row.platform) === target) || null;
+}
+
+async function sendPlatformStatusCallback({ db, packageRecord, status, meta = {}, timeoutMs = 8000 }) {
+  const account = findCallbackAccount(db, packageRecord);
+  const callbackUrl = trimmed(account?.callback_url);
+  if (!callbackUrl) {
+    return {
+      ok: false,
+      platformAccountId: account?.id || null,
+      status: "not_configured",
+      mode: "not_configured",
+      error: "Platform callback URL not configured",
+    };
+  }
+
+  const payload = JSON.stringify({
+    event: "delivera.status.updated",
+    platform: packageRecord.sourcePlatform,
+    orderId: packageRecord.externalOrderId || packageRecord.externalOrderNo,
+    packageId: packageRecord.id,
+    restaurantId: packageRecord.restaurantId,
+    courierId: packageRecord.assignedCourierId || null,
+    status,
+    meta,
+    sentAt: nowIso(),
+  });
+  const secret = trimmed(account.webhook_secret || account.api_secret || account.static_token);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(callbackUrl, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Delivera-Event": "status.updated",
+        ...(secret ? { "X-Delivera-Signature": hmacHex(secret, payload) } : {}),
+      },
+      body: payload,
+    });
+    const text = await response.text().catch(() => "");
+    return {
+      ok: response.ok,
+      platformAccountId: account?.id || null,
+      status: response.status,
+      mode: "http_callback",
+      responseBody: text.slice(0, 500),
+      error: response.ok ? "" : `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      platformAccountId: account?.id || null,
+      status: error.name === "AbortError" ? "timeout" : "network_error",
+      mode: "http_callback",
+      error: error.name === "AbortError" ? "callback_timeout" : error.message,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+module.exports = {
+  sendPlatformStatusCallback,
+};

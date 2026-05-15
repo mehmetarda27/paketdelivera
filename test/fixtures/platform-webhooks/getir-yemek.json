@@ -1,7 +1,7 @@
 {
   "headers": {
     "x-webhook-secret": "fixture-secret",
-    "x-webhook-signature": "hmac-sha256-hex-placeholder"
+    "x-webhook-signature": "72b1f044453789e147ad578484d4f61d2529aa3a137be0f1cfeb3f4256a60f5e"
   },
   "body": {
     "platform": "Getir Yemek",

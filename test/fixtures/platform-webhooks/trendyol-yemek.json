@@ -1,7 +1,7 @@
 {
   "headers": {
     "x-platform-secret": "fixture-secret",
-    "x-platform-signature": "hmac-sha256-hex-placeholder"
+    "x-platform-signature": "a5b72fadfedd2c442f37e084fbdb15bf2f71806beb2081f76cfe0d20c77503d9"
   },
   "body": {
     "platform": "Trendyol Yemek",

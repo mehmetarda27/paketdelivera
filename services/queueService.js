@@ -1,3 +1,5 @@
+const { redisConnectionOptions } = require("./redisConnection");
+
 const JOB_TYPES = Object.freeze({
   ASSIGNMENT_RETRY: "assignment.retry",
   WEBHOOK_CALLBACK_RETRY: "webhook.callback.retry",
@@ -17,7 +19,7 @@ class QueueService {
   constructor({ redisUrl, logger } = {}) {
     this.redisUrl = redisUrl;
     this.logger = logger;
-    this.mode = redisUrl ? "bullmq_configured" : "inline";
+    this.mode = redisUrl ? "bullmq" : "inline";
     this.queues = new Map();
     this.initialized = false;
     this.initError = "";
@@ -31,7 +33,7 @@ class QueueService {
 
     try {
       const { Queue } = require("bullmq");
-      const connection = { url: this.redisUrl };
+      const connection = redisConnectionOptions(this.redisUrl);
       Object.values(JOB_TYPES).forEach((jobType) => {
         this.queues.set(jobType, new Queue(jobType, { connection }));
       });
@@ -64,6 +66,7 @@ class QueueService {
         delay: options.delayMs || 0,
         removeOnComplete: 1000,
         removeOnFail: false,
+        jobId: options.jobId,
       });
       return { ok: true, mode: "bullmq", jobId: job.id };
     } catch (error) {

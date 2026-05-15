@@ -432,6 +432,15 @@ function platformStatusChip(text, tone = "neutral", icon = "•") {
 }
 
 function connectionStatusForAccount(account, pollingReady = false, webhookReady = false) {
+  if (account?.connectionStatus) {
+    return {
+      connected: { text: "Bağlantı aktif", tone: "success" },
+      warning: { text: "Uyarı var", tone: "warning" },
+      error: { text: "Hatalı", tone: "error" },
+      disabled: { text: "Devre dışı", tone: "neutral" },
+      unknown: { text: "Kontrol edilmedi", tone: "warning" },
+    }[account.connectionStatus] || { text: "Kontrol edilmedi", tone: "warning" };
+  }
   const errorText = platformFriendlyMessage(account?.lastError || "", account);
   if (errorText && !isBenignPlatformMessage(errorText, account)) {
     if (/API yetkisi/i.test(errorText)) {
@@ -970,7 +979,7 @@ function renderRestaurantList(restaurants) {
 }
 
 function renderPlatformAccounts(accounts) {
-  const signature = listRenderSignature(accounts || [], ["id", "platform", "externalStoreId", "active", "lastWebhookAt", "lastPollAt", "lastVerificationAt", "verifiedAt", "lastError", "hasApiKey", "hasApiSecret", "hasWebhookSecret", "pollingEnabled", "webhookEnabled"]);
+  const signature = listRenderSignature(accounts || [], ["id", "platform", "externalStoreId", "active", "lastWebhookAt", "lastPollAt", "lastVerificationAt", "verifiedAt", "lastError", "connectionStatus", "lastCheckAt", "lastSuccessAt", "lastErrorAt", "lastErrorCode", "lastErrorMessage", "lastHttpStatus", "lastLatencyMs", "consecutiveFailures", "hasApiKey", "hasApiSecret", "hasWebhookSecret", "pollingEnabled", "webhookEnabled"]);
   if (restaurantRefs.platformAccountList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -996,6 +1005,8 @@ function renderPlatformAccounts(accounts) {
     const benignLastError = isBenignPlatformMessage(account.lastError, account);
     const readyForWebhook = Boolean(accountConfig.mode !== "polling" && account.webhookEnabled && hasWebhookSecret && account.externalStoreId);
     const connectionStatus = connectionStatusForAccount(account, pollingReady, readyForWebhook);
+    const health = account.connectionHealth || {};
+    const healthMessage = health.publicMessage || friendlyLastError || "Bağlantı henuz dogrulanmadi. Son durumu kontrol edin.";
     const modeText = account.mode === "hybrid" || accountConfig.mode === "hybrid"
       ? "Otomatik hybrid"
       : (accountConfig.mode === "polling" ? "Polling otomatik" : "Webhook otomatik");
@@ -1025,9 +1036,13 @@ function renderPlatformAccounts(accounts) {
             <span>Son webhook<strong>${lastWebhookText}</strong></span>
           </div>
           ${hasTemporaryId ? platformHintCard(`${account.externalStoreId} geçici ID gibi görünüyor. Platformdaki gerçek restoran/store ID ile değiştirin.`, "warning") : ""}
-          ${friendlyLastError ? platformHintCard(friendlyLastError, benignLastError ? "success" : "error") : platformHintCard("Son hata yok. Bağlantı durumu temiz görünüyor.", "success")}
+          ${platformHintCard(healthMessage, connectionStatus.tone === "error" ? "error" : connectionStatus.tone === "warning" ? "warning" : "success")}
         </div>
         <span class="platform-live-badge platform-live-${connectionStatus.tone}">${connectionStatus.text}</span>
+      </div>
+      <div class="card-actions">
+        <button class="ghost-btn" type="button" data-platform-check="${account.id}">Bağlantıyı Kontrol Et</button>
+        <button class="ghost-btn" type="button" data-platform-refresh="${account.id}">Son Durumu Yenile</button>
       </div>
     `;
     restaurantRefs.platformAccountList.appendChild(card);
@@ -1614,6 +1629,35 @@ restaurantRefs.platformAccountForm.addEventListener("submit", async (event) => {
     const message = platformFriendlyMessage(error.message) || "Platform hesabı kaydedilemedi.";
     restaurantRefs.summary.textContent = message;
     showToast(message, "error");
+  }
+});
+
+restaurantRefs.platformAccountList?.addEventListener("click", async (event) => {
+  const checkButton = event.target.closest("[data-platform-check]");
+  const refreshButton = event.target.closest("[data-platform-refresh]");
+  const accountId = checkButton?.dataset.platformCheck || refreshButton?.dataset.platformRefresh || "";
+  if (!accountId) {
+    return;
+  }
+  const button = checkButton || refreshButton;
+  button.disabled = true;
+  button.textContent = checkButton ? "Kontrol ediliyor" : "Yenileniyor";
+  try {
+    const data = checkButton
+      ? await api(`/api/restaurant/platform-accounts/${accountId}/check-connection`, {
+          method: "POST",
+          headers: restaurantAuthHeaders(),
+          retryWithRefresh: refreshRestaurantAccess,
+        })
+      : await api(`/api/restaurant/platform-accounts/${accountId}/health`, {
+          headers: restaurantAuthHeaders(),
+          retryWithRefresh: refreshRestaurantAccess,
+        });
+    await loadRestaurantState();
+    showToast(data.publicMessage || data.health?.publicMessage || "Platform bağlantı durumu güncellendi.", data.health?.status === "connected" ? "success" : "warning");
+  } finally {
+    button.disabled = false;
+    button.textContent = checkButton ? "Bağlantıyı Kontrol Et" : "Son Durumu Yenile";
   }
 });
 

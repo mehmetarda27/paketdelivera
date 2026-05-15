@@ -328,6 +328,16 @@ module.exports = {
       ["platform_accounts", "last_webhook_at", "TEXT"],
       ["platform_accounts", "last_poll_at", "TEXT"],
       ["platform_accounts", "last_error", "TEXT"],
+      ["platform_accounts", "connection_status", "TEXT NOT NULL DEFAULT 'unknown'"],
+      ["platform_accounts", "last_check_at", "TEXT"],
+      ["platform_accounts", "last_success_at", "TEXT"],
+      ["platform_accounts", "last_error_at", "TEXT"],
+      ["platform_accounts", "last_error_code", "TEXT"],
+      ["platform_accounts", "last_error_message", "TEXT"],
+      ["platform_accounts", "last_http_status", "INTEGER"],
+      ["platform_accounts", "last_latency_ms", "INTEGER"],
+      ["platform_accounts", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"],
+      ["platform_accounts", "last_callback_at", "TEXT"],
     ].forEach(([tableName, columnName, definition]) => {
       if (helpers.tableExists(db, tableName)) {
         helpers.addColumnIfMissing(db, tableName, columnName, definition);

@@ -33,6 +33,7 @@ npm run db:migrate
 npm run build
 node smoke-test.js
 pm2 start ecosystem.config.cjs
+REDIS_URL=redis://127.0.0.1:6379/0 pm2 start npm --name delivera-worker -- run worker
 pm2 save
 pm2 startup
 ```
@@ -134,6 +135,23 @@ Restore varsayilan olarak mevcut database'in ustune yazmaz:
 DELIVERA_RESTORE_OVERWRITE=1 npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite
 ```
 
+Staging restore provasi:
+
+1. Canli DB'den `npm run db:backup` ile backup al.
+2. Backup dosyasini uygulama sunucusu disinda bir lokasyona kopyala: object storage, farkli disk veya yedek sunucu.
+3. Staging ortaminda bos bir SQLite hedefi ayarla: `DATABASE_PATH=/var/staging/delivera-restore.sqlite`.
+4. Once overwrite korumasini dogrula: `npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite` komutu mevcut DB varsa hata vermeli.
+5. Sonra sadece staging icin `DELIVERA_RESTORE_OVERWRITE=1 npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite` calistir.
+6. `npm run db:migrate`, `/health`, `/metrics` ve admin login smoke kontrolunu yap.
+
+Cron onerisi:
+
+```bash
+15 3 * * * cd /var/www/delivera-express && /usr/bin/npm run db:backup >> logs/backup-cron.log 2>&1
+```
+
+Backup dosyalari ayni disk uzerinde tek kopya olarak birakilmamali; gunluk kopya harici diske veya S3 uyumlu object storage'a tasinmali, en az 7 gun saklanmalidir.
+
 ## 8. Migration Runner
 
 `scripts/migrate.js`, `migrations/` klasorundeki sirali dosyalari calistirir ve `schema_migrations` tablosuna kaydeder. Migration kurallari:
@@ -169,7 +187,17 @@ Canli izleme icin onerilen minimum alarm seti:
 - `queueService` DLQ veya init error uretirse warning.
 - Disk doluluk yuzdesi 80 ustu warning, 90 ustu critical.
 
-Sentry/OpenTelemetry sonraki adimdir. Entegrasyon yapilirken requestId trace/span attribute olarak tasinmali, platform webhook secretlari ve tokenlar redact edilmelidir.
+Sentry/OpenTelemetry sonraki adimdir. `.env` icinde `SENTRY_DSN` ve `OTEL_EXPORTER_OTLP_ENDPOINT` secret manager uzerinden verilir. Entegrasyon yapilirken requestId trace/span attribute olarak tasinmali, platform webhook secretlari ve tokenlar redact edilmelidir. Baslangic icin HTTP request hata yakalama, worker failed job eventleri ve platform callback hatalari Sentry breadcrumb/event olarak gonderilebilir.
+
+### 9.2 Queue / Worker
+
+Redis yoksa uygulama inline fallback modunda calisir; webhook kabul ve saha akisi bozmaz. Redis varsa BullMQ kuyruklari `assignment.retry`, `webhook.callback.retry` ve `platform.status.sync` icin aktif olur.
+
+```bash
+npm run worker
+```
+
+Worker ayri process olarak izlenmeli. `webhook.callback.retry` maksimum 5 denemeden sonra `webhook_logs.dead_lettered_at` alanini doldurur; admin panelinde webhook hata/retry bilgisi gorunur.
 
 ## 10. Load Smoke
 

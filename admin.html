@@ -90,6 +90,22 @@
           <span>Offline Kurye</span>
           <strong id="offlineCourierCount">0</strong>
         </article>
+        <article class="metric-card">
+          <span>Queue</span>
+          <strong id="queueMode">inline</strong>
+        </article>
+        <article class="metric-card">
+          <span>Rate Limit</span>
+          <strong id="rateLimitStore">memory</strong>
+        </article>
+        <article class="metric-card">
+          <span>Webhook Hata</span>
+          <strong id="failedWebhookCount">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Son Hata</span>
+          <strong id="lastSystemError">-</strong>
+        </article>
       </section>
 
       <section class="glass-panel">
@@ -322,6 +338,16 @@
           </div>
         </div>
         <div id="webhookLogList" class="stack-list"></div>
+      </section>
+      <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Platform Sağlığı</p>
+            <h3>Bağlantı ve Callback Durumu</h3>
+          </div>
+        </div>
+        <div id="platformHealthSummary" class="zone-board"></div>
+        <div id="platformHealthList" class="stack-list"></div>
       </section>
       <section class="glass-panel">
         <div class="panel-head">

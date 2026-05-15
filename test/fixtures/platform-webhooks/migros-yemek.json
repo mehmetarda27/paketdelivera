@@ -1,7 +1,7 @@
 {
   "headers": {
     "x-partner-token": "fixture-secret",
-    "x-platform-signature": "hmac-sha256-hex-placeholder"
+    "x-platform-signature": "da1ea481a1f87560c907b28fd972225e13050a15a424dd8bdb9620ccaaa0e790"
   },
   "body": {
     "platform": "Migros Yemek",

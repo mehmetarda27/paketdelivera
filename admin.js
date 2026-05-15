@@ -26,6 +26,10 @@ const adminRefs = {
   availableCourierCount: document.getElementById("availableCourierCount"),
   busyCourierCount: document.getElementById("busyCourierCount"),
   offlineCourierCount: document.getElementById("offlineCourierCount"),
+  queueMode: document.getElementById("queueMode"),
+  rateLimitStore: document.getElementById("rateLimitStore"),
+  failedWebhookCount: document.getElementById("failedWebhookCount"),
+  lastSystemError: document.getElementById("lastSystemError"),
   selectedRestaurantTitle: document.getElementById("selectedRestaurantTitle"),
   packagePanelTitle: document.getElementById("packagePanelTitle"),
   liveBadge: document.getElementById("adminLiveBadge"),
@@ -52,6 +56,8 @@ const adminRefs = {
   awaitingPackageList: document.getElementById("awaitingPackageList"),
   activeCourierOpsList: document.getElementById("activeCourierOpsList"),
   webhookLogList: document.getElementById("webhookLogList"),
+  platformHealthSummary: document.getElementById("platformHealthSummary"),
+  platformHealthList: document.getElementById("platformHealthList"),
   auditLogList: document.getElementById("auditLogList"),
   courierDailyReportList: document.getElementById("courierDailyReportList"),
   restaurantFilter: document.getElementById("restaurantFilter"),
@@ -61,6 +67,14 @@ const adminRefs = {
 
 function adminHeaders() {
   return authHeaders(adminState.token);
+}
+
+function htmlSafe(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function persistAdminAuth(auth) {
@@ -134,8 +148,9 @@ function initializeAdminWorkspaceCards() {
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(1)", "admin-shift-plan"],
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(2)", "admin-cash"],
     ["#adminWorkspace > section:nth-of-type(10)", "admin-webhooks"],
-    ["#adminWorkspace > section:nth-of-type(11)", "admin-audit"],
-    ["#adminWorkspace > section:nth-of-type(12)", "admin-day-close"],
+    ["#adminWorkspace > section:nth-of-type(11)", "admin-platform-health"],
+    ["#adminWorkspace > section:nth-of-type(12)", "admin-audit"],
+    ["#adminWorkspace > section:nth-of-type(13)", "admin-day-close"],
   ];
 
   cardMap.forEach(([selector, key]) => {
@@ -802,7 +817,7 @@ function renderActiveCourierOps(couriers) {
 }
 
 function renderWebhookLogs(logs) {
-  const signature = listRenderSignature((logs || []).slice(0, 10), ["id", "sourcePlatform", "externalOrderNo", "restaurantId", "signatureValid", "responseStatus", "createdAt"]);
+  const signature = listRenderSignature((logs || []).slice(0, 10), ["id", "sourcePlatform", "externalOrderNo", "restaurantId", "signatureValid", "responseStatus", "retryCount", "deadLetteredAt", "lastError", "createdAt"]);
   if (adminRefs.webhookLogList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -822,7 +837,8 @@ function renderWebhookLogs(logs) {
         <div>
           <strong>${log.sourcePlatform || "Platform yok"} - ${log.externalOrderNo || "Siparis no yok"}</strong>
           <p>Restoran: ${log.restaurantId || "-"}</p>
-          <p>Imza: ${log.signatureValid ? "Gecerli" : "Hatali"} - HTTP ${log.responseStatus}</p>
+          <p>Imza: ${log.signatureValid ? "Gecerli" : "Hatali"} - HTTP ${log.responseStatus}${log.retryCount ? ` - Retry ${log.retryCount}` : ""}</p>
+          ${log.lastError ? `<p>Son hata: ${log.lastError}${log.deadLetteredAt ? " - DLQ" : ""}</p>` : ""}
         </div>
         <span class="soft-badge">${formatDate(log.createdAt)}</span>
       </div>
@@ -902,6 +918,107 @@ function renderCourierDailyReports(reports) {
       </div>
     `;
     adminRefs.courierDailyReportList.appendChild(card);
+  });
+}
+
+function renderSystemSignals(data) {
+  const logs = data.webhookLogs || [];
+  const failed = logs.filter((log) => Number(log.responseStatus) >= 400 || log.deadLetteredAt).length;
+  const lastError = logs.find((log) => log.lastError || Number(log.responseStatus) >= 400);
+  if (adminRefs.queueMode) {
+    adminRefs.queueMode.textContent = data.systemStatus?.queues?.queueService?.mode || data.queues?.queueService?.mode || "inline";
+  }
+  if (adminRefs.rateLimitStore) {
+    adminRefs.rateLimitStore.textContent = data.systemStatus?.cache?.rateLimitStore?.mode || data.cache?.rateLimitStore?.mode || "memory";
+  }
+  if (adminRefs.failedWebhookCount) {
+    adminRefs.failedWebhookCount.textContent = String(data.systemStatus?.totals?.failedWebhooks ?? failed);
+  }
+  if (adminRefs.lastSystemError) {
+    adminRefs.lastSystemError.textContent = lastError
+      ? `${lastError.sourcePlatform || "platform"} ${lastError.lastError || `HTTP ${lastError.responseStatus}`}`.slice(0, 28)
+      : "-";
+  }
+}
+
+function platformHealthLabel(status) {
+  return {
+    connected: "Bağlı",
+    warning: "Uyarı",
+    error: "Hatalı",
+    disabled: "Devre dışı",
+    unknown: "Kontrol edilmedi",
+  }[status] || "Kontrol edilmedi";
+}
+
+function platformHealthTone(status) {
+  return {
+    connected: "success",
+    warning: "warning",
+    error: "error",
+    disabled: "neutral",
+    unknown: "neutral",
+  }[status] || "neutral";
+}
+
+function renderPlatformHealth(data) {
+  if (!adminRefs.platformHealthSummary || !adminRefs.platformHealthList) {
+    return;
+  }
+  const accounts = data.platformAccounts || [];
+  const summary = data.systemStatus?.platformHealth || {};
+  const signature = [
+    summary.connected, summary.warning, summary.error, summary.disabled, summary.unknown,
+    listRenderSignature(accounts, ["id", "platform", "restaurantId", "connectionStatus", "lastSuccessAt", "lastErrorAt", "lastErrorCode", "lastErrorMessage", "lastHttpStatus", "lastLatencyMs", "consecutiveFailures", "lastCheckAt"]),
+  ].join("|");
+  if (adminRefs.platformHealthList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.platformHealthList.__deliveraRenderSignature = signature;
+
+  adminRefs.platformHealthSummary.innerHTML = [
+    ["Bağlı", summary.connected || 0],
+    ["Uyarı", summary.warning || 0],
+    ["Hatalı", summary.error || 0],
+    ["Kontrol edilmedi", summary.unknown || 0],
+  ].map(([label, value]) => `
+    <article class="mini-stat-card">
+      <span>${label}</span>
+      <strong>${value}</strong>
+    </article>
+  `).join("");
+
+  adminRefs.platformHealthList.innerHTML = "";
+  if (accounts.length === 0) {
+    adminRefs.platformHealthList.innerHTML = '<div class="empty-state">Platform hesabi bulunmuyor.</div>';
+    return;
+  }
+
+  accounts.forEach((account) => {
+    const health = account.connectionHealth || {};
+    const status = account.connectionStatus || health.status || "unknown";
+    const restaurant = (data.restaurants || []).find((item) => item.id === account.restaurantId);
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${htmlSafe(account.platform)} - ${htmlSafe(restaurant?.name || account.restaurantId || "-")}</strong>
+          <p>${htmlSafe(health.publicMessage || account.lastErrorMessage || "Son durum bekleniyor.")}</p>
+          <p>HTTP ${account.lastHttpStatus || "-"} - ${account.lastLatencyMs ?? "-"} ms - Ardışık hata ${account.consecutiveFailures || 0}</p>
+          <details>
+            <summary>Son hataları göster</summary>
+            <p>Kod: ${htmlSafe(account.lastErrorCode || "-")} - ${htmlSafe(account.lastErrorMessage || "-")}</p>
+            <p>Son başarılı: ${account.lastSuccessAt ? formatDate(account.lastSuccessAt) : "-"} | Son hata: ${account.lastErrorAt ? formatDate(account.lastErrorAt) : "-"}</p>
+          </details>
+        </div>
+        <span class="platform-live-badge platform-live-${platformHealthTone(status)}">${platformHealthLabel(status)}</span>
+      </div>
+      <div class="card-actions">
+        <button class="ghost-btn" type="button" data-platform-health-check="${account.id}">Tekrar kontrol et</button>
+      </div>
+    `;
+    adminRefs.platformHealthList.appendChild(card);
   });
 }
 
@@ -1106,6 +1223,7 @@ function hydrateAdmin(data) {
     adminRefs.liveBadge.textContent = "Canli akis acik";
   }
   renderAdminStats(data.stats);
+  renderSystemSignals(data);
   setZoneOptions(adminRefs.courierZone, data.zones);
   setZoneOptions(adminRefs.restaurantZone, data.zones);
   renderRestaurantFilter(data.restaurants);
@@ -1117,6 +1235,7 @@ function hydrateAdmin(data) {
   renderAwaitingPackages(data.packages);
   renderActiveCourierOps(data.couriers);
   renderWebhookLogs(data.webhookLogs);
+  renderPlatformHealth(data);
   renderAuditLogs(data.auditLogs || []);
   renderCourierDailyReports(data.courierDailyReports || []);
   renderAdminNotifications(data.notifications || []);
@@ -1139,6 +1258,27 @@ adminRefs.loginForm.addEventListener("submit", async (event) => {
   adminRefs.loginForm.reset();
   await loadAdminState();
   startAdminLiveStream();
+});
+
+adminRefs.platformHealthList?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-platform-health-check]");
+  if (!button) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Kontrol ediliyor";
+  try {
+    const data = await api(`/api/admin/platform-accounts/${button.dataset.platformHealthCheck}/check-connection`, {
+      method: "POST",
+      headers: adminHeaders(),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    await loadAdminState();
+    showToast(data.health?.publicMessage || "Platform bağlantısı kontrol edildi.", data.health?.status === "connected" ? "success" : "warning");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Tekrar kontrol et";
+  }
 });
 
 adminRefs.courierForm.addEventListener("submit", async (event) => {

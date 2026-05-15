@@ -6,6 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "worker": "node workers/index.js",
+    "worker:dev": "node workers/index.js",
     "build": "npm run check",
     "reset:data": "node reset-runtime-data.js",
     "smoke": "node smoke-test.js",
@@ -16,7 +18,8 @@
     "restore:sqlite": "node scripts/restore-sqlite.js",
     "load:seed": "node scripts/seed-load-data.js",
     "load:test": "node scripts/load-test.js",
-    "check": "node --check server.js && node --check shared.js && node --check landing.js && node --check restaurant.js && node --check admin.js && node --check courier.js && node --check db/index.js && node --check services/logger.js && node --check services/rateLimitStore.js && node --check services/queueService.js && node --check services/platformSignature.js && node --check scripts/migrate.js && node --check migrations/202605140001_initial_sqlite_schema.js && node --check migrations/202605140002_stabilization_indexes.js && node --check scripts/seed-load-data.js && node --check scripts/load-test.js && node --check scripts/backup-sqlite.js && node --check scripts/restore-sqlite.js"
+    "test": "node --test test/*.test.js",
+    "check": "node --check server.js && node --check shared.js && node --check landing.js && node --check restaurant.js && node --check admin.js && node --check courier.js && node --check db/index.js && node --check services/logger.js && node --check services/rateLimitStore.js && node --check services/queueService.js && node --check services/sessionRevocationService.js && node --check services/platformCallbackService.js && node --check services/connectionHealthService.js && node --check services/redisConnection.js && node --check services/platformSignature.js && node --check workers/index.js && node --check scripts/migrate.js && node --check migrations/202605140001_initial_sqlite_schema.js && node --check migrations/202605140002_stabilization_indexes.js && node --check migrations/202605150001_platform_connection_health.js && node --check scripts/seed-load-data.js && node --check scripts/load-test.js && node --check scripts/backup-sqlite.js && node --check scripts/restore-sqlite.js"
   },
   "engines": {
     "node": ">=22.0.0"
