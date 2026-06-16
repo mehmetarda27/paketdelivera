@@ -1828,60 +1828,64 @@ function compressImage(file, maxSize = 1200, quality = 0.7) {
   return new Promise((resolve, reject) => {
     if (!file) return reject(new Error("Dosya bulunamadi."));
     
-    const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
-    
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      let width = img.width;
-      let height = img.height;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target.result;
+      const img = new Image();
       
-      if (width > maxSize || height > maxSize) {
-        if (width > height) {
-          height = Math.round(height * (maxSize / width));
-          width = maxSize;
-        } else {
-          width = Math.round(width * (maxSize / height));
-          height = maxSize;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.round(height * (maxSize / width));
+            width = maxSize;
+          } else {
+            width = Math.round(width * (maxSize / height));
+            height = maxSize;
+          }
         }
-      }
+        
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        try {
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        } catch (err) {
+          // Fallback to raw dataUrl if canvas compression fails
+          resolve(dataUrl);
+        }
+      };
       
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      try {
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      img.onerror = () => {
+        // If the browser cannot render this image type (e.g., raw HEIC),
+        // fallback to uploading the raw base64 file without compression.
         resolve(dataUrl);
-      } catch (err) {
-        reject(new Error("Gorsel islenirken hata olustu (Canvas)."));
-      }
+      };
+      
+      img.src = dataUrl;
     };
     
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("Fotograf formati desteklenmiyor veya dosya bozuk."));
-    };
-    
-    img.src = objectUrl;
+    reader.onerror = () => reject(new Error("Dosya okunamadi."));
+    reader.readAsDataURL(file);
   });
 }
 
 function handleImagePreview(inputElement, previewElement) {
   if (!inputElement || !previewElement) return;
-  let currentObjectUrl = null;
   inputElement.addEventListener("change", (e) => {
     const file = e.target.files[0];
-    if (currentObjectUrl) {
-      URL.revokeObjectURL(currentObjectUrl);
-      currentObjectUrl = null;
-    }
     if (file) {
-      currentObjectUrl = URL.createObjectURL(file);
-      previewElement.src = currentObjectUrl;
-      previewElement.style.display = "block";
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        previewElement.src = ev.target.result;
+        previewElement.style.display = "block";
+      };
+      reader.readAsDataURL(file);
     } else {
       previewElement.src = "";
       previewElement.style.display = "none";
