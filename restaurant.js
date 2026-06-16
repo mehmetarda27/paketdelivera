@@ -1778,7 +1778,8 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
   try {
     payload.photoBase64 = await compressImage(file);
   } catch (err) {
-    showToast("Fotograf islenemedi.", "error");
+    console.error("Image compression error:", err);
+    showToast("Fotograf islenemedi: " + (err.message || 'Bilinmeyen hata'), "error");
     return;
   }
 
@@ -1825,47 +1826,62 @@ restaurantRefs.samplePaymentMethod?.addEventListener("change", () => {
 
 function compressImage(file, maxSize = 1200, quality = 0.7) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target.result;
-      img.onload = () => {
-        let width = img.width;
-        let height = img.height;
-        if (width > maxSize || height > maxSize) {
-          if (width > height) {
-            height = Math.round(height * (maxSize / width));
-            width = maxSize;
-          } else {
-            width = Math.round(width * (maxSize / height));
-            height = maxSize;
-          }
+    if (!file) return reject(new Error("Dosya bulunamadi."));
+    
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > maxSize || height > maxSize) {
+        if (width > height) {
+          height = Math.round(height * (maxSize / width));
+          width = maxSize;
+        } else {
+          width = Math.round(width * (maxSize / height));
+          height = maxSize;
         }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.onerror = reject;
+      }
+      
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      try {
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve(dataUrl);
+      } catch (err) {
+        reject(new Error("Gorsel islenirken hata olustu (Canvas)."));
+      }
     };
-    reader.onerror = reject;
+    
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Fotograf formati desteklenmiyor veya dosya bozuk."));
+    };
+    
+    img.src = objectUrl;
   });
 }
 
 function handleImagePreview(inputElement, previewElement) {
   if (!inputElement || !previewElement) return;
+  let currentObjectUrl = null;
   inputElement.addEventListener("change", (e) => {
     const file = e.target.files[0];
+    if (currentObjectUrl) {
+      URL.revokeObjectURL(currentObjectUrl);
+      currentObjectUrl = null;
+    }
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        previewElement.src = ev.target.result;
-        previewElement.style.display = "block";
-      };
-      reader.readAsDataURL(file);
+      currentObjectUrl = URL.createObjectURL(file);
+      previewElement.src = currentObjectUrl;
+      previewElement.style.display = "block";
     } else {
       previewElement.src = "";
       previewElement.style.display = "none";
