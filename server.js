@@ -1184,8 +1184,8 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
       : `${draft.packageType} restoran panelinden olusturuldu.`,
     customerNote: draft.customerNote,
     rawPayload: draft.rawText ? { quickPasteText: draft.rawText } : null,
-    status: PENDING_APPROVAL_STATUS,
-    assignmentStatus: "pending_approval",
+    status: draft.requestedStatus || AWAITING_ASSIGNMENT_STATUS,
+    assignmentStatus: "unassigned",
     assignedCourierId: null,
     assignedCourierName: null,
     assignedAt: null,
@@ -5661,7 +5661,7 @@ function createSimplePlatformPayload(order, restaurant) {
   };
 }
 
-function handleSimplePlatformOrder(order) {
+function handleSimplePlatformOrder(order, isManual = false) {
   const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
   if (!match) {
     return { ok: false, error: "Restaurant not found", statusCode: 404 };
@@ -5677,7 +5677,14 @@ function handleSimplePlatformOrder(order) {
     ...order,
     platform: match.account.platform,
   }, match.restaurant);
-  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, "pending_approval");
+  
+  if (isManual) {
+    payload.status = AWAITING_ASSIGNMENT_STATUS;
+    payload.assignmentStatus = "unassigned";
+    payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
+  }
+  
+  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, isManual ? "accepted" : "pending_approval");
   const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
   logger.info("Package created from platform order", {
     platform: match.account.platform,
@@ -6546,6 +6553,34 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/restaurant/reports/daily") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    // Son 6 ayin gunluk ozetini getir (Yalnizca teslim edilen paketler)
+    const sql = `
+      SELECT 
+        DATE(created_at, 'localtime') as date,
+        SUM(order_amount) as total_revenue,
+        SUM(CASE WHEN payment_method LIKE '%Nakit%' THEN order_amount ELSE 0 END) as cash_revenue,
+        SUM(CASE WHEN payment_method LIKE '%Kart%' OR payment_method LIKE '%Kredi%' THEN order_amount ELSE 0 END) as card_revenue,
+        SUM(CASE WHEN payment_method NOT LIKE '%Nakit%' AND payment_method NOT LIKE '%Kart%' AND payment_method NOT LIKE '%Kredi%' THEN order_amount ELSE 0 END) as online_revenue,
+        COUNT(id) as package_count
+      FROM packages
+      WHERE restaurant_id = ? 
+        AND status = 'delivered'
+        AND created_at >= date('now', '-6 months')
+      GROUP BY DATE(created_at, 'localtime')
+      ORDER BY date DESC
+    `;
+    const rows = db.prepare(sql).all(session.restaurant_id);
+    sendJson(res, 200, { reports: rows });
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/restaurant/stream") {
     const session = getSessionFromQueryToken(req, "restaurant");
     if (!session) {
@@ -7028,13 +7063,17 @@ async function handleApi(req, res, pathname) {
     });
     let account = findPlatformRestaurant(platform, externalStoreId);
     if (!account) {
-      upsertPlatformOrderRecord(order, restaurant.id, "pending_approval");
+      upsertPlatformOrderRecord(order, restaurant.id, "accepted");
       const payload = createSimplePlatformPayload(order, restaurant);
+      payload.status = AWAITING_ASSIGNMENT_STATUS;
+      payload.assignmentStatus = "unassigned";
+      payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
+      
       const created = upsertPlatformPackage(platform, restaurant, payload);
       sendJson(res, 201, { ok: true, package: created, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
       return;
     }
-    const result = handleSimplePlatformOrder(order);
+    const result = handleSimplePlatformOrder(order, true);
     sendJson(res, 201, { ok: true, package: result.package, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
     return;
   }
@@ -7170,7 +7209,7 @@ async function handleApi(req, res, pathname) {
       source: trimmed(body.source) || "platform_extension",
       sourcePlatform: trimmed(body.sourcePlatform ?? body.source_platform) || "Diger",
       rawText,
-      requestedStatus: PREPARING_STATUS,
+      requestedStatus: AWAITING_ASSIGNMENT_STATUS,
     };
     const dedupeKey = trimmed(body.dedupeKey ?? body.dedupe_key);
 

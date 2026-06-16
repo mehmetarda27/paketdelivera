@@ -11,11 +11,106 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=8">
 </head>
-<body class="theme-restaurant">
-  <div class="role-shell wide-shell">
-    <main class="role-main expanded-main">
+<body class="theme-restaurant app-unauthenticated">
+  <div class="app-layout">
+    
+    <aside class="glass-sidebar">
+      <div class="sidebar-brand">
+        <h1>Delivera Express</h1>
+        <p>Restoran Paneli</p>
+      </div>
+      <div class="tree-menu">
+        <div class="tree-group open">
+          <div class="tree-header active-header">
+            <i data-lucide="layout-dashboard" class="tree-icon"></i>
+            <span>Dashboard</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link active-link" data-section="restaurantWorkspace_dashboard">
+              <i data-lucide="activity" class="link-icon"></i>
+              Performans & Özet
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="shopping-bag" class="tree-icon"></i>
+            <span>Siparişler</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_orders_flow">
+              <i data-lucide="list-ordered" class="link-icon"></i>
+              Aktif & Geçmiş Siparişler
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="edit-3" class="tree-icon"></i>
+            <span>Manuel İşlemler</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_manual">
+              <i data-lucide="plus-circle" class="link-icon"></i>
+              Paket & Sipariş Ekle
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="link" class="tree-icon"></i>
+            <span>Entegrasyonlar</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_integrations">
+              <i data-lucide="share-2" class="link-icon"></i>
+              Bağlantı & Hesaplar
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="bell" class="tree-icon"></i>
+            <span>Bildirimler</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_notifications">
+              <i data-lucide="message-square" class="link-icon"></i>
+              Olaylar & Webhook
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="calculator" class="tree-icon"></i>
+            <span>Finans & Raporlar</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_reports">
+              <i data-lucide="file-text" class="link-icon"></i>
+              Gün Sonu Raporu
+            </div>
+          </div>
+        </div>
+      </div>
+    
+      <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--line);">
+        <button id="restaurantLogoutButton" class="ghost-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; border: none; background: rgba(255,42,95,0.1); color: var(--coral); font-weight: 600;" type="button">
+          <i data-lucide="log-out" style="width: 18px; height: 18px;"></i>
+          Çıkış Yap
+        </button>
+      </div>
+    </aside>
+    <main class="glass-content-area">
+
       <section class="topbar glass-panel workspace-hero">
         <div>
           <div class="brand-mark">Delivera Express</div>
@@ -27,25 +122,6 @@
           <span>Restoran Özeti</span>
           <strong id="restaurantSummary">Veriler yükleniyor...</strong>
         </div>
-      </section>
-      <section class="topbar glass-panel">
-        <div>
-          <p class="eyebrow accent-coral">Order Ingestion</p>
-          <h2>Trendyol Yemek, Yemeksepeti ve Getir Yemek siparişlerini ortak connector sistemiyle otomatik al.</h2>
-          <p class="sidebar-copy">Restoran paneline portal kullanıcı adı ve şifre ile girilir. API key ve secret bilgileri insan girişi için değil, platform entegrasyonu içindir.</p>
-        </div>
-        <form id="restaurantAccessForm" class="login-form">
-          <label>
-            Kullanıcı Adı
-            <input name="username" type="text" placeholder="restoran_kullanici" autocomplete="username" required>
-          </label>
-          <label>
-            Şifre
-            <input name="password" type="password" placeholder="Restoran portal şifresi" autocomplete="current-password" required>
-          </label>
-          <button class="ghost-btn" type="submit">Restoran Girişi</button>
-          <button id="restaurantLogoutButton" class="ghost-btn hidden" type="button">Çıkış Yap</button>
-        </form>
       </section>
 
       <section id="restaurantCreateSection" class="dashboard-grid hidden">
@@ -87,8 +163,29 @@
         </article>
       </section>
 
-      <section id="restaurantWorkspace" class="hidden">
-      <section class="kpi-grid restaurant-kpi-grid">
+      
+      
+      <section class="topbar glass-panel">
+        <div>
+          <p class="eyebrow accent-coral">Restoran Girişi</p>
+          <h2>Sipariş ve kurye yönetimi için hesabına giriş yap.</h2>
+        </div>
+        <form id="restaurantAccessForm" class="login-form">
+          <label>
+            Kullanıcı Adı
+            <input name="username" type="text" placeholder="restoran_kullanici" autocomplete="username" required>
+          </label>
+          <label>
+            Şifre
+            <input name="password" type="password" placeholder="Restoran portal şifresi" autocomplete="current-password" required>
+          </label>
+          <button class="ghost-btn" type="submit">Restoran Girişi</button>
+          
+        </form>
+      </section>
+      <section id="restaurantWorkspace" class="hidden" style="display: flex; flex-direction: column; width: 100%;">
+        <div id="restaurantWorkspace_dashboard" class="content-section active-section">
+          <section class="kpi-grid restaurant-kpi-grid">
         <article class="metric-card">
           <span>Toplam Aktif Sipariş</span>
           <strong id="restaurantTotalPackages">0</strong>
@@ -106,8 +203,7 @@
           <strong id="restaurantActiveCouriers">0</strong>
         </article>
       </section>
-
-      <section class="dashboard-grid">
+          <section class="dashboard-grid">
         <article class="glass-panel">
           <div class="panel-head">
             <div>
@@ -135,19 +231,60 @@
           </div>
         </article>
       </section>
+        </div>
 
-      <section class="glass-panel">
+        <div id="restaurantWorkspace_orders_flow" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Aktif Akis</p>
+              <h3>Otomatik ve Manuel Gelen Tüm Siparişler</h3>
+            </div>
+          </div>
+          <div id="recentOrders" class="stack-list"></div>
+        </article>
+            <div style="display: flex; flex-direction: column; gap: 22px;">
+              <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-coral">Bildirim Merkezi</p>
-            <h3>Son siparis ve atama olaylari</h3>
+          <p class="eyebrow accent-coral">Aktif Siparişler</p>
+          <h3>Operasyonel Sipariş Görünümü</h3>
           </div>
         </div>
-        <div id="restaurantNotificationCenter" class="stack-list compact-stack-list"></div>
+        <div id="activeOrders" class="stack-list"></div>
       </section>
+            </div>
+          </section>
+          <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Paket Geçmişi</p>
+            <h3>Teslim Edilen ve Kapanan Siparişler</h3>
+          </div>
+        </div>
+        <div class="history-shell">
+          <div class="history-toolbar">
+            <div class="badge-row" id="restaurantHistoryFilters">
+              <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gün</button>
+              <button class="ghost-btn" type="button" data-range="today">Bugun</button>
+              <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
+              <button class="ghost-btn" type="button" data-range="30d">Son 30 Gün</button>
+              <button class="ghost-btn" type="button" data-range="all">Tüm Kayıtlar</button>
+            </div>
+            <strong id="restaurantHistoryMeta" class="history-meta">Son 50 kapanan sipariş görünüyor.</strong>
+          </div>
+          <div id="orderHistory" class="stack-list history-list"></div>
+          <div class="history-actions">
+            <button id="restaurantHistoryMore" class="ghost-btn" type="button">Daha Fazla Yükle</button>
+          </div>
+        </div>
+      </section>
+        </div>
 
-      <section class="dashboard-grid priority-workspace-grid">
-        <article class="glass-panel">
+        <div id="restaurantWorkspace_manual" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-coral">Manuel Paket</p>
@@ -202,64 +339,48 @@
             <button class="primary-btn" type="submit">Paket Oluştur</button>
           </form>
         </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-coral">Aktif Akis</p>
-              <h3>Otomatik ve Manuel Gelen Tüm Siparişler</h3>
-            </div>
-          </div>
-          <div id="recentOrders" class="stack-list"></div>
-        </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-coral">Webhook Bilgisi</p>
-              <h3>Platformdan Beklenen Sipariş Gövdesi</h3>
-            </div>
-          </div>
-          <pre class="code-block" id="samplePayload">Restoran secilince webhook gövdesi bilgisi gorunecek.</pre>
-        </article>
-      </section>
-
-      <section class="glass-panel">
+            <div style="display: flex; flex-direction: column; gap: 22px;">
+              <section class="glass-panel">
         <div class="panel-head">
           <div>
-          <p class="eyebrow accent-coral">Aktif Siparişler</p>
-          <h3>Operasyonel Sipariş Görünümü</h3>
+            <p class="eyebrow accent-coral">Manuel Fallback</p>
+            <h3>Platform Siparişi Elle Ekle</h3>
           </div>
         </div>
-        <div id="activeOrders" class="stack-list"></div>
+        <form id="manualPlatformOrderForm" class="form-grid">
+          <label>
+            Platform
+            <select name="platform" id="manualPlatformSelect"></select>
+          </label>
+          <label>
+            Müşteri adı
+            <input name="customerName" type="text" required>
+          </label>
+          <label>
+            Telefon
+            <input name="phone" type="tel" required>
+          </label>
+          <label>
+            Adres
+            <input name="address" type="text" required>
+          </label>
+          <label>
+            Tutar
+            <input name="totalPrice" type="number" min="0.01" step="0.01" required>
+          </label>
+          <label>
+            Not
+            <input name="note" type="text">
+          </label>
+          <button class="primary-btn full-width" type="submit">Siparişi Sisteme Düşür</button>
+        </form>
       </section>
-
-      <section class="glass-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow accent-coral">Paket Geçmişi</p>
-            <h3>Teslim Edilen ve Kapanan Siparişler</h3>
-          </div>
-        </div>
-        <div class="history-shell">
-          <div class="history-toolbar">
-            <div class="badge-row" id="restaurantHistoryFilters">
-              <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gün</button>
-              <button class="ghost-btn" type="button" data-range="today">Bugun</button>
-              <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
-              <button class="ghost-btn" type="button" data-range="30d">Son 30 Gün</button>
-              <button class="ghost-btn" type="button" data-range="all">Tüm Kayıtlar</button>
             </div>
-            <strong id="restaurantHistoryMeta" class="history-meta">Son 50 kapanan sipariş görünüyor.</strong>
-          </div>
-          <div id="orderHistory" class="stack-list history-list"></div>
-          <div class="history-actions">
-            <button id="restaurantHistoryMore" class="ghost-btn" type="button">Daha Fazla Yükle</button>
-          </div>
+          </section>
         </div>
-      </section>
 
-      <section class="dashboard-grid">
+        <div id="restaurantWorkspace_integrations" class="content-section">
+          <section class="dashboard-grid">
         <article class="glass-panel">
           <div class="panel-head">
             <div>
@@ -379,8 +500,9 @@
           </div>
         </article>
       </section>
-
-      <section class="glass-panel">
+          <section class="dashboard-grid">
+             <div style="display: flex; flex-direction: column; gap: 22px;">
+                <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-coral">Restoran Hesabı</p>
@@ -389,44 +511,9 @@
         </div>
         <div id="restaurantList" class="stack-list"></div>
       </section>
-
-      <section class="glass-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow accent-coral">Manuel Fallback</p>
-            <h3>Platform Siparişi Elle Ekle</h3>
-          </div>
-        </div>
-        <form id="manualPlatformOrderForm" class="form-grid">
-          <label>
-            Platform
-            <select name="platform" id="manualPlatformSelect"></select>
-          </label>
-          <label>
-            Müşteri adı
-            <input name="customerName" type="text" required>
-          </label>
-          <label>
-            Telefon
-            <input name="phone" type="tel" required>
-          </label>
-          <label>
-            Adres
-            <input name="address" type="text" required>
-          </label>
-          <label>
-            Tutar
-            <input name="totalPrice" type="number" min="0.01" step="0.01" required>
-          </label>
-          <label>
-            Not
-            <input name="note" type="text">
-          </label>
-          <button class="primary-btn full-width" type="submit">Siparişi Sisteme Düşür</button>
-        </form>
-      </section>
-
-      <section class="glass-panel">
+             </div>
+             <div style="display: flex; flex-direction: column; gap: 22px;">
+                <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-coral">Platform Hesapları</p>
@@ -435,14 +522,79 @@
         </div>
         <div id="platformAccountList" class="stack-list"></div>
       </section>
+             </div>
+          </section>
+        </div>
+
+        <div id="restaurantWorkspace_notifications" class="content-section">
+          <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-coral">Bildirim Merkezi</p>
+            <h3>Son siparis ve atama olaylari</h3>
+          </div>
+        </div>
+        <div id="restaurantNotificationCenter" class="stack-list compact-stack-list"></div>
+      </section>
+          <section class="dashboard-grid">
+            <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-coral">Webhook Bilgisi</p>
+              <h3>Platformdan Beklenen Sipariş Gövdesi</h3>
+            </div>
+          </div>
+          <pre class="code-block" id="samplePayload">Restoran secilince webhook gövdesi bilgisi gorunecek.</pre>
+        </article>
+          </section>
+        </div>
+
+        <div id="restaurantWorkspace_reports" class="content-section">
+          <section class="topbar glass-panel" style="margin-bottom: 24px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; padding: 24px;">
+            <div>
+              <p class="eyebrow accent-coral">Finans & Raporlar</p>
+              <h2>Gün Sonu (Z-Raporu) Geçmişi</h2>
+              <p class="sidebar-copy">Son 6 aya ait teslim edilen siparişlerin günlük ciro özetleri.</p>
+            </div>
+            <button id="printReportButton" class="primary-btn" type="button" style="display: flex; align-items: center; gap: 8px;">
+              <i data-lucide="printer" style="width: 18px; height: 18px;"></i> Yazdır
+            </button>
+          </section>
+          <div id="restaurantPrintArea">
+            <div class="print-only-header" style="display: none;">
+              <h2>Delivera Express</h2>
+              <p>Gün Sonu Raporu Dökümü</p>
+              <hr/>
+            </div>
+            <section class="glass-panel">
+              <div class="table-responsive">
+                <table class="report-table">
+                  <thead>
+                    <tr>
+                      <th>Tarih</th>
+                      <th style="text-align: center;">Paket Sayısı</th>
+                      <th style="text-align: right;">Nakit</th>
+                      <th style="text-align: right;">Kredi Kartı</th>
+                      <th style="text-align: right;">Online</th>
+                      <th style="text-align: right;">Toplam Ciro</th>
+                    </tr>
+                  </thead>
+                  <tbody id="restaurantReportTableBody">
+                    <tr><td colspan="6" style="text-align: center;">Raporlar yükleniyor...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
+
       </section>
     </main>
   </div>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-  <script src="/shared.js"></script>
-  <script src="/restaurant.js"></script>
-  <script>
-    window.addEventListener("load", () => window.lucide?.createIcons());
-  </script>
+  <script src="/shared.js?v=8"></script>
+  <script src="/restaurant.js?v=8"></script>
 </body>
+
+
 </html>

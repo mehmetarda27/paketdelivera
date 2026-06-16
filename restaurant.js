@@ -58,6 +58,8 @@ const restaurantRefs = {
   samplePayload: document.getElementById("samplePayload"),
   samplePaymentMethod: document.getElementById("samplePaymentMethod"),
   integrationWizardSteps: document.getElementById("integrationWizardSteps"),
+  reportTableBody: document.getElementById("restaurantReportTableBody"),
+  printReportButton: document.getElementById("printReportButton"),
   integrationWizardWebhook: document.getElementById("integrationWizardWebhook"),
   integrationWizardStatus: document.getElementById("integrationWizardStatus"),
   copyWebhookButton: document.getElementById("copyWebhookButton"),
@@ -178,9 +180,21 @@ async function refreshRestaurantAccess() {
 }
 
 function setRestaurantWorkspaceVisible(isVisible) {
-  restaurantRefs.createSection.classList.toggle("hidden", isVisible);
-  restaurantRefs.workspace.classList.toggle("hidden", !isVisible);
-  restaurantRefs.logoutButton.classList.toggle("hidden", !isVisible);
+  const isLoggedIn = !!restaurantState.token;
+  const hasRestaurant = isVisible; // isVisible is true when restaurants array is not empty
+  
+  restaurantRefs.workspace.classList.toggle("hidden", !hasRestaurant);
+  restaurantRefs.logoutButton.classList.toggle("hidden", !isLoggedIn);
+  restaurantRefs.createSection.classList.toggle("hidden", !(isLoggedIn && !hasRestaurant));
+  
+  if (restaurantRefs.accessForm) {
+    const loginSection = restaurantRefs.accessForm.closest('.topbar');
+    if (loginSection) {
+      loginSection.classList.toggle("hidden", isLoggedIn);
+    }
+  }
+  
+  document.body.classList.toggle("app-unauthenticated", !isLoggedIn);
 }
 
 function syncRestaurantWorkspaceCards() {
@@ -1762,7 +1776,6 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
     phone: formData.get("phone"),
     customerNote: formData.get("customerNote"),
     paymentMethod: "Panel Kaydi",
-    status: "preparing",
   };
 
   if (!restaurantRefs.packageImageInput || restaurantRefs.packageImageInput.files.length === 0) {
@@ -1916,3 +1929,57 @@ api("/api/bootstrap")
 
 window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);
 
+// Report Table Loader
+async function loadRestaurantReports() {
+  if (!restaurantRefs.reportTableBody) return;
+  
+  restaurantRefs.reportTableBody.innerHTML = `<tr><td colspan="6" style="text-align: center;">Raporlar yükleniyor...</td></tr>`;
+  
+  try {
+    const data = await api("/api/restaurant/reports/daily", {
+      method: "GET",
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+    });
+    
+    // api() wrapper directly returns JSON payload (throws on error), so if it succeeds, data is our payload.
+    
+    if (!data.reports || data.reports.length === 0) {
+      restaurantRefs.reportTableBody.innerHTML = `<tr><td colspan="6" style="text-align: center;">Geçmişe dönük gün sonu verisi bulunamadı.</td></tr>`;
+      return;
+    }
+    
+    const formatTRY = (val) => new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(val || 0);
+    
+    const rowsHTML = data.reports.map(r => `
+      <tr>
+        <td><strong>${r.date}</strong></td>
+        <td style="text-align: center;">${r.package_count} Paket</td>
+        <td style="text-align: right; color: #4ade80;">${formatTRY(r.cash_revenue)}</td>
+        <td style="text-align: right; color: #60a5fa;">${formatTRY(r.card_revenue)}</td>
+        <td style="text-align: right; color: #a78bfa;">${formatTRY(r.online_revenue)}</td>
+        <td style="text-align: right; font-weight: 700;">${formatTRY(r.total_revenue)}</td>
+      </tr>
+    `).join("");
+    
+    restaurantRefs.reportTableBody.innerHTML = rowsHTML;
+    
+  } catch (err) {
+    console.error("loadRestaurantReports error", err);
+    restaurantRefs.reportTableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--coral);">Bağlantı hatası oluştu.</td></tr>`;
+  }
+}
+
+// Hook up event listeners for reports
+const reportsTab = document.querySelector('.tree-link[data-section="restaurantWorkspace_reports"]');
+if (reportsTab) {
+  reportsTab.addEventListener('click', () => {
+    loadRestaurantReports();
+  });
+}
+
+if (restaurantRefs.printReportButton) {
+  restaurantRefs.printReportButton.addEventListener('click', () => {
+    window.print();
+  });
+}

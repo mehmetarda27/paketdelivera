@@ -2,25 +2,25 @@
   --bg: #090d12;
   --bg-elevated: #111821;
   --bg-soft: #161f29;
-  --panel: rgba(18, 25, 34, 0.84);
-  --panel-strong: rgba(12, 18, 26, 0.94);
-  --panel-soft: rgba(28, 38, 50, 0.78);
-  --surface: rgba(255, 255, 255, 0.05);
-  --surface-strong: rgba(255, 255, 255, 0.08);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --ink: #eef3f8;
-  --ink-soft: #c5d0dc;
-  --muted: #8f9baa;
-  --coral: #7bc5ff;
-  --coral-strong: #419df0;
-  --teal: #68dfd4;
-  --teal-strong: #2eb6aa;
-  --gold: #f0c977;
-  --gold-strong: #d7a947;
-  --green: #57d1a2;
-  --blue: #72b9ff;
-  --red: #ff7d7d;
+  --panel: rgba(30, 41, 59, 0.65);
+  --panel-strong: rgba(15, 23, 42, 0.80);
+  --panel-soft: rgba(51, 65, 85, 0.55);
+  --surface: rgba(255, 255, 255, 0.08);
+  --surface-strong: rgba(255, 255, 255, 0.15);
+  --line: rgba(255, 255, 255, 0.15);
+  --line-strong: rgba(255, 255, 255, 0.25);
+  --ink: #ffffff;
+  --ink-soft: #e2e8f0;
+  --muted: #94a3b8;
+  --coral: #ff7b93;
+  --coral-strong: #ff416c;
+  --teal: #00f2fe;
+  --teal-strong: #4facfe;
+  --gold: #ffcf54;
+  --gold-strong: #ffb300;
+  --green: #00f5a0;
+  --blue: #00d2ff;
+  --red: #ff3366;
   --shadow-soft: 0 18px 44px rgba(0, 0, 0, 0.22);
   --shadow: 0 28px 68px rgba(0, 0, 0, 0.34);
   --shadow-strong: 0 36px 90px rgba(0, 0, 0, 0.42);
@@ -54,22 +54,22 @@ body {
 }
 
 body.theme-admin {
-  --theme-accent: var(--coral);
-  --theme-accent-strong: var(--coral-strong);
-  --theme-accent-soft: rgba(242, 156, 102, 0.2);
+  --theme-accent: var(--teal);
+  --theme-accent-strong: var(--teal-strong);
+  --theme-accent-soft: rgba(0, 242, 254, 0.2);
   background:
-    radial-gradient(circle at top left, rgba(123, 197, 255, 0.18), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(104, 223, 212, 0.1), transparent 24%),
+    radial-gradient(circle at top left, rgba(0, 242, 254, 0.25), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(79, 172, 254, 0.2), transparent 28%),
     linear-gradient(145deg, #07101b 0%, #0e1827 36%, #162335 100%);
 }
 
 body.theme-restaurant {
   --theme-accent: var(--coral);
   --theme-accent-strong: var(--coral-strong);
-  --theme-accent-soft: rgba(242, 156, 102, 0.2);
+  --theme-accent-soft: rgba(255, 65, 108, 0.2);
   background:
-    radial-gradient(circle at top left, rgba(104, 223, 212, 0.14), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(123, 197, 255, 0.12), transparent 24%),
+    radial-gradient(circle at top left, rgba(255, 65, 108, 0.25), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(255, 123, 147, 0.2), transparent 28%),
     linear-gradient(145deg, #08111b 0%, #0f1b28 36%, #162536 100%);
 }
 
@@ -2754,4 +2754,265 @@ body.theme-courier {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* --- SIDEBAR TREE LAYOUT (Glassmorphic) --- */
+.app-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden; /* Parent prevents body scroll */
+}
+
+.glass-sidebar {
+  position: relative;
+  background: var(--panel-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px;
+  z-index: 100;
+}
+
+/* Authentication State Layout */
+body.app-unauthenticated .app-layout {
+  display: block;
+}
+body.app-unauthenticated .glass-sidebar {
+  display: none !important;
+}
+body.app-unauthenticated .glass-content-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px;
+}
+body.app-unauthenticated .login-form {
+  max-width: 440px;
+  width: 100%;
+}
+body.app-unauthenticated .topbar {
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+}
+.workspace-hero {
+  display: none !important;
+}
+
+/* Report Table */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+}
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0;
+}
+.report-table th, .report-table td {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.report-table th {
+  font-weight: 600;
+  color: var(--teal);
+  background: rgba(0, 0, 0, 0.02);
+}
+.theme-dark .report-table th {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Print Styles */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .app-layout {
+    display: block !important;
+  }
+  .glass-sidebar, .topbar, button, .tree-menu {
+    display: none !important;
+  }
+  .glass-content-area {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .glass-panel {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  #restaurantPrintArea {
+    display: block !important;
+    width: 100% !important;
+  }
+  .print-only-header {
+    display: block !important;
+    text-align: center;
+    margin-bottom: 30px;
+  }
+  .print-only-header h2 {
+    font-size: 24px;
+    margin-bottom: 5px;
+  }
+  .report-table th {
+    color: #000 !important;
+    border-bottom: 2px solid #000;
+  }
+  .report-table td {
+    border-bottom: 1px solid #ccc;
+  }
+}
+
+.sidebar-brand {
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar-brand h1 {
+  font-size: 1.2rem;
+  font-weight: 800;
+  margin: 0;
+  background: linear-gradient(90deg, #fff, var(--theme-accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sidebar-brand p {
+  font-size: 0.8rem;
+  color: var(--theme-accent-strong);
+  margin: 4px 0 0 0;
+  font-weight: 500;
+}
+
+.tree-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tree-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s, color 0.2s;
+  font-weight: 600;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.tree-header:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.tree-header.active-header {
+  color: var(--theme-accent);
+}
+
+.tree-header .tree-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.8;
+  transition: transform 0.2s;
+}
+
+.tree-header.open .tree-icon.chevron {
+  transform: rotate(90deg);
+}
+
+.tree-children {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 28px; /* Indent */
+  animation: fadeIn 0.2s ease;
+}
+
+.tree-group.open .tree-children {
+  display: flex;
+  margin-top: 4px;
+}
+
+.tree-link {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: background 0.2s, color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tree-link:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.tree-link.active-link {
+  background: var(--theme-accent-soft);
+  color: var(--theme-accent-strong);
+  font-weight: 500;
+}
+
+.tree-link .link-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.7;
+}
+
+.glass-content-area {
+  background: transparent;
+  overflow-y: auto;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.content-section {
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.content-section.active-section {
+  display: contents; /* Alternatively display: block, but contents allows grid/flex of parent if needed. Let's use block and ensure inner grid is maintained. Actually, since the inner items are mostly grids or generic sections, display: flex + flex-col is safer. */
+}
+
+.content-section.active-section {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Adjust topbar in glass layout */
+.glass-content-area .topbar {
+  margin-bottom: 0;
 }

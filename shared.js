@@ -155,6 +155,10 @@ function formatCurrency(value) {
   }).format(Number(value || 0));
 }
 
+function formatMoney(amount) {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(amount);
+}
+
 function formatTimeAgo(value) {
   if (!value) {
     return "Hen\u00fcz yok";
@@ -431,3 +435,46 @@ function connectLiveStream(path, token, handlers = {}) {
     },
   };
 }
+
+// Tree Menu Interaction Logic (Moved from inline HTML to avoid CSP/blocking issues)
+document.addEventListener("DOMContentLoaded", function() {
+  // Setup tree toggles
+  const headers = document.querySelectorAll('.tree-header');
+  headers.forEach(header => {
+    header.addEventListener('click', function(e) {
+      const group = this.closest('.tree-group');
+      if (group) {
+        if (group.classList.contains('open')) {
+          group.classList.remove('open');
+          this.classList.remove('active-header');
+        } else {
+          group.classList.add('open');
+          this.classList.add('active-header');
+        }
+      }
+    });
+  });
+
+  // Setup section switches
+  const links = document.querySelectorAll('.tree-link[data-section]');
+  links.forEach(link => {
+    link.addEventListener('click', function(e) {
+      const sectionId = this.getAttribute('data-section');
+      
+      document.querySelectorAll('.tree-link').forEach(l => l.classList.remove('active-link'));
+      this.classList.add('active-link');
+      
+      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active-section'));
+      
+      const target = document.getElementById(sectionId);
+      if (target) {
+        target.classList.add('active-section');
+      }
+    });
+  });
+  
+  // Ensure lucide renders icons (run it here as a fallback)
+  if (window.lucide && window.lucide.createIcons) {
+    window.lucide.createIcons();
+  }
+});

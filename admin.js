@@ -121,6 +121,7 @@ function renderPlatformChecks() {
 function setAdminLoggedIn(isLoggedIn) {
   adminRefs.loginPanel.classList.toggle("hidden", isLoggedIn);
   adminRefs.workspace.classList.toggle("hidden", !isLoggedIn);
+  document.body.classList.toggle("app-unauthenticated", !isLoggedIn);
 }
 
 function syncAdminWorkspaceCards() {

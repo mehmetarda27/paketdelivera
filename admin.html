@@ -11,11 +11,117 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=8">
 </head>
-<body class="theme-admin">
-  <div class="role-shell wide-shell">
-    <main class="role-main expanded-main">
+<body class="theme-admin app-unauthenticated">
+  <div class="app-layout">
+    
+    <aside class="glass-sidebar">
+      <div class="sidebar-brand">
+        <h1>Delivera Express</h1>
+        <p>Admin Paneli</p>
+      </div>
+      <div class="tree-menu">
+        <div class="tree-group open">
+          <div class="tree-header active-header">
+            <i data-lucide="layout-dashboard" class="tree-icon"></i>
+            <span>Dashboard</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link active-link" data-section="adminWorkspace_dashboard">
+              <i data-lucide="activity" class="link-icon"></i>
+              Command Center
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="package" class="tree-icon"></i>
+            <span>Operasyon</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="adminWorkspace_ops_active">
+              <i data-lucide="zap" class="link-icon"></i>
+              Aktif Siparişler
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_ops_waiting">
+              <i data-lucide="clock" class="link-icon"></i>
+              Atama Bekleyenler & Kuryeler
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="briefcase" class="tree-icon"></i>
+            <span>Yönetim</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="adminWorkspace_management_pools">
+              <i data-lucide="database" class="link-icon"></i>
+              Havuz Yönetimi
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_management_announcements">
+              <i data-lucide="megaphone" class="link-icon"></i>
+              Duyuru Paneli
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="calendar" class="tree-icon"></i>
+            <span>Planlama & Finans</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="adminWorkspace_planning_shifts">
+              <i data-lucide="calendar-clock" class="link-icon"></i>
+              Vardiya Planlama
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_planning_eod">
+              <i data-lucide="clipboard-check" class="link-icon"></i>
+              Kurye Gün Sonu
+            </div>
+          </div>
+        </div>
+        <div class="tree-group">
+          <div class="tree-header">
+            <i data-lucide="settings" class="tree-icon"></i>
+            <span>Sistem & Loglar</span>
+            <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
+          </div>
+          <div class="tree-children">
+            <div class="tree-link" data-section="adminWorkspace_system_notifications">
+              <i data-lucide="bell" class="link-icon"></i>
+              Bildirim Merkezi
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_system_webhooks">
+              <i data-lucide="webhook" class="link-icon"></i>
+              Webhook Logları
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_system_health">
+              <i data-lucide="heart-pulse" class="link-icon"></i>
+              Platform Sağlığı
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_system_audit">
+              <i data-lucide="shield-alert" class="link-icon"></i>
+              Audit Logları
+            </div>
+          </div>
+        </div>
+      </div>
+    
+      <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--line);">
+        <button id="adminLogoutButton" class="ghost-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; border: none; background: rgba(255,42,95,0.1); color: var(--coral); font-weight: 600;" type="button">
+          <i data-lucide="log-out" style="width: 18px; height: 18px;"></i>
+          Çıkış Yap
+        </button>
+      </div>
+    </aside>
+    <main class="glass-content-area">
+
       <section class="topbar glass-panel workspace-hero">
         <div>
           <div class="brand-mark">Delivera Express</div>
@@ -46,8 +152,10 @@
         </form>
       </section>
 
-      <section id="adminWorkspace" class="hidden">
-      <section class="topbar glass-panel">
+      
+      <section id="adminWorkspace" class="hidden" style="display: flex; flex-direction: column; width: 100%;">
+        <div id="adminWorkspace_dashboard" class="content-section active-section">
+          <section class="topbar glass-panel">
         <div>
           <p class="eyebrow accent-teal">Command Center</p>
           <h2>Atama motoru, Mersin bölge yapısı ve kurye havuzu.</h2>
@@ -57,11 +165,10 @@
             Restoran Seçimi
             <select id="restaurantFilter"></select>
           </label>
-          <button id="adminLogoutButton" class="ghost-btn" type="button">Çıkış Yap</button>
+          
         </div>
       </section>
-
-      <section class="kpi-grid">
+          <section class="kpi-grid">
         <article class="metric-card">
           <span>Aktif Sipariş</span>
           <strong id="activeCouriers">0</strong>
@@ -107,8 +214,7 @@
           <strong id="lastSystemError">-</strong>
         </article>
       </section>
-
-      <section class="glass-panel">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-teal">Restoran Odağı</p>
@@ -118,41 +224,70 @@
         </div>
         <div id="restaurantStatsBoard" class="zone-board"></div>
       </section>
-
-      <section class="glass-panel">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Bölge Haritası</p>
+              <h3>Bölge Bazlı Dağılım</h3>
+            </div>
+          </div>
+          <div id="zoneBoard" class="zone-board"></div>
+        </article>
+            <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Yoğunluk Uyarıları</p>
+              <h3>Bölge Bazlı Operasyon Alarmı</h3>
+            </div>
+          </div>
+          <div id="zoneAlertList" class="stack-list"></div>
+        </article>
+          </section>
+        </div>
+        
+        <div id="adminWorkspace_ops_active" class="content-section">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Duyuru Paneli</p>
-            <h3>Tum kuryelere kalici operasyon duyurusu gonder</h3>
+            <p class="eyebrow accent-teal">Aktif Siparişler</p>
+            <h3 id="packagePanelTitle">Canlı Operasyon Siparişleri</h3>
           </div>
-          <button id="clearAnnouncementsButton" class="ghost-btn" type="button">Tumunu Sifirla</button>
-        </div>
-        <form id="announcementForm" class="form-grid">
-          <label>
-            Baslik
-            <input name="title" type="text" placeholder="Onemli operasyon duyurusu" required>
-          </label>
-          <label class="full-width">
-            Mesaj
-            <textarea name="message" rows="3" placeholder="Tum online kuryeler Mezitli yogunluguna destek versin." required></textarea>
-          </label>
-          <button class="primary-btn full-width" type="submit">Duyuruyu Yayinla</button>
-        </form>
-        <div id="announcementList" class="stack-list compact-stack-list"></div>
-      </section>
-
-      <section class="glass-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow accent-teal">Bildirim Merkezi</p>
-            <h3>Son operasyon bildirimleri</h3>
+          <div class="card-actions">
+            <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alıcı, kurye ara...">
           </div>
         </div>
-        <div id="adminNotificationCenter" class="stack-list compact-stack-list"></div>
+        <div id="packageList" class="package-list"></div>
       </section>
-
-      <section class="dashboard-grid">
+        </div>
+        
+        <div id="adminWorkspace_ops_waiting" class="content-section">
+          <section class="dashboard-grid">
         <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Atama Bekleyenler</p>
+              <h3>Havuzda Bekleyen Siparişler</h3>
+            </div>
+          </div>
+          <div id="awaitingPackageList" class="stack-list"></div>
+        </article>
+
+        <article class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow accent-teal">Aktif Kuryeler</p>
+              <h3>Sahadaki Kurye Durumu</h3>
+            </div>
+          </div>
+          <div id="activeCourierOpsList" class="stack-list"></div>
+        </article>
+      </section>
+        </div>
+        
+        <div id="adminWorkspace_management_pools" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-teal">Restoran Havuzu</p>
@@ -191,8 +326,7 @@
             <button class="primary-btn full-width" type="submit">Restoran Ekle</button>
           </form>
         </article>
-
-        <article class="glass-panel">
+            <article class="glass-panel">
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-teal">Kurye Havuzu</p>
@@ -232,63 +366,35 @@
           </form>
           <div id="courierList" class="stack-list"></div>
         </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-teal">Bölge Haritası</p>
-              <h3>Bölge Bazlı Dağılım</h3>
-            </div>
-          </div>
-          <div id="zoneBoard" class="zone-board"></div>
-        </article>
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-teal">Yoğunluk Uyarıları</p>
-              <h3>Bölge Bazlı Operasyon Alarmı</h3>
-            </div>
-          </div>
-          <div id="zoneAlertList" class="stack-list"></div>
-        </article>
-      </section>
-
-      <section class="glass-panel">
+          </section>
+        </div>
+        
+        <div id="adminWorkspace_management_announcements" class="content-section">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow accent-teal">Aktif Siparişler</p>
-            <h3 id="packagePanelTitle">Canlı Operasyon Siparişleri</h3>
+            <p class="eyebrow accent-teal">Duyuru Paneli</p>
+            <h3>Tum kuryelere kalici operasyon duyurusu gonder</h3>
           </div>
-          <div class="card-actions">
-            <input id="searchInput" class="search-input" type="search" placeholder="Platform, restoran, alıcı, kurye ara...">
-          </div>
+          <button id="clearAnnouncementsButton" class="ghost-btn" type="button">Tumunu Sifirla</button>
         </div>
-        <div id="packageList" class="package-list"></div>
+        <form id="announcementForm" class="form-grid">
+          <label>
+            Baslik
+            <input name="title" type="text" placeholder="Onemli operasyon duyurusu" required>
+          </label>
+          <label class="full-width">
+            Mesaj
+            <textarea name="message" rows="3" placeholder="Tum online kuryeler Mezitli yogunluguna destek versin." required></textarea>
+          </label>
+          <button class="primary-btn full-width" type="submit">Duyuruyu Yayinla</button>
+        </form>
+        <div id="announcementList" class="stack-list compact-stack-list"></div>
       </section>
-
-      <section class="dashboard-grid">
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-teal">Atama Bekleyenler</p>
-              <h3>Havuzda Bekleyen Siparişler</h3>
-            </div>
-          </div>
-          <div id="awaitingPackageList" class="stack-list"></div>
-        </article>
-
-        <article class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-teal">Aktif Kuryeler</p>
-              <h3>Sahadaki Kurye Durumu</h3>
-            </div>
-          </div>
-          <div id="activeCourierOpsList" class="stack-list"></div>
-        </article>
-      </section>
-
-      <section class="dashboard-grid">
+        </div>
+        
+        <div id="adminWorkspace_planning_shifts" class="content-section">
+          <section class="dashboard-grid">
         <article class="glass-panel">
           <div class="panel-head">
             <div>
@@ -329,8 +435,34 @@
           <div id="cashReconciliationList" class="stack-list"></div>
         </article>
       </section>
-
-      <section class="glass-panel">
+        </div>
+        
+        <div id="adminWorkspace_planning_eod" class="content-section">
+          <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Kurye Gün Sonu</p>
+            <h3>Gün Sonu Ciro ve Teslimat Raporları</h3>
+          </div>
+        </div>
+        <div id="courierDailyReportList" class="stack-list"></div>
+      </section>
+        </div>
+        
+        <div id="adminWorkspace_system_notifications" class="content-section">
+          <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Bildirim Merkezi</p>
+            <h3>Son operasyon bildirimleri</h3>
+          </div>
+        </div>
+        <div id="adminNotificationCenter" class="stack-list compact-stack-list"></div>
+      </section>
+        </div>
+        
+        <div id="adminWorkspace_system_webhooks" class="content-section">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-teal">Webhook Logları</p>
@@ -339,7 +471,10 @@
         </div>
         <div id="webhookLogList" class="stack-list"></div>
       </section>
-      <section class="glass-panel">
+        </div>
+        
+        <div id="adminWorkspace_system_health" class="content-section">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-teal">Platform Sağlığı</p>
@@ -349,7 +484,10 @@
         <div id="platformHealthSummary" class="zone-board"></div>
         <div id="platformHealthList" class="stack-list"></div>
       </section>
-      <section class="glass-panel">
+        </div>
+        
+        <div id="adminWorkspace_system_audit" class="content-section">
+          <section class="glass-panel">
         <div class="panel-head">
           <div>
             <p class="eyebrow accent-teal">Audit Logları</p>
@@ -358,16 +496,7 @@
         </div>
         <div id="auditLogList" class="stack-list"></div>
       </section>
-
-      <section class="glass-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow accent-teal">Kurye Gün Sonu</p>
-            <h3>Gün Sonu Ciro ve Teslimat Raporları</h3>
-          </div>
         </div>
-        <div id="courierDailyReportList" class="stack-list"></div>
-      </section>
       </section>
     </main>
   </div>
@@ -415,10 +544,12 @@
     </article>
   </template>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-  <script src="/shared.js"></script>
-  <script src="/admin.js"></script>
+  <script src="/shared.js?v=8"></script>
+  <script src="/admin.js?v=8"></script>
   <script>
     window.addEventListener("load", () => window.lucide?.createIcons());
   </script>
 </body>
+
+
 </html>
