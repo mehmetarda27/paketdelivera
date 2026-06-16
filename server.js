@@ -19,6 +19,11 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+
+const uploadsDir = path.resolve(__dirname, "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir);
+}
 const { URL } = require("url");
 const dbFacade = require("./db");
 const { getDb, resolveDbFile } = dbFacade;
@@ -1049,15 +1054,7 @@ function validatePackageDraft(payload) {
     errors.push("restaurant_id zorunludur.");
   }
 
-  if (!trimmed(payload.deliveryAddress) || trimmed(payload.deliveryAddress).length < 8) {
-    errors.push("Teslimat adresi en az 8 karakter olmali.");
-  }
-
-  if (!trimmed(payload.packageType) || trimmed(payload.packageType).length < 2) {
-    errors.push("Paket tipi en az 2 karakter olmali.");
-  }
-
-  if (trimmed(payload.packageType).length > 60) {
+  if (payload.packageType && trimmed(payload.packageType).length > 60) {
     errors.push("Paket tipi en fazla 60 karakter olabilir.");
   }
 
@@ -1066,13 +1063,15 @@ function validatePackageDraft(payload) {
     errors.push("Paket tutari 0'dan buyuk olmali.");
   }
 
-  if (!trimmed(payload.customerName) || trimmed(payload.customerName).length < 2) {
-    errors.push("Musteri adi zorunludur.");
+  if (payload.customerName && trimmed(payload.customerName).length < 2) {
+    errors.push("Musteri adi en az 2 karakter olmali.");
   }
 
-  const phoneDigits = trimmed(payload.phone).replace(/\D/g, "");
-  if (phoneDigits.length < 10) {
-    errors.push("Telefon numarasi en az 10 haneli olmali.");
+  if (payload.phone) {
+    const phoneDigits = trimmed(payload.phone).replace(/\D/g, "");
+    if (phoneDigits.length > 0 && phoneDigits.length < 10) {
+      errors.push("Telefon numarasi en az 10 haneli olmali.");
+    }
   }
 
   return errors;
@@ -1088,7 +1087,7 @@ function normalizeQuickPasteText(value) {
 function findQuickPasteLabeledValue(text, labels = []) {
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]\\s*(.+)`, "i"));
+    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]?\\s*(.+)`, "i"));
     if (match?.[1]) {
       const value = match[1].split("\n")[0].trim();
       if (value) {
@@ -1162,15 +1161,15 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
           ? "platform_extension"
           : "platform_manual")
       : "external_manual",
-    deliveryAddress: draft.deliveryAddress,
-    packageType: draft.packageType,
+    deliveryAddress: draft.deliveryAddress || "-",
+    packageType: draft.packageType || "Standart Paket",
     sourcePlatform: targetSourcePlatform,
     externalOrderNo: externalOrderId,
     externalOrderId,
     recipient: draft.customerName || restaurantRow.name,
     phone: draft.phone || "-",
-    address: draft.deliveryAddress,
-    customerAddress: draft.customerAddress || draft.deliveryAddress,
+    address: draft.deliveryAddress || "-",
+    customerAddress: draft.customerAddress || draft.deliveryAddress || "-",
     customerLatitude: null,
     customerLongitude: null,
     zone: restaurantRow.zone,
@@ -2549,7 +2548,7 @@ function readRequestBody(req) {
 
     req.on("data", (chunk) => {
       raw += chunk.toString();
-      if (raw.length > 1_000_000) {
+      if (raw.length > 15_000_000) {
         reject(httpError(413, "Payload cok buyuk."));
       }
     });
@@ -7089,6 +7088,20 @@ async function handleApi(req, res, pathname) {
     }
 
     const pkg = buildRestaurantPackageRecord(restaurantRow, draft);
+    
+    if (body.photoBase64) {
+      try {
+        const base64Data = body.photoBase64.replace(/^data:image\/\w+;base64,/, "");
+        const fileName = `photo_${pkg.trackingNo}.jpg`;
+        const filePath = path.resolve(__dirname, "uploads", fileName);
+        fs.writeFileSync(filePath, base64Data, "base64");
+        pkg.rawPayload = pkg.rawPayload || {};
+        pkg.rawPayload.photoUrl = `/uploads/${fileName}`;
+      } catch (err) {
+        logger.error("Failed to save photoBase64", err);
+      }
+    }
+
     createPackageRecord(pkg, pkg.packageType);
 
     rebalancePackages();
@@ -7189,6 +7202,20 @@ async function handleApi(req, res, pathname) {
     const pkg = buildRestaurantPackageRecord(restaurantRow, draft, {
       externalOrderId: dedupeKey || undefined,
     });
+    
+    if (body.photoBase64) {
+      try {
+        const base64Data = body.photoBase64.replace(/^data:image\/\w+;base64,/, "");
+        const fileName = `photo_${pkg.trackingNo}.jpg`;
+        const filePath = path.resolve(__dirname, "uploads", fileName);
+        fs.writeFileSync(filePath, base64Data, "base64");
+        pkg.rawPayload = pkg.rawPayload || {};
+        pkg.rawPayload.photoUrl = `/uploads/${fileName}`;
+      } catch (err) {
+        logger.error("Failed to save photoBase64 in quick-paste", err);
+      }
+    }
+
     createPackageRecord(pkg, pkg.packageType);
     rebalancePackages();
 

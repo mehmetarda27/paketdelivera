@@ -1,4 +1,4 @@
-﻿const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
+const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
 const RESTAURANT_ID_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_KEY = "deliveraRestaurantApiKey";
@@ -61,19 +61,16 @@ const restaurantRefs = {
   integrationWizardWebhook: document.getElementById("integrationWizardWebhook"),
   integrationWizardStatus: document.getElementById("integrationWizardStatus"),
   copyWebhookButton: document.getElementById("copyWebhookButton"),
-  quickPasteButton: document.getElementById("quickPasteButton"),
-  quickPasteModal: document.getElementById("quickPasteModal"),
-  quickPasteClose: document.getElementById("quickPasteClose"),
-  quickPasteRawText: document.getElementById("quickPasteRawText"),
-  quickPasteParseButton: document.getElementById("quickPasteParseButton"),
-  quickPasteCustomerName: document.getElementById("quickPasteCustomerName"),
-  quickPastePhone: document.getElementById("quickPastePhone"),
-  quickPasteAddress: document.getElementById("quickPasteAddress"),
-  quickPastePaymentMethod: document.getElementById("quickPastePaymentMethod"),
-  quickPastePackageType: document.getElementById("quickPastePackageType"),
-  quickPasteOrderAmount: document.getElementById("quickPasteOrderAmount"),
-  quickPasteCustomerNote: document.getElementById("quickPasteCustomerNote"),
-  quickPasteCreateButton: document.getElementById("quickPasteCreateButton"),
+  mainQuickPasteRawText: document.getElementById("mainQuickPasteRawText"),
+  mainQuickPasteParseButton: document.getElementById("mainQuickPasteParseButton"),
+  packageImageInput: document.getElementById("packageImageInput"),
+  packageImagePreview: document.getElementById("packageImagePreview"),
+  cameraModal: document.getElementById("cameraModal"),
+  openCameraButton: document.getElementById("openCameraButton"),
+  closeCameraButton: document.getElementById("closeCameraButton"),
+  cameraVideo: document.getElementById("cameraVideo"),
+  captureCameraButton: document.getElementById("captureCameraButton"),
+  cameraCanvas: document.getElementById("cameraCanvas"),
 };
 
 function restaurantAuthHeaders() {
@@ -695,14 +692,6 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
   window.setTimeout(() => win.print(), 150);
 }
 
-function setQuickPasteModalVisible(isVisible) {
-  if (!restaurantRefs.quickPasteModal) {
-    return;
-  }
-  restaurantRefs.quickPasteModal.classList.toggle("hidden", !isVisible);
-  restaurantRefs.quickPasteModal.setAttribute("aria-hidden", isVisible ? "false" : "true");
-}
-
 function normalizedPasteText(value) {
   return String(value || "")
     .replace(/\r/g, "")
@@ -713,7 +702,7 @@ function normalizedPasteText(value) {
 function findLabeledValue(text, labels = []) {
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]\\s*(.+)`, "i"));
+    const match = text.match(new RegExp(`${escaped}\\s*[:\\-]?\\s*(.+)`, "i"));
     if (match?.[1]) {
       const value = match[1].split("\n")[0].trim();
       if (value) {
@@ -770,29 +759,6 @@ function parseQuickPasteOrder(rawText) {
   };
 }
 
-function fillQuickPasteFields(parsed) {
-  if (restaurantRefs.quickPasteCustomerName) {
-    restaurantRefs.quickPasteCustomerName.value = parsed.customerName || "";
-  }
-  if (restaurantRefs.quickPastePhone) {
-    restaurantRefs.quickPastePhone.value = parsed.phone || "";
-  }
-  if (restaurantRefs.quickPasteAddress) {
-    restaurantRefs.quickPasteAddress.value = parsed.customerAddress || "";
-  }
-  if (restaurantRefs.quickPastePaymentMethod) {
-    restaurantRefs.quickPastePaymentMethod.value = parsed.paymentMethod || "";
-  }
-  if (restaurantRefs.quickPasteCustomerNote) {
-    restaurantRefs.quickPasteCustomerNote.value = parsed.customerNote || "";
-  }
-  if (restaurantRefs.quickPastePackageType) {
-    restaurantRefs.quickPastePackageType.value = parsed.packageType || "";
-  }
-  if (restaurantRefs.quickPasteOrderAmount) {
-    restaurantRefs.quickPasteOrderAmount.value = parsed.orderAmount || "";
-  }
-}
 
 function getCurrentRestaurant(data) {
   return data.restaurants.find((item) => item.id === restaurantState.selectedRestaurantId) || data.restaurants[0] || null;
@@ -1717,71 +1683,25 @@ restaurantRefs.quickPasteModal?.addEventListener("click", (event) => {
   }
 });
 
-restaurantRefs.quickPasteParseButton?.addEventListener("click", () => {
-  const parsed = parseQuickPasteOrder(restaurantRefs.quickPasteRawText?.value || "");
-  fillQuickPasteFields(parsed);
-  showToast("Siparis metni ayiklandi. Eksik alan varsa duzeltebilirsin.");
-});
-
-restaurantRefs.quickPasteCreateButton?.addEventListener("click", async () => {
-  if (!restaurantState.token) {
-    showToast("Once restoran girisi yapmalisin.", "error");
+restaurantRefs.mainQuickPasteParseButton?.addEventListener("click", () => {
+  const rawText = restaurantRefs.mainQuickPasteRawText?.value || "";
+  if (!rawText.trim()) {
+    showToast("Lutfen once siparis metnini yapistirin.", "error");
     return;
   }
-
-  const currentRestaurant = restaurantState.data?.restaurants?.[0];
-  if (!currentRestaurant) {
-    showToast("Aktif restoran oturumu bulunamadi.", "error");
-    return;
+  const parsed = parseQuickPasteOrder(rawText);
+  
+  if (restaurantRefs.packageForm) {
+    const elements = restaurantRefs.packageForm.elements;
+    if (elements["customerName"]) elements["customerName"].value = parsed.customerName || "";
+    if (elements["phone"]) elements["phone"].value = parsed.phone || "";
+    if (elements["deliveryAddress"]) elements["deliveryAddress"].value = parsed.customerAddress || "";
+    if (elements["customerNote"]) elements["customerNote"].value = parsed.customerNote || "";
+    if (parsed.packageType && elements["packageType"]) elements["packageType"].value = parsed.packageType;
+    if (parsed.orderAmount && elements["orderAmount"]) elements["orderAmount"].value = parsed.orderAmount;
   }
-
-  const payload = {
-    restaurantId: currentRestaurant.id,
-    deliveryAddress: restaurantRefs.quickPasteAddress?.value || "",
-    packageType: restaurantRefs.quickPastePackageType?.value || "Hizli Platform Siparisi",
-    orderAmount: restaurantRefs.quickPasteOrderAmount?.value || "",
-    customerName: restaurantRefs.quickPasteCustomerName?.value || "",
-    phone: restaurantRefs.quickPastePhone?.value || "",
-    customerAddress: restaurantRefs.quickPasteAddress?.value || "",
-    paymentMethod: restaurantRefs.quickPastePaymentMethod?.value || "Panel Kaydi",
-    customerNote: restaurantRefs.quickPasteCustomerNote?.value || "",
-    source: "platform_manual",
-    status: "preparing",
-    sourcePlatform: "Hizli Yapistir",
-    rawText: restaurantRefs.quickPasteRawText?.value || "",
-  };
-
-  if (!payload.deliveryAddress.trim()) {
-    showToast("Musteri adresi gerekli.", "error");
-    return;
-  }
-  if (!payload.orderAmount || Number(payload.orderAmount) <= 0) {
-    showToast("Tutar bilgisi gerekli.", "error");
-    return;
-  }
-
-  const data = await api("/api/restaurant/packages", {
-    method: "POST",
-    headers: restaurantAuthHeaders(),
-    retryWithRefresh: refreshRestaurantAccess,
-    body: JSON.stringify(payload),
-  });
-  hydrateRestaurant(data);
-  setQuickPasteModalVisible(false);
-  if (restaurantRefs.quickPasteRawText) {
-    restaurantRefs.quickPasteRawText.value = "";
-  }
-  fillQuickPasteFields({
-    customerName: "",
-    phone: "",
-    customerAddress: "",
-    paymentMethod: "",
-    customerNote: "",
-    packageType: "",
-    orderAmount: "",
-  });
-  restaurantRefs.summary.textContent = `${currentRestaurant.name} icin hizli siparis olusturuldu ve kurye atamasi denendi.`;
-  showToast("Hizli siparis kaydedildi ve kurye atamasi baslatildi.");
+  
+  showToast("Form otomatik dolduruldu. Lutfen kontrol edip Paket Olustur'a basin.");
 });
 
 restaurantRefs.logoutButton?.addEventListener("click", () => {
@@ -1833,27 +1753,54 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
   }
 
   const formData = new FormData(restaurantRefs.packageForm);
+  const payload = {
+    restaurantId: currentRestaurant.id,
+    deliveryAddress: formData.get("deliveryAddress"),
+    packageType: formData.get("packageType"),
+    orderAmount: formData.get("orderAmount"),
+    customerName: formData.get("customerName"),
+    phone: formData.get("phone"),
+    customerNote: formData.get("customerNote"),
+    paymentMethod: "Panel Kaydi",
+    status: "preparing",
+  };
+
+  if (!restaurantRefs.packageImageInput || restaurantRefs.packageImageInput.files.length === 0) {
+    showToast("Siparis fotografi zorunludur. Lutfen bir fotograf ekleyin.", "error");
+    return;
+  }
+
+  const file = restaurantRefs.packageImageInput.files[0];
+  if (file.size > 10 * 1024 * 1024) {
+    showToast("Fotograf 10MB'dan kucuk olmalidir.", "error");
+    return;
+  }
+  try {
+    payload.photoBase64 = await compressImage(file);
+  } catch (err) {
+    showToast("Fotograf islenemedi.", "error");
+    return;
+  }
+
   try {
     const data = await api("/api/restaurant/packages", {
       method: "POST",
       headers: restaurantAuthHeaders(),
       retryWithRefresh: refreshRestaurantAccess,
-      body: JSON.stringify({
-        restaurantId: currentRestaurant.id,
-        deliveryAddress: formData.get("deliveryAddress"),
-        packageType: formData.get("packageType"),
-        orderAmount: formData.get("orderAmount"),
-        customerName: formData.get("customerName"),
-        phone: formData.get("phone"),
-        customerNote: formData.get("customerNote"),
-        paymentMethod: "Panel Kaydi",
-      }),
+      body: JSON.stringify(payload),
     });
 
     restaurantRefs.packageForm.reset();
+    if (restaurantRefs.packageImagePreview) {
+      restaurantRefs.packageImagePreview.style.display = "none";
+      restaurantRefs.packageImagePreview.src = "";
+    }
+    if (restaurantRefs.mainQuickPasteRawText) {
+      restaurantRefs.mainQuickPasteRawText.value = "";
+    }
     hydrateRestaurant(data);
-    restaurantRefs.summary.textContent = `${currentRestaurant.name} icin manuel paket kaydedildi, restoran onayi bekliyor.`;
-    showToast("Manuel paket kaydedildi. Onaylayinca kurye atamasi baslar.");
+    restaurantRefs.summary.textContent = `${currentRestaurant.name} icin paket olusturuldu ve dogrudan havuza iletildi.`;
+    showToast("Paket kaydedildi ve dogrudan kurye havuzuna iletildi.");
   } catch (error) {
     restaurantRefs.summary.textContent = error.message || "Manuel paket kaydedilemedi.";
     showToast(error.message || "Manuel paket kaydedilemedi.", "error");
@@ -1875,6 +1822,73 @@ restaurantRefs.samplePaymentMethod?.addEventListener("change", () => {
     setIntegrationInfo(restaurantState.data);
   }
 });
+
+function compressImage(file, maxSize = 1200, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.round(height * (maxSize / width));
+            width = maxSize;
+          } else {
+            width = Math.round(width * (maxSize / height));
+            height = maxSize;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+    };
+    reader.onerror = reject;
+  });
+}
+
+function handleImagePreview(inputElement, previewElement) {
+  if (!inputElement || !previewElement) return;
+  inputElement.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        previewElement.src = ev.target.result;
+        previewElement.style.display = "block";
+      };
+      reader.readAsDataURL(file);
+    } else {
+      previewElement.src = "";
+      previewElement.style.display = "none";
+    }
+  });
+}
+handleImagePreview(restaurantRefs.packageImageInput, restaurantRefs.packageImagePreview);
+  
+  const cameraHiddenInput = document.getElementById("cameraHiddenInput");
+  
+  restaurantRefs.openCameraButton?.addEventListener("click", () => {
+    if (cameraHiddenInput) {
+      cameraHiddenInput.click();
+    }
+  });
+
+  cameraHiddenInput?.addEventListener("change", (e) => {
+    if (e.target.files && e.target.files.length > 0 && restaurantRefs.packageImageInput) {
+      restaurantRefs.packageImageInput.files = e.target.files;
+      restaurantRefs.packageImageInput.dispatchEvent(new Event('change'));
+      showToast("Kamera fotografi eklendi.");
+    }
+  });
 
 api("/api/bootstrap")
   .then((data) => {

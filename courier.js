@@ -685,6 +685,38 @@ function renderPackages(packages) {
     node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
+
+    const photoEl = node.querySelector(".order-photo");
+    if (pkg.rawPayload && pkg.rawPayload.photoUrl) {
+      photoEl.src = pkg.rawPayload.photoUrl;
+      photoEl.classList.remove("hidden");
+      photoEl.addEventListener("click", () => {
+        const overlay = document.createElement("div");
+        overlay.style.position = "fixed";
+        overlay.style.top = "0";
+        overlay.style.left = "0";
+        overlay.style.width = "100%";
+        overlay.style.height = "100%";
+        overlay.style.backgroundColor = "rgba(0,0,0,0.8)";
+        overlay.style.display = "flex";
+        overlay.style.alignItems = "center";
+        overlay.style.justifyContent = "center";
+        overlay.style.zIndex = "9999";
+        overlay.style.cursor = "pointer";
+        
+        const img = document.createElement("img");
+        img.src = pkg.rawPayload.photoUrl;
+        img.style.maxWidth = "90%";
+        img.style.maxHeight = "90%";
+        img.style.borderRadius = "8px";
+        img.style.boxShadow = "0 4px 12px rgba(0,0,0,0.5)";
+        
+        overlay.appendChild(img);
+        overlay.addEventListener("click", () => document.body.removeChild(overlay));
+        document.body.appendChild(overlay);
+      });
+    }
+
     const offerWindowSeconds = pkg.status === "assigned" && pkg.assignedAt
       ? Math.max(0, 25 - Math.floor((Date.now() - new Date(pkg.assignedAt).getTime()) / 1000))
       : 0;
