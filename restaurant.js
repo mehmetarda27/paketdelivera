@@ -1889,20 +1889,16 @@ function handleImagePreview(inputElement, previewElement) {
   });
 }
 handleImagePreview(restaurantRefs.packageImageInput, restaurantRefs.packageImagePreview);
-  
-  const cameraHiddenInput = document.getElementById("cameraHiddenInput");
-  
   restaurantRefs.openCameraButton?.addEventListener("click", () => {
-    if (cameraHiddenInput) {
-      cameraHiddenInput.click();
-    }
-  });
-
-  cameraHiddenInput?.addEventListener("change", (e) => {
-    if (e.target.files && e.target.files.length > 0 && restaurantRefs.packageImageInput) {
-      restaurantRefs.packageImageInput.files = e.target.files;
-      restaurantRefs.packageImageInput.dispatchEvent(new Event('change'));
-      showToast("Kamera fotografi eklendi.");
+    if (restaurantRefs.packageImageInput) {
+      // Force mobile browsers to open camera directly
+      restaurantRefs.packageImageInput.setAttribute("capture", "environment");
+      restaurantRefs.packageImageInput.click();
+      
+      // Remove the capture attribute after a short delay so manual file selection still works
+      setTimeout(() => {
+        restaurantRefs.packageImageInput.removeAttribute("capture");
+      }, 500);
     }
   });
 
