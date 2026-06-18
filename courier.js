@@ -797,11 +797,11 @@ function renderPackages(packages) {
       paymentSelect.className = "status-select";
       paymentSelect.innerHTML = [
         '<option value="">Odeme durumunu sec</option>',
-        '<option value="cash_collected">Nakit Alindi</option>',
-        '<option value="paid_online">Online Odendi</option>',
-        '<option value="payment_issue">Odeme Sorunu</option>',
+        '<option value="cash_collected">Nakit</option>',
+        '<option value="credit_card">Kredi Kartı</option>',
+        '<option value="paid_online">Online</option>',
       ].join("");
-      if (["cash_collected", "paid_online", "payment_issue"].includes(selectedPaymentStatus)) {
+      if (["cash_collected", "credit_card", "paid_online"].includes(selectedPaymentStatus)) {
         paymentSelect.value = selectedPaymentStatus;
       }
       paymentSelect.addEventListener("change", () => {

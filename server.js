@@ -158,6 +158,7 @@ const PAID_ONLINE_PAYMENT_STATUS = "paid_online";
 const CASH_EXPECTED_PAYMENT_STATUS = "cash_expected";
 const CASH_COLLECTED_PAYMENT_STATUS = "cash_collected";
 const PAYMENT_ISSUE_STATUS = "payment_issue";
+const CREDIT_CARD_PAYMENT_STATUS = "credit_card";
 const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
 const COURIER_BUSY_STATUS = "busy";
@@ -1590,7 +1591,7 @@ function canTransitionStatus(fromStatus, toStatus) {
 
 function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   const incoming = trimmed(paymentStatus).toLowerCase();
-  if ([UNPAID_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, CASH_EXPECTED_PAYMENT_STATUS, CASH_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS].includes(incoming)) {
+  if ([UNPAID_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, CASH_EXPECTED_PAYMENT_STATUS, CASH_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS, CREDIT_CARD_PAYMENT_STATUS].includes(incoming)) {
     return incoming;
   }
 

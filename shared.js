@@ -30,9 +30,10 @@ const STATUS_OPTIONS = ["pending_approval", "pending", "preparing", "awaiting_as
 
 const PAYMENT_STATUS_LABELS = {
   unpaid: "\u00d6deme Bekliyor",
-  paid_online: "Online \u00d6dendi",
+  paid_online: "Online",
   cash_expected: "Nakit Bekleniyor",
-  cash_collected: "Nakit Al\u0131nd\u0131",
+  cash_collected: "Nakit",
+  credit_card: "Kredi Kart\u0131",
   payment_issue: "\u00d6deme Sorunu",
 };
 
