@@ -12,7 +12,7 @@
     "reset:data": "node reset-runtime-data.js",
     "smoke": "node smoke-test.js",
     "db:migrate": "node scripts/migrate.js",
-    "db:backup": "node scripts/backup-sqlite.js",
+    "db:backup": "node scripts/backup.js",
     "db:restore": "node scripts/restore-sqlite.js",
     "backup:sqlite": "node scripts/backup-sqlite.js",
     "restore:sqlite": "node scripts/restore-sqlite.js",

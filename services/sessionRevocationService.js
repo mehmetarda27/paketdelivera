@@ -80,6 +80,49 @@ class SessionRevocationService {
     return true;
   }
 
+  async getSession(tableName, token) {
+    const client = await this.ensureClient();
+    if (!client) {
+      return null;
+    }
+    try {
+      const data = await client.get(`delivera:session:${tableName}:${token}`);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      this.logger?.warn?.("Redis getSession failed", { error: error.message });
+      return null;
+    }
+  }
+
+  async setSession(tableName, token, session, ttlSeconds) {
+    const client = await this.ensureClient();
+    if (!client) {
+      return false;
+    }
+    try {
+      const ttl = Math.max(60, Number(ttlSeconds || 60));
+      await client.set(`delivera:session:${tableName}:${token}`, JSON.stringify(session), { EX: ttl });
+      return true;
+    } catch (error) {
+      this.logger?.warn?.("Redis setSession failed", { error: error.message });
+      return false;
+    }
+  }
+
+  async deleteSession(tableName, token) {
+    const client = await this.ensureClient();
+    if (!client) {
+      return false;
+    }
+    try {
+      await client.del(`delivera:session:${tableName}:${token}`);
+      return true;
+    } catch (error) {
+      this.logger?.warn?.("Redis deleteSession failed", { error: error.message });
+      return false;
+    }
+  }
+
   health() {
     return {
       mode: this.redisUrl ? "redis" : "memory",

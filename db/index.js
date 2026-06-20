@@ -1,14 +1,30 @@
 const fs = require("fs");
 const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
+const { Worker } = require("worker_threads");
 
 const ROOT = path.resolve(__dirname, "..");
 let connection = null;
 let connectionFile = "";
 let activeAdapter = null;
 
+let pgWorker = null;
+let pgSab = null;
+let pgSabInts = null;
+let pgSabBuffer = null;
+
 function resolveDbFile() {
-  return path.resolve(process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE || path.join(ROOT, "delivera.sqlite"));
+  const configured = process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE;
+  if (!configured) {
+    return path.join(ROOT, "delivera.sqlite");
+  }
+
+  if (path.isAbsolute(configured)) {
+    return configured;
+  }
+
+  // Relative DB paths must stay under the project root regardless of process cwd.
+  return path.join(ROOT, configured.replace(/^\.[\\/]/, ""));
 }
 
 function clientName() {
@@ -18,6 +34,154 @@ function clientName() {
 function adapterName() {
   return clientName();
 }
+
+function getWorker() {
+  if (pgWorker) return pgWorker;
+
+  const hasPostgres = clientName() === "postgres" || clientName() === "postgresql";
+  const hasRedis = Boolean(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL);
+  
+  if (!hasPostgres && !hasRedis) {
+    return null;
+  }
+
+  // Allocate adequate shared memory (dynamically sized, minimum 16MB)
+  const MIN_SAB_SIZE = 16 * 1024 * 1024; // 16MB minimum
+  const MAX_SAB_SIZE = 256 * 1024 * 1024; // 256MB maximum
+  const configuredSize = Math.max(
+    MIN_SAB_SIZE,
+    Math.min(MAX_SAB_SIZE, Number(process.env.DELIVERA_SAB_SIZE) || MIN_SAB_SIZE)
+  );
+  
+  pgSab = new SharedArrayBuffer(configuredSize);
+  pgSabInts = new Int32Array(pgSab);
+  pgSabBuffer = new Uint8Array(pgSab);
+
+  Atomics.store(pgSabInts, 0, 0);
+
+  const workerPath = path.resolve(__dirname, "..", "scripts", "pg-worker.js");
+  pgWorker = new Worker(workerPath, {
+    workerData: { sab: pgSab },
+    env: process.env,
+  });
+
+  pgWorker.on("error", (err) => {
+    // suppress worker error to avoid crashing server on startup
+  });
+
+  return pgWorker;
+}
+
+function sendWorkerRequest(req) {
+  const worker = getWorker();
+  if (!worker) {
+    throw new Error("Worker thread is not running. Check database/Redis configuration.");
+  }
+  
+  let reqStr;
+  try {
+    reqStr = JSON.stringify(req);
+  } catch (error) {
+    throw new Error(`Failed to serialize request: ${error.message}`);
+  }
+  
+  const reqBytes = Buffer.from(reqStr, "utf8");
+  const maxRequestSize = pgSabBuffer.length - 8;
+  
+  if (reqBytes.length > maxRequestSize) {
+    throw new Error(
+      `Request size (${reqBytes.length} bytes) exceeds maximum (${maxRequestSize} bytes). ` +
+      `Consider breaking into smaller chunks or increasing DELIVERA_SAB_SIZE environment variable.`
+    );
+  }
+  
+  pgSabInts[1] = reqBytes.length;
+  reqBytes.copy(pgSabBuffer, 8);
+  
+  Atomics.store(pgSabInts, 0, 1);
+  worker.postMessage("run");
+  
+  // Wait for worker response with timeout
+  const WAIT_TIMEOUT_MS = 10000;
+  const startTime = Date.now();
+  
+  while (true) {
+    const status = Atomics.load(pgSabInts, 0);
+    if (status === 2 || status === 3) {
+      break;
+    }
+    
+    const elapsed = Date.now() - startTime;
+    if (elapsed > WAIT_TIMEOUT_MS) {
+      throw new Error(`Worker request timeout (${WAIT_TIMEOUT_MS}ms exceeded)`);
+    }
+    
+    const remaining = Math.min(1000, WAIT_TIMEOUT_MS - elapsed);
+    Atomics.wait(pgSabInts, 0, status, remaining);
+  }
+  
+  const status = Atomics.load(pgSabInts, 0);
+  const resLength = pgSabInts[1];
+  
+  // Validate response length
+  if (resLength < 0 || resLength > pgSabBuffer.length - 8) {
+    throw new Error(`Invalid response length: ${resLength}`);
+  }
+  
+  const resBytes = Buffer.from(pgSab.buffer, pgSab.byteOffset + 8, resLength);
+  
+  let resStr;
+  try {
+    resStr = resBytes.toString("utf8");
+  } catch (error) {
+    throw new Error(`Failed to decode response: ${error.message}`);
+  }
+  
+  Atomics.store(pgSabInts, 0, 0);
+  
+  let parsed;
+  try {
+    parsed = JSON.parse(resStr);
+  } catch (error) {
+    throw new Error(
+      `Worker returned invalid JSON response: ${error.message}. ` +
+      `Response (first 500 chars): ${resStr.substring(0, 500)}`
+    );
+  }
+  
+  if (!parsed.ok) {
+    throw new Error(parsed.error || "Unknown worker thread error");
+  }
+  
+  return parsed.data;
+}
+
+const redisSync = {
+  get(key) {
+    try {
+      const res = sendWorkerRequest({ type: "redis", cmd: "get", key });
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+  set(key, val, ttl) {
+    try {
+      sendWorkerRequest({ type: "redis", cmd: "set", key, val, ttl });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  del(key) {
+    try {
+      sendWorkerRequest({ type: "redis", cmd: "del", key });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
 
 function createSqliteAdapter() {
   return {
@@ -65,29 +229,96 @@ function createSqliteAdapter() {
 }
 
 function createPostgresAdapter() {
-  const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+  // Ensure worker is running
+  getWorker();
+
   return {
     name: "postgres",
-    connectionStringConfigured: Boolean(connectionString),
     getDb() {
-      try {
-        require("pg");
-      } catch {
-        throw new Error("PostgreSQL adapter hazirligi icin 'pg' dependency yuklu olmali.");
+      // Mock db object that mimics DatabaseSync interface
+      return {
+        prepare: (sql) => {
+          return {
+            run: (...params) => this.run(sql, params),
+            all: (...params) => this.all(sql, params),
+            get: (...params) => this.get(sql, params),
+          };
+        },
+        exec: (sql) => {
+          this.run(sql);
+        },
+        close: () => {},
+      };
+    },
+    run(sql, params = []) {
+      // Intercept metadata schema checks
+      if (sql.trim().toUpperCase().startsWith("PRAGMA TABLE_INFO(")) {
+        const match = sql.match(/PRAGMA\s+table_info\s*\(\s*["']?(\w+)["']?\s*\)/i);
+        if (match) {
+          const tableName = match[1].toLowerCase();
+          const res = sendWorkerRequest({
+            type: "db",
+            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?`,
+            params: [tableName]
+          });
+          return res.rows;
+        }
       }
-      throw new Error("PostgreSQL adapter hazir, ancak runtime cutover bu surumde aktif degil. DATABASE_CLIENT=sqlite kullanin.");
+
+      if (sql.includes("sqlite_master")) {
+        const res = sendWorkerRequest({
+          type: "db",
+          sql: `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?`,
+          params: params
+        });
+        return res.rows[0] || null;
+      }
+
+      const res = sendWorkerRequest({ type: "db", sql, params });
+      return { changes: res.rowCount };
     },
-    run() {
-      return this.getDb();
+    get(sql, params = []) {
+      if (sql.includes("sqlite_master")) {
+        const res = sendWorkerRequest({
+          type: "db",
+          sql: `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?`,
+          params: params
+        });
+        return res.rows[0] || null;
+      }
+
+      const res = sendWorkerRequest({ type: "db", sql, params });
+      return res.rows[0] || null;
     },
-    get() {
-      return this.getDb();
+    all(sql, params = []) {
+      if (sql.trim().toUpperCase().startsWith("PRAGMA TABLE_INFO(")) {
+        const match = sql.match(/PRAGMA\s+table_info\s*\(\s*["']?(\w+)["']?\s*\)/i);
+        if (match) {
+          const tableName = match[1].toLowerCase();
+          const res = sendWorkerRequest({
+            type: "db",
+            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?`,
+            params: [tableName]
+          });
+          return res.rows;
+        }
+      }
+
+      const res = sendWorkerRequest({ type: "db", sql, params });
+      return res.rows;
     },
-    all() {
-      return this.getDb();
-    },
-    transaction() {
-      return this.getDb();
+    transaction(callback) {
+      sendWorkerRequest({ type: "db", sql: "BEGIN" });
+      try {
+        const result = callback(this.getDb());
+        sendWorkerRequest({ type: "db", sql: "COMMIT" });
+        return result;
+      } catch (error) {
+        try {
+          sendWorkerRequest({ type: "db", sql: "ROLLBACK" });
+        } catch {}
+        throw error;
+      }
     },
     close() {},
   };
@@ -134,12 +365,18 @@ function transaction(callback) {
 }
 
 function close() {
-  if (!connection) {
-    return;
+  if (connection) {
+    connection.close();
+    connection = null;
+    connectionFile = "";
   }
-  connection.close();
-  connection = null;
-  connectionFile = "";
+  if (pgWorker) {
+    pgWorker.terminate();
+    pgWorker = null;
+    pgSab = null;
+    pgSabInts = null;
+    pgSabBuffer = null;
+  }
   activeAdapter = null;
 }
 
@@ -153,4 +390,5 @@ module.exports = {
   resolveDbFile,
   run,
   transaction,
+  redisSync,
 };

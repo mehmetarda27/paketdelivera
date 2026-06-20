@@ -10,7 +10,8 @@ const adminState = {
   packageLimit: 100,
   packageCursor: "0",
   liveStream: null,
-  activeWorkspaceCard: "admin-announcements",
+  workspacePollId: null,
+  activeWorkspaceCard: localStorage.getItem("deliveraAdminActiveCard") || "admin-announcements",
 };
 
 const adminRefs = {
@@ -58,11 +59,19 @@ const adminRefs = {
   webhookLogList: document.getElementById("webhookLogList"),
   platformHealthSummary: document.getElementById("platformHealthSummary"),
   platformHealthList: document.getElementById("platformHealthList"),
+  restaurantIntegrationIdList: document.getElementById("restaurantIntegrationIdList"),
+  courierIntegrationIdList: document.getElementById("courierIntegrationIdList"),
   auditLogList: document.getElementById("auditLogList"),
   courierDailyReportList: document.getElementById("courierDailyReportList"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
   template: document.getElementById("adminPackageTemplate"),
+  courierAddForm: document.getElementById("adminCourierAddForm"),
+  courierTableBody: document.getElementById("adminCourierTableBody"),
+  courierEditModal: document.getElementById("adminCourierEditModal"),
+  courierEditForm: document.getElementById("adminCourierEditForm"),
+  courierEditTitle: document.getElementById("adminCourierEditTitle"),
+  financialSettingsForm: document.getElementById("adminFinancialSettingsForm"),
 };
 
 function adminHeaders() {
@@ -77,6 +86,26 @@ function htmlSafe(value) {
     .replace(/"/g, "&quot;");
 }
 
+async function copyTextToClipboard(value) {
+  const text = String(value || "");
+  if (!text) {
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
 function persistAdminAuth(auth) {
   adminState.token = auth.token;
   adminState.refreshToken = auth.refreshToken;
@@ -89,6 +118,7 @@ function clearAdminAuth() {
   adminState.refreshToken = "";
   adminState.data = null;
   adminState.selectedRestaurantId = "";
+  stopAdminWorkspacePolling();
   adminState.liveStream?.close?.();
   adminState.liveStream = null;
   localStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -100,13 +130,22 @@ async function refreshAdminAccess() {
     throw new Error("Admin refresh token bulunamadi.");
   }
 
-  const auth = await api("/api/admin/refresh", {
-    method: "POST",
-    body: JSON.stringify({
-      refreshToken: adminState.refreshToken,
-    }),
-  });
-  persistAdminAuth(auth);
+  try {
+    const auth = await api("/api/admin/refresh", {
+      method: "POST",
+      body: JSON.stringify({
+        refreshToken: adminState.refreshToken,
+      }),
+    });
+    persistAdminAuth(auth);
+    return auth;
+  } catch (err) {
+    if (err.status === 401) {
+      clearAdminAuth();
+      window.location.reload();
+    }
+    throw err;
+  }
 }
 
 function renderPlatformChecks() {
@@ -122,6 +161,24 @@ function setAdminLoggedIn(isLoggedIn) {
   adminRefs.loginPanel.classList.toggle("hidden", isLoggedIn);
   adminRefs.workspace.classList.toggle("hidden", !isLoggedIn);
   document.body.classList.toggle("app-unauthenticated", !isLoggedIn);
+}
+
+function stopAdminWorkspacePolling() {
+  if (adminState.workspacePollId) {
+    clearInterval(adminState.workspacePollId);
+    adminState.workspacePollId = null;
+  }
+}
+
+function startAdminWorkspacePolling() {
+  if (adminState.workspacePollId) {
+    return;
+  }
+  adminState.workspacePollId = setInterval(() => {
+    loadAdminState().catch(() => {
+      // Keep current screen if a refresh request fails.
+    });
+  }, ADMIN_REFRESH_MS);
 }
 
 function syncAdminWorkspaceCards() {
@@ -175,6 +232,7 @@ function initializeAdminWorkspaceCards() {
 
     const activate = () => {
       adminState.activeWorkspaceCard = adminState.activeWorkspaceCard === key ? "" : key;
+      localStorage.setItem("deliveraAdminActiveCard", adminState.activeWorkspaceCard);
       syncAdminWorkspaceCards();
     };
 
@@ -266,6 +324,7 @@ async function loadAdminState(options = {}) {
   }
   hydrateAdmin(data);
   startAdminLiveStream();
+  startAdminWorkspacePolling();
 }
 
 function renderAdminStats(stats) {
@@ -352,6 +411,108 @@ function renderRestaurantStats(restaurants, stats, packages) {
     `;
     adminRefs.restaurantStatsBoard.appendChild(card);
   });
+}
+
+function renderCourierManagement(couriers) {
+  const tbody = adminRefs.courierTableBody;
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!couriers || couriers.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="soft-copy" style="text-align: center;">Henuz kurye bulunmuyor.</td></tr>';
+    return;
+  }
+
+  couriers.forEach((courier) => {
+    const tr = document.createElement("tr");
+    
+    tr.innerHTML = `
+      <td><strong>${htmlSafe(courier.name)}</strong></td>
+      <td><code>${htmlSafe(courier.id)}</code></td>
+      <td>@${htmlSafe(courier.username)}</td>
+      <td>${htmlSafe(courier.zone)}</td>
+      <td><span class="soft-badge">${courierStatusLabel(courier.status)}</span></td>
+      <td style="text-align: right; display: flex; gap: 8px; justify-content: flex-end;">
+        <button type="button" class="ghost-btn edit-btn" style="padding: 4px 8px;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+        <button type="button" class="ghost-btn delete-btn" style="padding: 4px 8px; color: var(--coral);"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button>
+      </td>
+    `;
+    
+    tr.querySelector(".edit-btn").addEventListener("click", () => {
+      adminRefs.courierEditForm.reset();
+      adminRefs.courierEditTitle.textContent = `${courier.name} Duzenle`;
+      adminRefs.courierEditForm.elements["courierId"].value = courier.id;
+      adminRefs.courierEditForm.elements["name"].value = courier.name;
+      adminRefs.courierEditForm.elements["username"].value = courier.username;
+      adminRefs.courierEditForm.elements["zone"].value = courier.zone;
+      adminRefs.courierEditModal.showModal();
+    });
+
+    tr.querySelector(".delete-btn").addEventListener("click", async () => {
+      if (!confirm(`Dikkat: ${courier.name} kuryesini silmek istediginizden emin misiniz?`)) return;
+      try {
+        const data = await api(`/api/admin/couriers/${courier.id}`, {
+          method: "DELETE",
+          headers: adminHeaders(),
+          retryWithRefresh: refreshAdminAccess,
+        });
+        showToast("Kurye basariyla silindi.");
+        hydrateAdmin(data);
+      } catch (err) {
+        showToast(err.message || "Kurye silinirken bir hata olustu.", true);
+      }
+    });
+
+    tbody.appendChild(tr);
+  });
+  if (window.lucide) {
+    window.lucide.createIcons({ root: tbody });
+  }
+}
+
+function integrationIdentityCard(item, type) {
+  const primary = type === "restaurant" ? item.name : item.name;
+  const secondary = type === "restaurant"
+    ? `${item.zone || "-"} - @${item.username || "-"}`
+    : `${item.zone || "-"} - @${item.username || "-"}`;
+  const platformText = type === "restaurant" && Array.isArray(item.platforms) && item.platforms.length
+    ? item.platforms.join(", ")
+    : "";
+  return `
+    <article class="stack-card">
+      <div class="stack-top">
+        <div>
+          <strong>${htmlSafe(primary)}</strong>
+          <p>${htmlSafe(secondary)}</p>
+          ${platformText ? `<p>${htmlSafe(platformText)}</p>` : ""}
+          <p><code>${htmlSafe(item.id)}</code></p>
+        </div>
+        <button class="ghost-btn" type="button" data-copy-integration-id="${htmlSafe(item.id)}">ID Kopyala</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderIntegrationIdentities(restaurants, couriers) {
+  if (adminRefs.restaurantIntegrationIdList) {
+    const signature = listRenderSignature(restaurants || [], ["id", "name", "username", "zone", "platforms"]);
+    if (adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature !== signature) {
+      adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature = signature;
+      adminRefs.restaurantIntegrationIdList.innerHTML = restaurants?.length
+        ? restaurants.map((restaurant) => integrationIdentityCard(restaurant, "restaurant")).join("")
+        : '<div class="empty-state">Henuz restoran bulunmuyor.</div>';
+    }
+  }
+
+  if (adminRefs.courierIntegrationIdList) {
+    const signature = listRenderSignature(couriers || [], ["id", "name", "username", "zone", "status"]);
+    if (adminRefs.courierIntegrationIdList.__deliveraRenderSignature !== signature) {
+      adminRefs.courierIntegrationIdList.__deliveraRenderSignature = signature;
+      adminRefs.courierIntegrationIdList.innerHTML = couriers?.length
+        ? couriers.map((courier) => integrationIdentityCard(courier, "courier")).join("")
+        : '<div class="empty-state">Henuz kurye bulunmuyor.</div>';
+    }
+  }
 }
 
 function renderAdminCouriers(couriers) {
@@ -1230,6 +1391,8 @@ function hydrateAdmin(data) {
   renderRestaurantFilter(data.restaurants);
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
+  renderCourierManagement(data.couriers);
+  renderIntegrationIdentities(data.restaurants || [], data.couriers || []);
   renderZoneBoard(data.zones);
   renderZoneAlerts(data.zoneAlerts || []);
   renderAdminPackages(data.packages);
@@ -1243,6 +1406,11 @@ function hydrateAdmin(data) {
   renderAnnouncements(data.announcements || []);
   renderShiftPlanTools(data.couriers || [], data.shiftPlans || [], data.shiftPlanSummary || []);
   renderCashReconciliations(data.cashReconciliations || []);
+  
+  if (data.systemSettings && adminRefs.financialSettingsForm) {
+    const feeInput = adminRefs.financialSettingsForm.querySelector("input[name='courier_per_package_fee']");
+    if (feeInput) feeInput.value = data.systemSettings.courier_per_package_fee;
+  }
 }
 
 adminRefs.loginForm.addEventListener("submit", async (event) => {
@@ -1294,16 +1462,84 @@ adminRefs.courierForm.addEventListener("submit", async (event) => {
     longitude: formData.get("longitude"),
     available: formData.get("available") === "on",
   };
-  await api("/api/admin/couriers", {
-    method: "POST",
-    headers: adminHeaders(),
-    body: JSON.stringify(payload),
-    retryWithRefresh: refreshAdminAccess,
-  });
-  adminRefs.courierForm.reset();
-  await loadAdminState();
-  showToast(`${payload.name} isimli kurye basariyla kaydedildi.`);
+  try {
+    const data = await api("/api/admin/couriers", {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify(payload),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    adminRefs.courierForm.reset();
+    hydrateAdmin(data);
+    const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
+    showToast(`${payload.name} isimli kurye kaydedildi. ID: ${createdCourier?.id || "olusturuldu"}`);
+  } catch (err) {
+    showToast(err.message || "Kurye eklenirken bir hata olustu.", true);
+  }
 });
+
+if (adminRefs.courierAddForm) {
+  adminRefs.courierAddForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(adminRefs.courierAddForm);
+    const payload = {
+      name: formData.get("name"),
+      username: formData.get("username"),
+      password: formData.get("password"),
+      zone: formData.get("zone"),
+      latitude: 36.800000,
+      longitude: 34.633333,
+      available: true,
+    };
+    try {
+      const data = await api("/api/admin/couriers", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify(payload),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      adminRefs.courierAddForm.reset();
+      hydrateAdmin(data);
+      const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
+      showToast(`${payload.name} isimli kurye eklendi. ID: ${createdCourier?.id || "olusturuldu"}`);
+    } catch (err) {
+      showToast(err.message || "Kurye eklenirken bir hata olustu.", true);
+    }
+  });
+}
+
+if (adminRefs.courierEditForm) {
+  adminRefs.courierEditForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(adminRefs.courierEditForm);
+    const courierId = formData.get("courierId");
+    const payload = {
+      name: formData.get("name"),
+      username: formData.get("username"),
+      password: formData.get("password"),
+      zone: formData.get("zone"),
+    };
+    try {
+      const data = await api(`/api/admin/couriers/${courierId}`, {
+        method: "PUT",
+        headers: adminHeaders(),
+        body: JSON.stringify(payload),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      adminRefs.courierEditModal.close();
+      showToast("Kurye bilgileri basariyla guncellendi.");
+      hydrateAdmin(data);
+    } catch (err) {
+      showToast(err.message || "Kurye guncellenirken bir hata olustu.", true);
+    }
+  });
+}
+
+if (adminRefs.courierEditModal) {
+  adminRefs.courierEditModal.querySelector(".close-modal-btn").addEventListener("click", () => {
+    adminRefs.courierEditModal.close();
+  });
+}
 
 adminRefs.restaurantForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1326,7 +1562,23 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
   adminRefs.restaurantForm.reset();
   renderPlatformChecks();
   hydrateAdmin(data);
-  showToast(`${payload.name} restorani basariyla kaydedildi.`);
+  const createdRestaurant = data.createdRestaurant || (data.restaurants || []).find((restaurant) => (
+    restaurant.name === payload.name && (!payload.portalUsername || restaurant.username === payload.portalUsername)
+  )) || data.restaurants?.[0];
+  showToast(`${payload.name} restorani kaydedildi. ID: ${createdRestaurant?.id || "olusturuldu"}`);
+});
+
+document.addEventListener("click", async (event) => {
+  const copyButton = event.target.closest("[data-copy-integration-id]");
+  if (!copyButton) {
+    return;
+  }
+  try {
+    await copyTextToClipboard(copyButton.dataset.copyIntegrationId);
+    showToast(`ID kopyalandi: ${copyButton.dataset.copyIntegrationId}`);
+  } catch (error) {
+    showToast("ID kopyalanamadi.", true);
+  }
 });
 
 adminRefs.shiftPlanForm?.addEventListener("submit", async (event) => {
@@ -1376,11 +1628,48 @@ adminRefs.clearAnnouncementsButton?.addEventListener("click", async () => {
   showToast("Tum kurye duyurulari sifirlandi.");
 });
 
+adminRefs.financialSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.financialSettingsForm);
+  const data = await api("/api/admin/settings", {
+    method: "PUT",
+    headers: adminHeaders(),
+    body: JSON.stringify({
+      courier_per_package_fee: formData.get("courier_per_package_fee"),
+    }),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  hydrateAdmin(data.state);
+  showToast("Finansal ayarlar başarıyla güncellendi.");
+});
+
 adminRefs.searchInput.addEventListener("input", () => {
   if (adminState.data) {
     renderAdminPackages(adminState.data.packages);
   }
 });
+
+let screenWakeLock = null;
+async function requestScreenWakeLock() {
+  if (!adminState.token) return;
+  if ("wakeLock" in navigator) {
+    try {
+      if (screenWakeLock !== null) return;
+      screenWakeLock = await navigator.wakeLock.request("screen");
+      screenWakeLock.addEventListener("release", () => {
+        screenWakeLock = null;
+      });
+    } catch (err) {}
+  }
+}
+
+window.addEventListener("beforeunload", stopAdminWorkspacePolling);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    requestScreenWakeLock();
+  }
+});
+requestScreenWakeLock();
 
 adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   adminState.selectedRestaurantId = event.target.value;
@@ -1416,10 +1705,6 @@ loadAdminState().catch((error) => {
   }
 });
 
-setInterval(() => {
-  loadAdminState().catch(() => {
-    // Keep current screen if a refresh request fails.
-  });
-}, ADMIN_REFRESH_MS);
+startAdminWorkspacePolling();
 
 renderPlatformChecks();

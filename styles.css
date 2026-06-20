@@ -1921,6 +1921,56 @@ body.app-unauthenticated .topbar {
   align-items: stretch;
   gap: 24px;
 }
+
+body.theme-courier.app-unauthenticated .courier-mobile-app {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: clamp(16px, 4vw, 42px);
+  padding-bottom: clamp(16px, 4vw, 42px);
+  box-shadow: none;
+}
+
+body.theme-courier.app-unauthenticated .courier-login-panel {
+  width: min(100%, 760px);
+  max-width: calc(100vw - 32px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  align-items: center;
+  gap: clamp(18px, 4vw, 36px);
+  overflow: hidden;
+}
+
+body.theme-courier.app-unauthenticated .courier-login-panel .login-form {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+body.theme-courier.app-unauthenticated .courier-login-panel h2 {
+  font-size: clamp(2.3rem, 5vw, 3.75rem);
+  line-height: 1.02;
+}
+
+@media (max-width: 720px) {
+  body.theme-courier.app-unauthenticated .courier-mobile-app {
+    justify-content: flex-start;
+    padding: 16px;
+  }
+
+  body.theme-courier.app-unauthenticated .courier-login-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 18px;
+    width: 100%;
+    max-width: calc(100vw - 40px);
+  }
+}
 .workspace-hero {
   display: none !important;
 }
@@ -2132,4 +2182,248 @@ body.app-unauthenticated .topbar {
 /* Adjust topbar in glass layout */
 .glass-content-area .topbar {
   margin-bottom: 0;
+}
+
+/* =========================================
+   MOBILE-FIRST COURIER LAYOUT
+   ========================================= */
+
+.courier-mobile-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--surface);
+  padding-bottom: 80px; /* Space for bottom nav */
+  max-width: 600px;
+  margin: 0 auto;
+  box-shadow: 0 0 50px rgba(0,0,0,0.05);
+  background: #f8fafc;
+  position: relative;
+}
+
+.courier-mobile-main {
+  flex: 1;
+  padding: 16px;
+  padding-bottom: calc(90px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hide courier workspace when logged out */
+body.app-unauthenticated .courier-mobile-main {
+  display: none !important;
+}
+body.app-unauthenticated .courier-bottom-nav {
+  display: none !important;
+}
+
+/* Bottom Navigation */
+.courier-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 600px;
+  height: 70px;
+  background: rgba(23, 35, 44, 0.98);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 1000;
+  border-radius: 20px 20px 0 0;
+}
+
+.courier-bottom-nav .nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5); /* Fix invisible text */
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.courier-bottom-nav .nav-item i,
+.courier-bottom-nav .nav-item svg {
+  width: 24px;
+  height: 24px;
+  stroke: currentColor;
+}
+
+.courier-bottom-nav .nav-item.active-link {
+  color: var(--gold);
+}
+
+.courier-bottom-nav .nav-item.active-link i,
+.courier-bottom-nav .nav-item.active-link svg {
+  stroke: var(--gold);
+  fill: rgba(255, 215, 0, 0.2);
+}
+
+.huge-btn {
+  font-size: 1.2rem;
+  padding: 16px 24px;
+  border-radius: 12px;
+}
+
+/* --- GLOBAL MOBILE RESPONSIVENESS & ANTI-OVERFLOW FIXES --- */
+
+/* Force word wrap everywhere to prevent unbreakable strings from causing overflow */
+* {
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 900px) {
+  /* 1. App Layout Reflow (Admin & Restaurant) */
+  .app-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .glass-sidebar {
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding: 12px;
+    flex-direction: row;
+    overflow-x: auto;
+    align-items: center;
+    gap: 16px;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+  }
+
+  .glass-sidebar .nav-group {
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .glass-sidebar .nav-group-title {
+    display: none; /* Hide titles horizontally to save space */
+  }
+
+  .glass-sidebar .tree-nav {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .glass-content-area {
+    width: 100%;
+    overflow-y: visible;
+  }
+
+  .role-main {
+    padding: 16px;
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  /* 2. Prevent Grid/Table Overflow */
+  .grid-layout, .meta-grid, .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .admin-layout, .restaurant-layout {
+    padding: 12px;
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  .glass-panel, .stack-card, .metric-card, .zone-card {
+    max-width: 100%;
+    overflow-x: auto;
+    box-sizing: border-box;
+  }
+
+  /* 3. Topbar Adjustments */
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    height: auto;
+    padding: 16px;
+  }
+
+  .topbar-right {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* 4. Table Scroll Fixes */
+  .table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Extreme Mobile Tweaks (Courier / Phones) */
+  .badge-row, .card-actions {
+    flex-wrap: wrap;
+  }
+  
+  .package-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .panel-head > div:last-child {
+    width: 100%;
+    display: flex;
+    justify-content: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  
+  .primary-btn, .ghost-btn, .secondary-btn, .danger-btn {
+    white-space: normal;
+    text-align: center;
+    padding: 10px 16px;
+  }
+
+  /* Font Scaling */
+  h1 { font-size: 1.75rem; }
+  h2 { font-size: 1.4rem; }
+  h3 { font-size: 1.15rem; }
+
+  /* Courier Adjustments */
+  .courier-mobile-app {
+    max-width: 100vw;
+  }
+  
+  .courier-mobile-main {
+    padding: 12px;
+  }
 }

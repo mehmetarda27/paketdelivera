@@ -49,6 +49,58 @@ const signalCooldowns = new Map();
 const RESTAURANT_ID_STORAGE_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_STORAGE_KEY = "deliveraRestaurantApiKey";
 
+function workspaceMemoryKey(suffix) {
+  const bodyClass = document.body?.classList || { contains: () => false };
+  const panelName = bodyClass.contains("theme-admin")
+    ? "admin"
+    : bodyClass.contains("theme-restaurant")
+      ? "restaurant"
+      : bodyClass.contains("theme-courier")
+        ? "courier"
+        : window.location.pathname.replace(/[^a-z0-9]+/gi, "-") || "workspace";
+  return `deliveraWorkspace:${panelName}:${suffix}`;
+}
+
+function setActiveWorkspaceSection(sectionId, options = {}) {
+  const target = document.getElementById(sectionId);
+  if (!target) {
+    return false;
+  }
+
+  document.querySelectorAll(".tree-link[data-section]").forEach((link) => {
+    const isActive = link.getAttribute("data-section") === sectionId;
+    link.classList.toggle("active-link", isActive);
+    if (isActive) {
+      const group = link.closest(".tree-group");
+      const header = group?.querySelector(".tree-header");
+      document.querySelectorAll(".tree-header").forEach((item) => item.classList.remove("active-header"));
+      group?.classList.add("open");
+      header?.classList.add("active-header");
+    }
+  });
+
+  document.querySelectorAll(".content-section").forEach((section) => {
+    section.classList.toggle("active-section", section.id === sectionId);
+  });
+
+  if (options.persist !== false) {
+    localStorage.setItem(workspaceMemoryKey("activeSection"), sectionId);
+  }
+  return true;
+}
+
+function restoreWorkspaceScroll() {
+  const rawPosition = localStorage.getItem(workspaceMemoryKey("scrollY"));
+  const scrollY = Number(rawPosition);
+  if (Number.isFinite(scrollY) && scrollY >= 0) {
+    window.scrollTo(0, scrollY);
+  }
+}
+
+function rememberWorkspaceScroll() {
+  localStorage.setItem(workspaceMemoryKey("scrollY"), String(Math.max(0, Math.round(window.scrollY || 0))));
+}
+
 function renderIfChanged(target, signature, renderCallback) {
   if (!target || typeof renderCallback !== "function") {
     return false;
@@ -80,7 +132,10 @@ function listRenderSignature(items = [], fields = []) {
 }
 
 async function api(path, options = {}) {
-  const requestPath = String(path || "").replace(/^https:\/\/paketdelivera\.onrender\.com(?=\/api\/)/i, "");
+  let requestPath = String(path || "").replace(/^https:\/\/paketdelivera\.onrender\.com(?=\/api\/)/i, "");
+  if (requestPath.startsWith("/api/") && (window.location.port === "5500" || window.location.port === "8080" || window.location.protocol === "file:")) {
+    requestPath = "http://localhost:3000" + requestPath;
+  }
 
   async function runRequest() {
     const mergedHeaders = {
@@ -121,7 +176,13 @@ async function api(path, options = {}) {
   let result = await runRequest();
 
   if (result.response.status === 401 && typeof options.retryWithRefresh === "function") {
-    await options.retryWithRefresh();
+    const refreshedAuth = await options.retryWithRefresh();
+    if (refreshedAuth?.token) {
+      options.headers = {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${refreshedAuth.token}`,
+      };
+    }
     result = await runRequest();
   }
 
@@ -269,6 +330,17 @@ function showToast(message, tone = "success") {
   }, 2600);
 }
 
+function clearToasts() {
+  const host = toastHost && document.body.contains(toastHost)
+    ? toastHost
+    : document.querySelector(".toast-host");
+  if (!host) {
+    return;
+  }
+
+  host.querySelectorAll(".toast").forEach((toast) => toast.remove());
+}
+
 function notificationTone(eventType = "") {
   if (["assignment-waiting"].includes(eventType)) {
     return "error";
@@ -290,6 +362,76 @@ function getAudioContext() {
   return audioContextRef;
 }
 
+let audioUnlocked = false;
+function unlockAudioContext() {
+  if (audioUnlocked) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  
+  const unlock = () => {
+    audioUnlocked = true;
+    document.removeEventListener("click", unlockAudioContext);
+    document.removeEventListener("touchstart", unlockAudioContext);
+    document.removeEventListener("keydown", unlockAudioContext);
+    
+    // Play silent oscillator to fully unlock iOS Safari
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(0);
+    osc.stop(ctx.currentTime + 0.01);
+  };
+
+  if (ctx.state === "suspended") {
+    ctx.resume().then(unlock).catch(() => {});
+  } else {
+    unlock();
+  }
+}
+
+document.addEventListener("click", unlockAudioContext);
+document.addEventListener("touchstart", unlockAudioContext);
+document.addEventListener("keydown", unlockAudioContext);
+
+let titleFlashInterval = null;
+let originalTitle = document.title;
+
+function flashDocumentTitle(message) {
+  if (titleFlashInterval) clearInterval(titleFlashInterval);
+  const baseTitle = document.title.replace(/^\(\!+\) /, "");
+  let isFlash = false;
+  let flashCount = 0;
+  
+  titleFlashInterval = setInterval(() => {
+    document.title = isFlash ? `(!!!) ${message}` : baseTitle;
+    isFlash = !isFlash;
+    flashCount++;
+    if (flashCount > 10) { // 5 flashes
+      clearInterval(titleFlashInterval);
+      document.title = baseTitle;
+    }
+  }, 1000);
+}
+
+function clearAttentionAlerts() {
+  if (titleFlashInterval) {
+    clearInterval(titleFlashInterval);
+    titleFlashInterval = null;
+  }
+  document.title = originalTitle || document.title.replace(/^\(\!+\) /, "");
+  clearToasts();
+}
+
+window.addEventListener("focus", clearAttentionAlerts);
+window.addEventListener("pageshow", clearAttentionAlerts);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    clearAttentionAlerts();
+  }
+});
+
 function playSignal(kind = "default") {
   const now = Date.now();
   const cooldown = signalCooldowns.get(kind) || 0;
@@ -298,6 +440,12 @@ function playSignal(kind = "default") {
   }
   const cooldownMs = kind === "assignment-long" ? 6500 : 2200;
   signalCooldowns.set(kind, now + cooldownMs);
+
+  flashDocumentTitle("Bildirim");
+
+  if (!audioUnlocked) {
+    showToast("Sesli bildirimleri duymak için ekrana bir kez dokunun!", "info");
+  }
 
   const ctx = getAudioContext();
   if (!ctx) {
@@ -461,17 +609,32 @@ document.addEventListener("DOMContentLoaded", function() {
   links.forEach(link => {
     link.addEventListener('click', function(e) {
       const sectionId = this.getAttribute('data-section');
-      
-      document.querySelectorAll('.tree-link').forEach(l => l.classList.remove('active-link'));
-      this.classList.add('active-link');
-      
-      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active-section'));
-      
-      const target = document.getElementById(sectionId);
-      if (target) {
-        target.classList.add('active-section');
-      }
+      setActiveWorkspaceSection(sectionId);
+      rememberWorkspaceScroll();
     });
+  });
+
+  const savedSectionId = localStorage.getItem(workspaceMemoryKey("activeSection"));
+  if (savedSectionId) {
+    setActiveWorkspaceSection(savedSectionId, { persist: false });
+  } else {
+    const activeLink = document.querySelector(".tree-link.active-link[data-section]");
+    const sectionId = activeLink?.getAttribute("data-section");
+    if (sectionId) {
+      setActiveWorkspaceSection(sectionId, { persist: false });
+    }
+  }
+
+  let scrollSaveTimer = null;
+  window.addEventListener("scroll", () => {
+    if (scrollSaveTimer) {
+      window.clearTimeout(scrollSaveTimer);
+    }
+    scrollSaveTimer = window.setTimeout(rememberWorkspaceScroll, 120);
+  }, { passive: true });
+  window.addEventListener("beforeunload", rememberWorkspaceScroll);
+  [0, 250, 1000].forEach((delay) => {
+    window.setTimeout(restoreWorkspaceScroll, delay);
   });
   
   // Ensure lucide renders icons (run it here as a fallback)

@@ -414,20 +414,18 @@ async function run() {
       }),
     });
     const firstManualPackage = firstRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === firstAddress);
-    if (!firstManualPackage || firstManualPackage.status !== "pending_approval") {
-      throw new Error("Manuel paket restoran onayi bekleyen durumda olusmadi.");
+    if (!firstManualPackage || !["awaiting_assignment", "assigned"].includes(firstManualPackage.status)) {
+      throw new Error("Manuel paket beklenen duruma (awaiting_assignment/assigned) gelmedi.");
     }
     if (firstManualPackage.source !== "external_manual") {
       throw new Error("Manuel paket source alani beklenen sekilde isaretlenmedi.");
     }
-    const firstApprovedState = await request(`/api/restaurant/packages/${firstManualPackage.id}/action`, {
-      method: "POST",
-      headers: restaurantHeaders,
-      body: JSON.stringify({ action: "confirm" }),
-    });
-    const firstAssignedPackage = firstApprovedState.packages.find((pkg) => pkg.id === firstManualPackage.id);
+    
+    // No need to manually trigger assignment, system auto-assigns
+    const firstAssignedState = await request("/api/restaurant/bootstrap", { headers: restaurantHeaders });
+    const firstAssignedPackage = firstAssignedState.packages.find((pkg) => pkg.id === firstManualPackage.id);
     if (!firstAssignedPackage || firstAssignedPackage.status !== "assigned" || firstAssignedPackage.assignedCourierId !== createdCourier.id) {
-      throw new Error("Onay sonrasi uygun kurye varken ilk siparis otomatik atanamadi.");
+      throw new Error("Uygun kurye varken ilk siparis otomatik atanamadi.");
     }
 
     const secondRestaurantPackageState = await request("/api/restaurant/packages", {
@@ -443,15 +441,13 @@ async function run() {
       }),
     });
     const secondManualPackage = secondRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === secondAddress);
-    if (!secondManualPackage || secondManualPackage.status !== "pending_approval") {
-      throw new Error("Ikinci manuel paket restoran onayi bekleyen durumda olusmadi.");
+    if (!secondManualPackage || !["awaiting_assignment", "assigned"].includes(secondManualPackage.status)) {
+      throw new Error("Ikinci manuel paket beklenen duruma (awaiting_assignment/assigned) gelmedi.");
     }
-    const secondApprovedState = await request(`/api/restaurant/packages/${secondManualPackage.id}/action`, {
-      method: "POST",
-      headers: restaurantHeaders,
-      body: JSON.stringify({ action: "confirm" }),
-    });
-    const secondAssignedPackage = secondApprovedState.packages.find((pkg) => pkg.id === secondManualPackage.id);
+    
+    // No need to manually trigger assignment, system auto-assigns
+    const secondAssignedState = await request("/api/restaurant/bootstrap", { headers: restaurantHeaders });
+    const secondAssignedPackage = secondAssignedState.packages.find((pkg) => pkg.id === secondManualPackage.id);
     if (!secondAssignedPackage || secondAssignedPackage.status !== "assigned") {
       throw new Error("Ikinci uygun kurye varken ikinci siparis atanamadi.");
     }
@@ -473,16 +469,14 @@ async function run() {
       }),
     });
     const thirdManualPackage = thirdRestaurantPackageState.packages.find((pkg) => pkg.deliveryAddress === thirdAddress);
-    if (!thirdManualPackage || thirdManualPackage.status !== "pending_approval") {
-      throw new Error("Ucuncu manuel paket restoran onayi bekleyen durumda olusmadi.");
+    if (!thirdManualPackage || !["awaiting_assignment", "assigned"].includes(thirdManualPackage.status)) {
+      throw new Error("Ucuncu manuel paket beklenen duruma (awaiting_assignment/assigned) gelmedi.");
     }
-    const thirdApprovedState = await request(`/api/restaurant/packages/${thirdManualPackage.id}/action`, {
-      method: "POST",
-      headers: restaurantHeaders,
-      body: JSON.stringify({ action: "confirm" }),
-    });
-    const thirdWaitingPackage = thirdApprovedState.packages.find((pkg) => pkg.id === thirdManualPackage.id);
-    if (!thirdWaitingPackage || thirdWaitingPackage.status !== "preparing") {
+    
+    // No need to manually trigger assignment, system auto-assigns
+    const thirdAssignedState = await request("/api/restaurant/bootstrap", { headers: restaurantHeaders });
+    const thirdWaitingPackage = thirdAssignedState.packages.find((pkg) => pkg.id === thirdManualPackage.id);
+    if (!thirdWaitingPackage || thirdWaitingPackage.status !== "awaiting_assignment") {
       throw new Error("Tum kuryeler busy iken ucuncu siparis kurye bekleme durumuna gecmedi.");
     }
     if (!thirdWaitingPackage.lastAssignmentError) {

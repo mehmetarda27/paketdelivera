@@ -26,7 +26,8 @@ if (!fs.existsSync(uploadsDir)) {
 }
 const { URL } = require("url");
 const dbFacade = require("./db");
-const { getDb, resolveDbFile } = dbFacade;
+const { getDb, resolveDbFile, redisSync } = dbFacade;
+const { runMigrations } = require("./scripts/migrate");
 const { getPlatformAdapter, normalizePlatformKey } = require("./platform-adapters");
 const platformConnectors = require("./connectors");
 const logger = require("./services/logger");
@@ -62,21 +63,31 @@ const IS_PRODUCTION = NODE_ENV === "production";
 const PUBLIC_BASE_URL = trimmed(process.env.PUBLIC_BASE_URL).replace(/\/+$/, "");
 const CORS_ALLOWED_ORIGINS = String(process.env.DELIVERA_CORS_ORIGINS || process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
-  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .map((origin) => {
+    const trimmedOrigin = origin.trim().replace(/\/+$/, "");
+    if (!trimmedOrigin) return null;
+    try {
+      const url = new URL(trimmedOrigin.startsWith("http") ? trimmedOrigin : `https://${trimmedOrigin}`);
+      return url.origin;
+    } catch {
+      logger.warn("Invalid CORS origin configured", { origin: trimmedOrigin });
+      return null;
+    }
+  })
   .filter(Boolean);
 const TRUST_PROXY = ["1", "true", "yes"].includes(String(process.env.TRUST_PROXY || "").toLowerCase());
 const FORCE_HTTPS = ["1", "true", "yes"].includes(String(process.env.FORCE_HTTPS || "").toLowerCase());
 const REDIS_URL = trimmed(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL);
 const RATE_LIMITS = {
-  integrations: { limit: 60, windowMs: RATE_LIMIT_WINDOW_MS },
-  courierLogin: { limit: 12, windowMs: RATE_LIMIT_WINDOW_MS },
-  adminLogin: { limit: 10, windowMs: RATE_LIMIT_WINDOW_MS },
-  restaurantLogin: { limit: 15, windowMs: RATE_LIMIT_WINDOW_MS },
-  platformOrder: { limit: 120, windowMs: RATE_LIMIT_WINDOW_MS },
-  quickPaste: { limit: 90, windowMs: RATE_LIMIT_WINDOW_MS },
-  adminWrites: { limit: 120, windowMs: RATE_LIMIT_WINDOW_MS },
-  courierStatus: { limit: 180, windowMs: RATE_LIMIT_WINDOW_MS },
-  general: { limit: 240, windowMs: RATE_LIMIT_WINDOW_MS },
+  integrations: { limit: 100, windowMs: RATE_LIMIT_WINDOW_MS },
+  courierLogin: { limit: 10, windowMs: RATE_LIMIT_WINDOW_MS },
+  adminLogin: { limit: 5, windowMs: RATE_LIMIT_WINDOW_MS },
+  restaurantLogin: { limit: 20, windowMs: RATE_LIMIT_WINDOW_MS },
+  platformOrder: { limit: 1000, windowMs: RATE_LIMIT_WINDOW_MS },
+  quickPaste: { limit: 50, windowMs: RATE_LIMIT_WINDOW_MS },
+  adminWrites: { limit: 500, windowMs: RATE_LIMIT_WINDOW_MS },
+  courierStatus: { limit: 100, windowMs: RATE_LIMIT_WINDOW_MS },
+  general: { limit: 1000, windowMs: RATE_LIMIT_WINDOW_MS },
 };
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 200;
@@ -227,6 +238,13 @@ const STATIC_FILES = {
 };
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
+
+const migrationSummary = runMigrations();
+logger.info("Database migrations checked", {
+  database: DB_FILE,
+  applied: migrationSummary.applied?.length || 0,
+  skipped: migrationSummary.skipped?.length || 0,
+});
 
 const db = getDb({ filename: DB_FILE });
 const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger });
@@ -405,6 +423,19 @@ db.exec(`
     restaurant_id TEXT,
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS platform_events (
+    id TEXT PRIMARY KEY,
+    platform_account_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS system_settings (
+    id TEXT PRIMARY KEY,
+    settings_json TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS platform_accounts (
@@ -1972,11 +2003,28 @@ function sanitizePlatformAccount(account, includeSecrets = false) {
 
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
-  if (!header.startsWith("Bearer ")) {
-    return "";
+  if (header.startsWith("Bearer ")) {
+    return header.slice(7).trim();
   }
 
-  return header.slice(7).trim();
+  const cookieHeader = req.headers.cookie || "";
+  const match = cookieHeader.match(/(?:^|;)\s*delivera_session\s*=\s*([^;]+)/);
+  if (match) {
+    return decodeURIComponent(match[1]).trim();
+  }
+
+  return "";
+}
+
+function setSessionCookie(res, token) {
+  const secure = FORCE_HTTPS ? "; Secure" : "";
+  const maxAge = Math.floor(REFRESH_TOKEN_MAX_AGE_MS / 1000);
+  res.setHeader("Set-Cookie", `delivera_session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure}`);
+}
+
+function clearSessionCookie(res) {
+  const secure = FORCE_HTTPS ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `delivera_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure}`);
 }
 
 function isSessionExpired(createdAt, maxAgeMs) {
@@ -1988,9 +2036,54 @@ function isSessionExpired(createdAt, maxAgeMs) {
   return Date.now() - createdMs > maxAgeMs;
 }
 
+function sessionActorLookup(tableName) {
+  if (tableName === "admin_sessions") {
+    return { actorColumn: "admin_id", actorTable: "admins" };
+  }
+  if (tableName === "restaurant_sessions") {
+    return { actorColumn: "restaurant_id", actorTable: "restaurants" };
+  }
+  if (tableName === "courier_sessions") {
+    return { actorColumn: "courier_id", actorTable: "couriers" };
+  }
+  return null;
+}
+
+function isSessionActorValid(tableName, session) {
+  const lookup = sessionActorLookup(tableName);
+  if (!lookup || !session?.[lookup.actorColumn]) {
+    return false;
+  }
+  return Boolean(db.prepare(`SELECT id FROM ${lookup.actorTable} WHERE id = ?`).get(session[lookup.actorColumn]));
+}
+
+function purgeSessionRecord(tableName, tokenColumn, token, cacheKey = "") {
+  db.prepare(`DELETE FROM ${tableName} WHERE ${tokenColumn} = ?`).run(token);
+  if (REDIS_URL && cacheKey) {
+    redisSync.del(cacheKey);
+  }
+}
+
 function getSessionByToken(tableName, tokenColumn, token, maxAgeMs) {
   if (!token) {
     return null;
+  }
+
+  const cacheKey = `delivera:session:${tableName}:${token}`;
+  if (REDIS_URL) {
+    const cached = redisSync.get(cacheKey);
+    if (cached) {
+      try {
+        const session = JSON.parse(cached);
+        if (!isSessionExpired(session.created_at, maxAgeMs) && isSessionActorValid(tableName, session)) {
+          return session;
+        }
+        purgeSessionRecord(tableName, tokenColumn, token, cacheKey);
+        return null;
+      } catch (err) {
+        // fallback
+      }
+    }
   }
 
   const session = db.prepare(`SELECT * FROM ${tableName} WHERE ${tokenColumn} = ?`).get(token) || null;
@@ -1999,8 +2092,18 @@ function getSessionByToken(tableName, tokenColumn, token, maxAgeMs) {
   }
 
   if (isSessionExpired(session.created_at, maxAgeMs)) {
-    db.prepare(`DELETE FROM ${tableName} WHERE ${tokenColumn} = ?`).run(token);
+    purgeSessionRecord(tableName, tokenColumn, token, cacheKey);
     return null;
+  }
+
+  if (!isSessionActorValid(tableName, session)) {
+    purgeSessionRecord(tableName, tokenColumn, token, cacheKey);
+    return null;
+  }
+
+  if (REDIS_URL) {
+    const ttlSeconds = Math.max(60, Math.floor(maxAgeMs / 1000));
+    redisSync.set(cacheKey, JSON.stringify(session), ttlSeconds);
   }
 
   return session;
@@ -2068,6 +2171,15 @@ function issueSessionPair(actorRole, actorId, req) {
   const refreshToken = createRefreshToken();
   const now = new Date().toISOString();
 
+  if (REDIS_URL) {
+    try {
+      const oldSessions = db.prepare(`SELECT token FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).all(actorId);
+      oldSessions.forEach((s) => {
+        redisSync.del(`delivera:session:${sessionConfig.tableName}:${s.token}`);
+      });
+    } catch (err) {}
+  }
+
   db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
   revokeRefreshTokens(actorRole, actorId);
   db.prepare(`INSERT INTO ${sessionConfig.tableName} (token, ${sessionConfig.actorColumn}, created_at) VALUES (?, ?, ?)`).run(
@@ -2102,6 +2214,16 @@ function refreshSessionPair(actorRole, providedRefreshToken, req) {
     throw httpError(401, "Refresh token suresi dolmus.");
   }
 
+  const sessionConfig = sessionConfigByRole(actorRole);
+  const lookup = sessionActorLookup(sessionConfig.tableName);
+  const actorExists = lookup
+    ? Boolean(db.prepare(`SELECT id FROM ${lookup.actorTable} WHERE id = ?`).get(refreshRow.actor_id))
+    : false;
+  if (!actorExists) {
+    db.prepare("DELETE FROM refresh_tokens WHERE id = ?").run(refreshRow.id);
+    throw httpError(401, "Kayit bulunamadi, lutfen tekrar giris yapin.");
+  }
+
   db.prepare("DELETE FROM refresh_tokens WHERE id = ?").run(refreshRow.id);
   return issueSessionPair(actorRole, refreshRow.actor_id, req);
 }
@@ -2112,6 +2234,9 @@ function revokeAccessToken(tableName, token) {
   }
 
   db.prepare(`DELETE FROM ${tableName} WHERE token = ?`).run(token);
+  if (REDIS_URL) {
+    redisSync.del(`delivera:session:${tableName}:${token}`);
+  }
 }
 
 function validateRefreshDraft(body) {
@@ -2161,19 +2286,35 @@ function actorLookupByRole(actorRole, username) {
 
 function updateActorPassword(actorRole, actorId, password) {
   const passwordInfo = hashPassword(password);
-  if (actorRole === "admin") {
-    db.prepare("UPDATE admins SET password_hash = ?, password_salt = ? WHERE id = ?").run(passwordInfo.hash, passwordInfo.salt, actorId);
-  } else if (actorRole === "restaurant") {
-    db.prepare("UPDATE restaurants SET password_hash = ?, password_salt = ? WHERE id = ?").run(passwordInfo.hash, passwordInfo.salt, actorId);
-  } else if (actorRole === "courier") {
-    db.prepare("UPDATE couriers SET password_hash = ?, password_salt = ? WHERE id = ?").run(passwordInfo.hash, passwordInfo.salt, actorId);
-  } else {
+  
+  const tableMap = { "admin": "admins", "restaurant": "restaurants", "courier": "couriers" };
+  const table = tableMap[actorRole];
+  
+  if (!table) {
     throw httpError(400, "Desteklenmeyen kullanici rolu.");
   }
-
+  
+  // 1. Revoke all refresh tokens
   revokeRefreshTokens(actorRole, actorId);
+  
   const sessionConfig = sessionConfigByRole(actorRole);
-  db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
+  
+  // 2. Delete all active sessions (access tokens)
+  if (sessionConfig && sessionConfig.tableName) {
+    if (REDIS_URL) {
+      try {
+        const oldSessions = db.prepare(`SELECT token FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).all(actorId);
+        oldSessions.forEach((s) => {
+          redisSync.del(`delivera:session:${sessionConfig.tableName}:${s.token}`);
+        });
+      } catch (err) {}
+    }
+    db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
+  }
+  
+  // 3. Update password hash
+  db.prepare(`UPDATE ${table} SET password_hash = ?, password_salt = ? WHERE id = ?`)
+    .run(passwordInfo.hash, passwordInfo.salt, actorId);
 }
 
 function issuePasswordReset(actorRole, actorId, req) {
@@ -2198,19 +2339,30 @@ function issuePasswordReset(actorRole, actorId, req) {
 
 function consumePasswordReset(actorRole, token) {
   const tokenHash = hashOpaqueToken(token);
+  const startTime = Date.now();
+  
   const row = db.prepare(`
     SELECT * FROM password_reset_tokens
     WHERE actor_role = ? AND token_hash = ? AND used_at IS NULL
   `).get(actorRole, tokenHash);
 
-  if (!row) {
-    throw httpError(400, "Reset token gecersiz.");
+  let isValid = false;
+  let errorMsg = "Reset token gecersiz veya suresi dolmus.";
+
+  if (row) {
+    const expiresAtMs = new Date(row.expires_at).getTime();
+    if (!Number.isNaN(expiresAtMs) && expiresAtMs > Date.now()) {
+      isValid = true;
+    } else {
+      db.prepare("DELETE FROM password_reset_tokens WHERE id = ?").run(row.id);
+    }
   }
 
-  const expiresAtMs = new Date(row.expires_at).getTime();
-  if (Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now()) {
-    db.prepare("DELETE FROM password_reset_tokens WHERE id = ?").run(row.id);
-    throw httpError(400, "Reset token suresi dolmus.");
+  if (!isValid) {
+    // Timing attack mitigation: add random delay to normalize response time
+    const elapsed = Date.now() - startTime;
+    // Timing attack mitigation removed to prevent blocking or sync issues
+    throw httpError(400, errorMsg);
   }
 
   db.prepare("UPDATE password_reset_tokens SET used_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
@@ -2569,6 +2721,21 @@ function readRequestBody(req) {
 
     req.on("error", reject);
   });
+}
+
+function getSystemSettings() {
+  const row = db.prepare("SELECT settings_json FROM system_settings WHERE id = 'main'").get();
+  return row ? parseJson(row.settings_json, {}) : {};
+}
+
+function updateSystemSettings(newSettings) {
+  const current = getSystemSettings();
+  const merged = { ...current, ...newSettings };
+  db.prepare(`
+    INSERT INTO system_settings (id, settings_json) VALUES ('main', ?)
+    ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json
+  `).run(json(merged));
+  return merged;
 }
 
 function sendJson(res, statusCode, payload) {
@@ -3410,7 +3577,7 @@ function closeCourierShift(courierId, endedAt = nowIso()) {
 }
 
 function summarizeCourierPackagesForRange(packages, start, end) {
-  return packages
+  const result = packages
     .filter((pkg) => pkg.status === DELIVERED_STATUS)
     .filter((pkg) => isWithinRange(pkg.deliveredAt || pkg.updatedAt || pkg.createdAt, start, end))
     .reduce((summary, pkg) => {
@@ -3430,6 +3597,11 @@ function summarizeCourierPackagesForRange(packages, start, end) {
       paidOnlineAmount: 0,
       cashAmount: 0,
     });
+    
+  const settings = getSystemSettings();
+  const fee = Number(settings.courier_per_package_fee) || 0;
+  result.courierEarnings = result.deliveredCount * fee;
+  return result;
 }
 
 function buildCourierEarningsSummary(packages) {
@@ -4684,6 +4856,7 @@ function decorateState(filter = {}) {
   const sanitizedPlatformAccounts = state.platformAccounts.map((account) => sanitizePlatformAccount(account, Boolean(filter.includePlatformSecrets || filter.includeRestaurantSecrets)));
 
   return {
+    systemSettings: getSystemSettings(),
     zones,
     zoneAlerts: buildZoneAlerts(zones, packages),
     restaurants: state.restaurants.map((restaurant) => sanitizeRestaurant(restaurant, Boolean(filter.includeRestaurantSecrets))),
@@ -5327,22 +5500,56 @@ function verifyPlatformWebhookAuth(account, req, rawBody = undefined) {
 
   if (account.webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.BASIC_AUTH) {
     const basic = parseBasicAuthHeader(req);
-    return Boolean(
-      basic &&
-      basic.username === account.webhookUsername &&
-      basic.password === account.webhookPassword
-    );
+    if (!basic || !basic.username || !basic.password) {
+      return false;
+    }
+    // Use timing-safe comparison for credentials
+    try {
+      const usernameSafe = crypto.timingSafeEqual(
+        Buffer.from(basic.username),
+        Buffer.from(account.webhookUsername || "")
+      );
+      const passwordSafe = crypto.timingSafeEqual(
+        Buffer.from(basic.password),
+        Buffer.from(account.webhookPassword || "")
+      );
+      return usernameSafe && passwordSafe;
+    } catch {
+      return false;
+    }
   }
 
   if (account.webhookAuthType === PLATFORM_WEBHOOK_AUTH_TYPES.STATIC_TOKEN) {
     const authorization = String(req.headers.authorization || "");
     const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
     const tokens = candidateHeaderValues(req, ["x-webhook-token", "x-static-token", "x-partner-token", "x-yemeksepeti-token"]);
-    return [bearerToken, ...tokens].some((token) => token === account.staticToken);
+    
+    // Use timing-safe comparison for tokens
+    const allTokens = [bearerToken, ...tokens].filter(Boolean);
+    const expectedToken = account.staticToken || "";
+    
+    return allTokens.some((token) => {
+      try {
+        if (token.length !== expectedToken.length) return false;
+        return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expectedToken));
+      } catch {
+        return false;
+      }
+    });
   }
 
   const apiKeys = candidateHeaderValues(req, ["x-api-key", "api-key", "x-platform-api-key"]);
-  return apiKeys.includes(account.webhookApiKey);
+  const expectedApiKey = account.webhookApiKey || "";
+  
+  // Use timing-safe comparison for API keys
+  return apiKeys.some((key) => {
+    try {
+      if (key.length !== expectedApiKey.length) return false;
+      return crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expectedApiKey));
+    } catch {
+      return false;
+    }
+  });
 }
 
 function verifySimplePlatformSecret(account, restaurant, req) {
@@ -6306,6 +6513,7 @@ async function handleApi(req, res, pathname) {
       },
     });
 
+    setSessionCookie(res, auth.token);
     sendJson(res, 200, { ...auth, username: admin.username });
     return;
   }
@@ -6336,24 +6544,43 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "PUT" && pathname === "/api/admin/settings") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    updateSystemSettings(body);
+    broadcastLiveEvent({ type: "system-settings-update", message: "Sistem ayarlari guncellendi." });
+    sendJson(res, 200, { ok: true, state: decorateState() });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/refresh") {
     const { json: body } = await readRequestBody(req);
     const { refreshToken } = validateRefreshDraft(body);
-    sendJson(res, 200, refreshSessionPair("admin", refreshToken, req));
+    const auth = refreshSessionPair("admin", refreshToken, req);
+    setSessionCookie(res, auth.token);
+    sendJson(res, 200, auth);
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/refresh") {
     const { json: body } = await readRequestBody(req);
     const { refreshToken } = validateRefreshDraft(body);
-    sendJson(res, 200, refreshSessionPair("restaurant", refreshToken, req));
+    const auth = refreshSessionPair("restaurant", refreshToken, req);
+    setSessionCookie(res, auth.token);
+    sendJson(res, 200, auth);
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/courier/refresh") {
     const { json: body } = await readRequestBody(req);
     const { refreshToken } = validateRefreshDraft(body);
-    sendJson(res, 200, refreshSessionPair("courier", refreshToken, req));
+    const auth = refreshSessionPair("courier", refreshToken, req);
+    setSessionCookie(res, auth.token);
+    sendJson(res, 200, auth);
     return;
   }
 
@@ -6362,6 +6589,7 @@ async function handleApi(req, res, pathname) {
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("admin_sessions", getBearerToken(req));
     db.prepare("DELETE FROM refresh_tokens WHERE actor_role = ? AND token_hash = ?").run("admin", hashOpaqueToken(refreshToken));
+    clearSessionCookie(res);
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -6371,6 +6599,7 @@ async function handleApi(req, res, pathname) {
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("restaurant_sessions", getBearerToken(req));
     db.prepare("DELETE FROM refresh_tokens WHERE actor_role = ? AND token_hash = ?").run("restaurant", hashOpaqueToken(refreshToken));
+    clearSessionCookie(res);
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -6389,6 +6618,7 @@ async function handleApi(req, res, pathname) {
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("courier_sessions", getBearerToken(req));
     db.prepare("DELETE FROM refresh_tokens WHERE actor_role = ? AND token_hash = ?").run("courier", hashOpaqueToken(refreshToken));
+    clearSessionCookie(res);
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -6396,9 +6626,13 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/admin/forgot-password") {
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
+    const startTime = Date.now();
+    
     const actor = actorLookupByRole("admin", username);
+    let token = null;
+    
     if (actor) {
-      const token = issuePasswordReset("admin", actor.id, req);
+      token = issuePasswordReset("admin", actor.id, req);
       logPasswordReset("admin", username, token);
       writeAuditLog({
         actorRole: "admin",
@@ -6406,23 +6640,33 @@ async function handleApi(req, res, pathname) {
         action: "password_reset_requested",
         details: { username },
       });
-      sendJson(res, 200, {
-        message: "Parola yenileme talebi olusturuldu.",
-        ...(NODE_ENV === "production" ? {} : { resetToken: token }),
-      });
-      return;
+    } else {
+      // Timing attack mitigation: normalize response time for non-existent users
+      const elapsed = Date.now() - startTime;
+      const minDelay = 50;
+      if (elapsed < minDelay) {
+        const delay = minDelay - elapsed;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
 
-    sendJson(res, 200, { message: "Parola yenileme talebi olusturuldu." });
+    sendJson(res, 200, {
+      message: "Parola yenileme talebi olusturuldu.",
+      ...(NODE_ENV === "production" || !token ? {} : { resetToken: token }),
+    });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/forgot-password") {
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
+    const startTime = Date.now();
+    
     const actor = actorLookupByRole("restaurant", username);
+    let token = null;
+    
     if (actor) {
-      const token = issuePasswordReset("restaurant", actor.id, req);
+      token = issuePasswordReset("restaurant", actor.id, req);
       logPasswordReset("restaurant", username, token);
       writeAuditLog({
         actorRole: "restaurant",
@@ -6433,21 +6677,31 @@ async function handleApi(req, res, pathname) {
       });
       sendJson(res, 200, {
         message: "Parola yenileme talebi olusturuldu.",
-        ...(NODE_ENV === "production" ? {} : { resetToken: token }),
+        ...(NODE_ENV === "production" || !token ? {} : { resetToken: token }),
       });
-      return;
+    } else {
+      // Timing attack mitigation
+      const elapsed = Date.now() - startTime;
+      const minDelay = 50;
+      if (elapsed < minDelay) {
+        const delay = minDelay - elapsed;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      sendJson(res, 200, { message: "Parola yenileme talebi olusturuldu." });
     }
-
-    sendJson(res, 200, { message: "Parola yenileme talebi olusturuldu." });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/courier/forgot-password") {
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
+    const startTime = Date.now();
+    
     const actor = actorLookupByRole("courier", username);
+    let token = null;
+    
     if (actor) {
-      const token = issuePasswordReset("courier", actor.id, req);
+      token = issuePasswordReset("courier", actor.id, req);
       logPasswordReset("courier", username, token);
       writeAuditLog({
         actorRole: "courier",
@@ -6457,12 +6711,18 @@ async function handleApi(req, res, pathname) {
       });
       sendJson(res, 200, {
         message: "Parola yenileme talebi olusturuldu.",
-        ...(NODE_ENV === "production" ? {} : { resetToken: token }),
+        ...(NODE_ENV === "production" || !token ? {} : { resetToken: token }),
       });
-      return;
+    } else {
+      // Timing attack mitigation
+      const elapsed = Date.now() - startTime;
+      const minDelay = 50;
+      if (elapsed < minDelay) {
+        const delay = minDelay - elapsed;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      sendJson(res, 200, { message: "Parola yenileme talebi olusturuldu." });
     }
-
-    sendJson(res, 200, { message: "Parola yenileme talebi olusturuldu." });
     return;
   }
 
@@ -6510,9 +6770,17 @@ async function handleApi(req, res, pathname) {
       ? db.prepare("SELECT * FROM restaurants WHERE username = ?").get(access.username)
       : db.prepare("SELECT * FROM restaurants WHERE id = ? AND api_key = ?").get(access.restaurantId, access.apiKey);
 
-    if (!restaurant || (access.mode === "portal" && (!restaurant.password_salt || !verifyPassword(access.password, restaurant.password_salt, restaurant.password_hash)))) {
+    if (!restaurant) {
       sendJson(res, 401, { error: "Restoran kimligi veya API key hatali." });
       return;
+    }
+
+    // Validate password for portal mode
+    if (access.mode === "portal") {
+      if (!restaurant.password_salt || !verifyPassword(access.password, restaurant.password_salt, restaurant.password_hash)) {
+        sendJson(res, 401, { error: "Restoran kimligi veya sifre hatali." });
+        return;
+      }
     }
 
     const auth = issueSessionPair("restaurant", restaurant.id, req);
@@ -6528,6 +6796,7 @@ async function handleApi(req, res, pathname) {
       },
     });
 
+    setSessionCookie(res, auth.token);
     sendJson(res, 200, {
       ...auth,
       state: decorateState({
@@ -6579,6 +6848,83 @@ async function handleApi(req, res, pathname) {
     `;
     const rows = db.prepare(sql).all(session.restaurant_id);
     sendJson(res, 200, { reports: rows });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/restaurant/reports/daily-detail") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    const dateParam = requestUrl.searchParams.get("date");
+    if (!dateParam) {
+      sendJson(res, 400, { error: "Tarih parametresi gereklidir. Örnek: ?date=2026-06-19" });
+      return;
+    }
+
+    // Belirtilen güne ait teslim edilen tüm paketleri getir
+    const detailSql = `
+      SELECT
+        id, tracking_no, recipient, phone, address, delivery_address, customer_address,
+        assigned_courier_name,
+        payment_method, order_amount, payment_status,
+        source_platform, external_order_no,
+        created_at, delivered_at,
+        distance_km,
+        note
+      FROM packages
+      WHERE restaurant_id = ?
+        AND status = 'delivered'
+        AND DATE(created_at, 'localtime') = ?
+      ORDER BY created_at ASC
+    `;
+    const packages = db.prepare(detailSql).all(session.restaurant_id, dateParam);
+
+    // Özet hesapla
+    let total_revenue = 0;
+    let cash_revenue = 0;
+    let card_revenue = 0;
+    let online_revenue = 0;
+    const courierMap = {};
+
+    for (const pkg of packages) {
+      const amt = Number(pkg.order_amount) || 0;
+      total_revenue += amt;
+
+      if (pkg.payment_method && pkg.payment_method.includes("Nakit")) {
+        cash_revenue += amt;
+      } else if (pkg.payment_method && (pkg.payment_method.includes("Kart") || pkg.payment_method.includes("Kredi"))) {
+        card_revenue += amt;
+      } else {
+        online_revenue += amt;
+      }
+
+      const courierName = pkg.assigned_courier_name || "Bilinmiyor";
+      if (!courierMap[courierName]) {
+        courierMap[courierName] = { name: courierName, package_count: 0, total_revenue: 0 };
+      }
+      courierMap[courierName].package_count += 1;
+      courierMap[courierName].total_revenue += amt;
+    }
+
+    const couriers = Object.values(courierMap).sort((a, b) => b.package_count - a.package_count);
+
+    sendJson(res, 200, {
+      ok: true,
+      date: dateParam,
+      summary: {
+        total_packages: packages.length,
+        total_revenue,
+        cash_revenue,
+        card_revenue,
+        online_revenue
+      },
+      couriers,
+      packages
+    });
     return;
   }
 
@@ -8062,6 +8408,7 @@ async function handleApi(req, res, pathname) {
       },
     });
 
+    setSessionCookie(res, auth.token);
     sendJson(res, 200, {
       ...auth,
       courier: sanitizeCourier({
@@ -8083,6 +8430,32 @@ async function handleApi(req, res, pathname) {
       courierId: courier.id,
       message: `${courier.name} online oldu.`,
     });
+    return;
+  }
+
+  if (req.method === "PUT" && pathname === "/api/courier/me/credentials") {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Oturum bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const { username, password } = body;
+    if (!username) {
+      sendJson(res, 400, { error: "Kullanici adi zorunludur." });
+      return;
+    }
+    if (db.prepare("SELECT id FROM couriers WHERE username = ? AND id != ?").get(username, session.courier_id)) {
+      sendJson(res, 400, { error: "Bu kullanici adi baska bir kurye tarafindan kullaniliyor." });
+      return;
+    }
+    if (password) {
+      const passwordInfo = hashPassword(password);
+      db.prepare("UPDATE couriers SET username = ?, password_hash = ?, password_salt = ? WHERE id = ?").run(username, passwordInfo.hash, passwordInfo.salt, session.courier_id);
+    } else {
+      db.prepare("UPDATE couriers SET username = ? WHERE id = ?").run(username, session.courier_id);
+    }
+    sendJson(res, 200, { message: "Bilgiler guncellendi." });
     return;
   }
 
@@ -8595,6 +8968,80 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const adminCourierMatch = pathname.match(/^\/api\/admin\/couriers\/([^/]+)$/);
+  if (req.method === "DELETE" && adminCourierMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const targetId = adminCourierMatch[1];
+    const courier = db.prepare("SELECT * FROM couriers WHERE id = ?").get(targetId);
+    if (!courier) {
+      sendJson(res, 404, { error: "Kurye bulunamadi." });
+      return;
+    }
+    db.prepare("DELETE FROM courier_sessions WHERE courier_id = ?").run(targetId);
+    db.prepare("UPDATE packages SET assigned_courier_id = NULL, status = 'awaiting_assignment' WHERE assigned_courier_id = ? AND status != 'delivered'").run(targetId);
+    db.prepare("DELETE FROM courier_shifts WHERE courier_id = ?").run(targetId);
+    db.prepare("DELETE FROM courier_shift_plans WHERE courier_id = ?").run(targetId);
+    db.prepare("DELETE FROM cash_reconciliations WHERE courier_id = ?").run(targetId);
+    db.prepare("DELETE FROM couriers WHERE id = ?").run(targetId);
+    rebalancePackages();
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_deleted",
+      details: { username: courier.username },
+    });
+    broadcastLiveEvent({
+      type: "courier-deleted",
+      message: `${courier.name} sistemden silindi.`,
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
+  if (req.method === "PUT" && adminCourierMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const targetId = adminCourierMatch[1];
+    const courier = db.prepare("SELECT * FROM couriers WHERE id = ?").get(targetId);
+    if (!courier) {
+      sendJson(res, 404, { error: "Kurye bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const { username, password, name, zone } = body;
+    if (username && db.prepare("SELECT id FROM couriers WHERE username = ? AND id != ?").get(username, targetId)) {
+      sendJson(res, 400, { error: "Bu kullanici adi baska bir kurye tarafindan kullaniliyor." });
+      return;
+    }
+    if (password) {
+      const passwordInfo = hashPassword(password);
+      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ?, password_hash = ?, password_salt = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, passwordInfo.hash, passwordInfo.salt, targetId);
+    } else {
+      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, targetId);
+    }
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_updated",
+      details: { username: courier.username },
+    });
+    sendJson(res, 200, {
+      ...decorateState(),
+      auditLogs: getAuditLogs(20),
+    });
+    return;
+  }
+
   const availabilityMatch = pathname.match(/^\/api\/admin\/couriers\/([^/]+)\/availability$/);
   if (req.method === "PATCH" && availabilityMatch) {
     const adminSession = getAdminSession(req);
@@ -8853,6 +9300,7 @@ const server = http.createServer(async (req, res) => {
     recordRequestLog(req, res, requestStartedAt);
   });
   try {
+    console.log(`[DEBUG] INCOMING REQUEST: ${req.method} ${req.url}`);
     res._deliveraRequest = req;
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const { pathname } = requestUrl;

@@ -19,7 +19,7 @@ const courierState = {
   packageActionDrafts: new Map(),
   liveStream: null,
   lastWorkspaceLoadAt: 0,
-  activeProfileSection: "day-close",
+  activeProfileSection: localStorage.getItem("deliveraCourierActiveSection") || "day-close",
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -92,6 +92,9 @@ const courierRefs = {
   historyMore: document.getElementById("courierHistoryMore"),
   historyFilters: document.getElementById("courierHistoryFilters"),
   template: document.getElementById("courierPackageTemplate"),
+  profileSettingsButton: document.getElementById("profileSettingsButton"),
+  profileModal: document.getElementById("courierProfileModal"),
+  profileForm: document.getElementById("courierProfileForm"),
 };
 
 function persistCourierAuth(auth) {
@@ -119,22 +122,31 @@ async function refreshCourierAccess() {
     throw new Error("Kurye refresh token bulunamadi.");
   }
 
-  const auth = await api("/api/courier/refresh", {
-    method: "POST",
-    body: JSON.stringify({
-      refreshToken: courierState.refreshToken,
-    }),
-  });
-  persistCourierAuth(auth);
+  try {
+    const auth = await api("/api/courier/refresh", {
+      method: "POST",
+      body: JSON.stringify({
+        refreshToken: courierState.refreshToken,
+      }),
+    });
+    persistCourierAuth(auth);
+    return auth;
+  } catch (err) {
+    if (err.status === 401) {
+      clearCourierAuth();
+      window.location.reload();
+    }
+    throw err;
+  }
 }
 
 function setLoggedIn(isLoggedIn) {
+  document.body.classList.toggle("app-unauthenticated", !isLoggedIn);
   courierRefs.loginPanel.classList.toggle("hidden", isLoggedIn);
-  courierRefs.workspacePanel.classList.toggle("hidden", !isLoggedIn);
 }
 
 function setLocationStatus(message) {
-  courierRefs.locationStatus.textContent = message;
+  if (courierRefs.locationStatus) courierRefs.locationStatus.textContent = message;
 }
 
 function hasMapTarget(latitudeValue, longitudeValue, addressValue) {
@@ -262,6 +274,25 @@ function requestNotificationPermission() {
     Notification.requestPermission().catch(() => {
       // Ignore permission request errors.
     });
+  }
+}
+
+let screenWakeLock = null;
+
+async function requestScreenWakeLock() {
+  if (!courierState.token) return;
+  if ("wakeLock" in navigator) {
+    try {
+      if (screenWakeLock !== null) {
+        return; // Already active
+      }
+      screenWakeLock = await navigator.wakeLock.request("screen");
+      screenWakeLock.addEventListener("release", () => {
+        screenWakeLock = null;
+      });
+    } catch (err) {
+      // Ignore wake lock errors
+    }
   }
 }
 
@@ -407,10 +438,11 @@ function renderCourierDayMetrics(dayMetrics) {
     totalAmount: 0,
     paidOnlineAmount: 0,
     cashCollectedAmount: 0,
+    courierEarnings: 0,
     hasClosedDay: false,
     closedAt: null,
   };
-  const signature = listRenderSignature([metrics], ["deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "hasClosedDay", "closedAt"]);
+  const signature = listRenderSignature([metrics], ["deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "courierEarnings", "hasClosedDay", "closedAt"]);
   if (courierRefs.dayMetrics.__deliveraRenderSignature === signature) {
     return;
   }
@@ -425,6 +457,10 @@ function renderCourierDayMetrics(dayMetrics) {
     <article class="mini-stat-card">
       <span>Gunluk Ciro</span>
       <strong>${formatCurrency(metrics.totalAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Gunluk Kazanc</span>
+      <strong>${formatCurrency(metrics.courierEarnings || 0)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Online</span>
@@ -447,10 +483,10 @@ function renderCourierEarnings(earningsSummary) {
   }
 
   const data = earningsSummary || {
-    today: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
-    yesterday: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
-    last7Days: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
-    total: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0 },
+    today: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0, courierEarnings: 0 },
+    yesterday: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0, courierEarnings: 0 },
+    last7Days: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0, courierEarnings: 0 },
+    total: { deliveredCount: 0, totalAmount: 0, paidOnlineAmount: 0, cashAmount: 0, courierEarnings: 0 },
   };
   const signature = JSON.stringify(data);
   if (courierRefs.earningsMetrics.__deliveraRenderSignature === signature) {
@@ -460,24 +496,24 @@ function renderCourierEarnings(earningsSummary) {
 
   courierRefs.earningsMetrics.innerHTML = `
     <article class="mini-stat-card">
-      <span>Bugun</span>
-      <strong>${formatCurrency(data.today.totalAmount)}</strong>
+      <span>Bugunku Kazanc</span>
+      <strong>${formatCurrency(data.today.courierEarnings || 0)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Dun</span>
-      <strong>${formatCurrency(data.yesterday.totalAmount)}</strong>
+      <strong>${formatCurrency(data.yesterday.courierEarnings || 0)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Son 7 Gun</span>
-      <strong>${formatCurrency(data.last7Days.totalAmount)}</strong>
+      <strong>${formatCurrency(data.last7Days.courierEarnings || 0)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Toplam Teslimat</span>
       <strong>${data.total.deliveredCount}</strong>
     </article>
     <article class="mini-stat-card">
-      <span>Nakit / Online</span>
-      <strong>${formatCurrency(data.total.cashAmount)} / ${formatCurrency(data.total.paidOnlineAmount)}</strong>
+      <span>Toplam Kazanc</span>
+      <strong>${formatCurrency(data.total.courierEarnings || 0)}</strong>
     </article>
   `;
 }
@@ -513,6 +549,7 @@ function initializeCourierProfilePanels() {
       courierState.activeProfileSection = courierState.activeProfileSection === panel.dataset.section
         ? ""
         : panel.dataset.section;
+      localStorage.setItem("deliveraCourierActiveSection", courierState.activeProfileSection);
       syncCourierProfilePanels();
       panels.forEach((item) => {
         const itemHeader = item.querySelector(".panel-head");
@@ -736,14 +773,23 @@ function renderPackages(packages) {
     badge.className = `status-badge ${statusClassName(pkg.status)}`;
 
     const submitStatus = async (status, failureReason = "", paymentStatus = "") => {
-      const data = await api(`/api/courier/packages/${pkg.id}/status`, {
-        method: "PATCH",
-        headers: authHeaders(courierState.token),
-        body: JSON.stringify({ status, failureReason, paymentStatus }),
-        retryWithRefresh: refreshCourierAccess,
-      });
-      courierState.packageActionDrafts.delete(pkg.id);
-      hydrateCourierWorkspace(data);
+      if (status === "failed" && !failureReason) {
+        showToast("Lutfen sorun nedenini sec.", "error");
+        return;
+      }
+      try {
+        const updatedWorkspace = await api(`/api/courier/packages/${pkg.id}/status`, {
+          method: "PATCH",
+          headers: authHeaders(courierState.token),
+          body: JSON.stringify({ status, failureReason, paymentStatus }),
+          retryWithRefresh: refreshCourierAccess,
+        });
+        courierState.packageActionDrafts.delete(pkg.id);
+        hydrateCourierWorkspace(updatedWorkspace);
+        showToast("Paket durumu güncellendi.");
+      } catch (error) {
+        showToast(error.message || "Durum güncellenemedi.", "error");
+      }
     };
 
     actions.innerHTML = "";
@@ -953,13 +999,13 @@ function renderCourierFocus(courier, packages) {
     courierRefs.focusText.textContent = courier.available
       ? "Konum acik ve atamaya hazirsin. Yeni paket geldiginde burada ilk durak gorunecek."
       : "Pasif modda oldugun icin yeni paket dusmez. Hazir oldugunda tekrar aktif yap.";
-    courierRefs.missionMeta.textContent = "Henuz aktif paket yok.";
+    if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = "Henuz aktif paket yok.";
     return;
   }
 
   courierRefs.focusTitle.textContent = `${priority.recipient} - ${statusLabel(priority.status)}`;
   courierRefs.focusText.textContent = `${priority.restaurantName} cikisli teslimat. ${priority.zone} bolgesi, odeme ${priority.paymentMethod}.`;
-  courierRefs.missionMeta.textContent = `${packages.length} aktif paket, ${packages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
+  if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = `${packages.length} aktif paket, ${packages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
 }
 
 function syncAvailabilityButton(courier) {
@@ -973,11 +1019,14 @@ function hydrateCourierWorkspace(data) {
   courierState.data = data;
   setLoggedIn(true);
   requestNotificationPermission();
+  requestScreenWakeLock();
   startWorkspacePolling();
   startCourierLiveStream();
   courierRefs.name.textContent = data.courier.name;
-  courierRefs.summary.textContent =
-    `${data.courier.name} hesabinda ${data.packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length} aktif paket var.`;
+  if (courierRefs.summary) {
+    courierRefs.summary.textContent =
+      `${data.courier.name} hesabinda ${data.packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length} aktif paket var.`;
+  }
   if (courierRefs.liveBadge) {
     courierRefs.liveBadge.textContent = "Canli akis acik";
   }
@@ -1150,15 +1199,17 @@ async function loadCourierWorkspace(options = {}) {
     });
     hydrateCourierWorkspace(data);
   } catch (error) {
-  clearCourierAuth();
-  stopWorkspacePolling();
-  setLoggedIn(false);
-  if (courierRefs.liveBadge) {
-    courierRefs.liveBadge.textContent = "Canli akis kapali";
-  }
-  if (!options.silent) {
-    courierRefs.summary.textContent = error.message;
-  }
+    if (error.message.includes("Oturum") || error.message.includes("Kurye bulunamadi") || error.message.includes("refresh")) {
+      clearCourierAuth();
+      stopWorkspacePolling();
+      setLoggedIn(false);
+      if (!options.silent && courierRefs.summary) {
+        courierRefs.summary.textContent = error.message;
+      }
+    }
+    if (courierRefs.liveBadge) {
+      courierRefs.liveBadge.textContent = "Bağlantı koptu, tekrar deneniyor...";
+    }
   }
 }
 
@@ -1241,13 +1292,63 @@ courierRefs.logoutButton?.addEventListener("click", async () => {
   clearCourierAuth();
   setLoggedIn(false);
   setLocationStatus("Konum kapatildi.");
-  courierRefs.summary.textContent = "Cikis yapildi.";
+  if (courierRefs.summary) {
+    courierRefs.summary.textContent = "Cikis yapildi.";
+  }
   if (courierRefs.liveBadge) {
     courierRefs.liveBadge.textContent = "Canli akis kapali";
   }
 });
 
+if (courierRefs.profileSettingsButton) {
+  courierRefs.profileSettingsButton.addEventListener("click", () => {
+    if (courierState.data?.courier) {
+      courierRefs.profileForm.elements["username"].value = courierState.data.courier.username;
+      courierRefs.profileForm.elements["password"].value = "";
+    }
+    courierRefs.profileModal?.showModal();
+  });
+}
+
+if (courierRefs.profileModal) {
+  courierRefs.profileModal.querySelector(".close-modal-btn").addEventListener("click", () => {
+    courierRefs.profileModal.close();
+  });
+}
+
+if (courierRefs.profileForm) {
+  courierRefs.profileForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(courierRefs.profileForm);
+    const payload = {
+      username: formData.get("username"),
+      password: formData.get("password"),
+    };
+    try {
+      await api("/api/courier/me/credentials", {
+        method: "PUT",
+        headers: authHeaders(courierState.token),
+        body: JSON.stringify(payload),
+        retryWithRefresh: refreshCourierAccess,
+      });
+      courierRefs.profileModal.close();
+      showToast("Profil basariyla guncellendi.");
+      if (payload.username && courierState.data?.courier) {
+        courierState.data.courier.username = payload.username;
+      }
+    } catch (err) {
+      showToast(err.message || "Guncellenirken hata olustu", true);
+    }
+  });
+}
+
 window.addEventListener("beforeunload", stopLocationWatch);
 window.addEventListener("beforeunload", stopWorkspacePolling);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    requestScreenWakeLock();
+  }
+});
 
 loadCourierWorkspace();

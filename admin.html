@@ -67,6 +67,10 @@
               <i data-lucide="megaphone" class="link-icon"></i>
               Duyuru Paneli
             </div>
+            <div class="tree-link" data-section="adminWorkspace_management_couriers">
+              <i data-lucide="users" class="link-icon"></i>
+              Kurye Yönetimi
+            </div>
           </div>
         </div>
         <div class="tree-group">
@@ -84,6 +88,10 @@
               <i data-lucide="clipboard-check" class="link-icon"></i>
               Kurye Gün Sonu
             </div>
+            <div class="tree-link" data-section="adminWorkspace_financial_settings">
+              <i data-lucide="coins" class="link-icon"></i>
+              Finansal Yönetim
+            </div>
           </div>
         </div>
         <div class="tree-group">
@@ -100,6 +108,10 @@
             <div class="tree-link" data-section="adminWorkspace_system_webhooks">
               <i data-lucide="webhook" class="link-icon"></i>
               Webhook Logları
+            </div>
+            <div class="tree-link" data-section="adminWorkspace_system_integration_ids">
+              <i data-lucide="fingerprint" class="link-icon"></i>
+              Entegrasyon ID'leri
             </div>
             <div class="tree-link" data-section="adminWorkspace_system_health">
               <i data-lucide="heart-pulse" class="link-icon"></i>
@@ -392,6 +404,72 @@
         <div id="announcementList" class="stack-list compact-stack-list"></div>
       </section>
         </div>
+
+        <div id="adminWorkspace_management_couriers" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel" style="grid-column: 1 / -1;">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-teal">Kurye Listesi</p>
+                  <h3>Sistemde kayitli tum kuryeler</h3>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ad Soyad</th>
+                      <th>Kurye ID</th>
+                      <th>Kullanici Adi</th>
+                      <th>Bolge</th>
+                      <th>Durum</th>
+                      <th style="text-align: right;">Islemler</th>
+                    </tr>
+                  </thead>
+                  <tbody id="adminCourierTableBody">
+                    <tr><td colspan="6" class="soft-copy" style="text-align: center;">Yukleniyor...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        </div>
+        
+        <!-- Kurye Edit Modal -->
+        <dialog id="adminCourierEditModal" class="glass-modal">
+          <div class="modal-content">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow accent-teal">Kurye Duzenle</p>
+                <h3 id="adminCourierEditTitle">Kurye Bilgileri</h3>
+              </div>
+              <button class="ghost-btn close-modal-btn" type="button"><i data-lucide="x"></i></button>
+            </div>
+            <form id="adminCourierEditForm" class="form-grid">
+              <input type="hidden" name="courierId">
+              <label>Ad Soyad
+                <input name="name" type="text" required>
+              </label>
+              <label>Kullanici Adi
+                <input name="username" type="text" required>
+              </label>
+              <label>Bolge
+                <select name="zone" required>
+                  <option value="Akdeniz">Akdeniz</option>
+                  <option value="Yenisehir">Yenisehir</option>
+                  <option value="Mezitli">Mezitli</option>
+                  <option value="Toroslar">Toroslar</option>
+                  <option value="Tarsus">Tarsus</option>
+                  <option value="Erdemli">Erdemli</option>
+                </select>
+              </label>
+              <label>Yeni Sifre
+                <input name="password" type="password" placeholder="Degistirmek icin girin">
+              </label>
+              <button class="primary-btn full-width" type="submit" style="grid-column: 1 / -1;">Guncelle</button>
+            </form>
+          </div>
+        </dialog>
         
         <div id="adminWorkspace_planning_shifts" class="content-section">
           <section class="dashboard-grid">
@@ -486,6 +564,29 @@
       </section>
         </div>
         
+        <div id="adminWorkspace_system_integration_ids" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-teal">Restoran ID'leri</p>
+                  <h3>Entegrasyonlarda kullanilacak restoran kimlikleri</h3>
+                </div>
+              </div>
+              <div id="restaurantIntegrationIdList" class="stack-list compact-stack-list"></div>
+            </article>
+            <article class="glass-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-teal">Kurye ID'leri</p>
+                  <h3>Kurye hesaplari icin ozel kimlikler</h3>
+                </div>
+              </div>
+              <div id="courierIntegrationIdList" class="stack-list compact-stack-list"></div>
+            </article>
+          </section>
+        </div>
+        
         <div id="adminWorkspace_system_audit" class="content-section">
           <section class="glass-panel">
         <div class="panel-head">
@@ -496,6 +597,27 @@
         </div>
         <div id="auditLogList" class="stack-list"></div>
       </section>
+        </div>
+        
+        <div id="adminWorkspace_financial_settings" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel" style="grid-column: 1 / -1; max-width: 600px; margin: 0 auto;">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-teal">Sistem Finansal Ayarları</p>
+                  <h3>Kurye Ödeme ve Kazanç Ayarları</h3>
+                </div>
+              </div>
+              <form id="adminFinancialSettingsForm" class="form-grid">
+                <label style="grid-column: 1 / -1;">
+                  Kurye Paket Başı Ücreti (TL)
+                  <input name="courier_per_package_fee" type="number" step="0.01" required>
+                  <small class="soft-copy">Bu tutar, teslim edilen paket başına kuryenin hak edişini hesaplamak için kullanılır.</small>
+                </label>
+                <button class="primary-btn full-width" type="submit" style="grid-column: 1 / -1;">Ayarları Kaydet</button>
+              </form>
+            </article>
+          </section>
         </div>
       </section>
     </main>
@@ -547,10 +669,14 @@
   
   
   <script>
-    window.addEventListener("load", () => window.lucide?.createIcons());
+    if (window.lucide) {
+      window.lucide.createIcons();
+    } else {
+      window.addEventListener("load", () => window.lucide?.createIcons());
+    }
   </script>
-<script src="/shared.js?v=1781796422070"></script>
-  <script src="/admin.js?v=1781796422070"></script>
+<script src="/shared.js?v=2"></script>
+  <script src="/admin.js?v=2"></script>
 </body>
 
 

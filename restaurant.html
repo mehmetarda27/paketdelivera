@@ -393,6 +393,16 @@
               Platform
               <select name="platform" id="platformSelect"></select>
             </label>
+            <div class="integration-card full-width">
+              <div class="stack-top">
+                <div>
+                  <strong>Operasyon Restoran ID</strong>
+                  <p>Kayitli restoran ID'siyle bu platform hesabini operasyonlara bagla.</p>
+                  <code id="operationRestaurantId">Restoran girisi bekleniyor</code>
+                </div>
+                <button id="useOperationRestaurantIdButton" class="ghost-btn" type="button">Bu ID ile Bagla</button>
+              </div>
+            </div>
             <label>
               Restoran / Store / Supplier ID
               <input name="externalStoreId" type="text" placeholder="Platformdaki magaza kimligi" required>
@@ -556,9 +566,14 @@
               <h2>Gün Sonu (Z-Raporu) Geçmişi</h2>
               <p class="sidebar-copy">Son 6 aya ait teslim edilen siparişlerin günlük ciro özetleri.</p>
             </div>
-            <button id="printReportButton" class="primary-btn" type="button" style="display: flex; align-items: center; gap: 8px;">
-              <i data-lucide="printer" style="width: 18px; height: 18px;"></i> Yazdır
-            </button>
+            <div style="display: flex; gap: 8px;">
+              <button id="exportReportExcel" class="secondary-btn" type="button" style="display: flex; align-items: center; gap: 8px;">
+                <i data-lucide="file-spreadsheet" style="width: 18px; height: 18px;"></i> Excel İndir
+              </button>
+              <button id="printReportButton" class="primary-btn" type="button" style="display: flex; align-items: center; gap: 8px;">
+                <i data-lucide="printer" style="width: 18px; height: 18px;"></i> Yazdır
+              </button>
+            </div>
           </section>
           <div id="restaurantPrintArea">
             <div class="print-only-header" style="display: none;">
@@ -581,6 +596,45 @@
                   </thead>
                   <tbody id="restaurantReportTableBody">
                     <tr><td colspan="6" style="text-align: center;">Raporlar yükleniyor...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section id="reportDetailSection" class="glass-panel" style="display: none; margin-top: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div>
+                  <h3 id="reportDetailTitle" style="margin: 0;">Günlük Detay</h3>
+                  <p id="reportDetailSubtitle" class="sidebar-copy" style="margin: 4px 0 0;"></p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button id="exportDetailExcel" class="secondary-btn" type="button" style="display: flex; align-items: center; gap: 6px;">
+                    <i data-lucide="file-spreadsheet" style="width: 16px; height: 16px;"></i> Detay Excel
+                  </button>
+                  <button id="closeReportDetail" class="ghost-btn" type="button">✕ Kapat</button>
+                </div>
+              </div>
+
+              <!-- Courier summary cards -->
+              <div id="reportCourierSummary" style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;"></div>
+
+              <!-- Detail table -->
+              <div class="table-responsive">
+                <table class="report-table">
+                  <thead>
+                    <tr>
+                      <th>Takip No</th>
+                      <th>Kurye</th>
+                      <th>Alıcı</th>
+                      <th>Adres</th>
+                      <th>Platform</th>
+                      <th>Ödeme</th>
+                      <th style="text-align: right;">Tutar</th>
+                      <th>Teslim Saati</th>
+                      <th style="text-align: right;">Mesafe</th>
+                    </tr>
+                  </thead>
+                  <tbody id="reportDetailTableBody">
                   </tbody>
                 </table>
               </div>

@@ -1,1 +1,3 @@
-Admin bootstrap log cleaned after temporary production-safe check. Use configured admin credentials or reset flow.
+Delivera Express ilk admin hesabi olusturuldu.
+Kullanici adi: admin
+Sifre: Delivera123!

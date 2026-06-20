@@ -1,0 +1,250 @@
+const { parentPort, workerData } = require("worker_threads");
+const { Pool } = require("pg");
+const { createClient } = require("redis");
+
+const { sab } = workerData;
+const sabInts = new Int32Array(sab);
+const sabBuffer = new Uint8Array(sab);
+
+const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+const redisUrl = process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL || "";
+
+let pgPool = null;
+let pgPoolPromise = null;
+let redisClient = null;
+
+async function getPgPool() {
+  if (pgPoolPromise) return pgPoolPromise;
+
+  pgPoolPromise = (async () => {
+    if (!pgUrl) {
+      throw new Error("DATABASE_URL or POSTGRES_URL is not configured.");
+    }
+    const pool = new Pool({
+      connectionString: pgUrl,
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+
+    // Run initial schema setups (like datetime functions)
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query(`
+          CREATE OR REPLACE FUNCTION datetime(val text) RETURNS timestamp AS $$
+          BEGIN
+            RETURN val::timestamp;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+        await client.query(`
+          CREATE OR REPLACE FUNCTION datetime(val timestamp with time zone) RETURNS timestamp AS $$
+          BEGIN
+            RETURN val::timestamp;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+        await client.query(`
+          CREATE OR REPLACE FUNCTION datetime(val timestamp without time zone) RETURNS timestamp AS $$
+          BEGIN
+            RETURN val;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+        await client.query(`
+          CREATE OR REPLACE FUNCTION strftime(format text, val text) RETURNS bigint AS $$
+          DECLARE
+            ts timestamp;
+          BEGIN
+            IF val = 'now' THEN
+              ts := NOW();
+            ELSE
+              ts := val::timestamp;
+            END IF;
+            
+            IF format = '%s' THEN
+              RETURN EXTRACT(EPOCH FROM ts)::bigint;
+            END IF;
+            
+            RETURN 0;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+        await client.query(`
+          CREATE OR REPLACE FUNCTION strftime(format text, val timestamp with time zone) RETURNS bigint AS $$
+          BEGIN
+            IF format = '%s' THEN
+              RETURN EXTRACT(EPOCH FROM val)::bigint;
+            END IF;
+            RETURN 0;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+        await client.query(`
+          CREATE OR REPLACE FUNCTION strftime(format text, val timestamp without time zone) RETURNS bigint AS $$
+          BEGIN
+            IF format = '%s' THEN
+              RETURN EXTRACT(EPOCH FROM val)::bigint;
+            END IF;
+            RETURN 0;
+          END;
+          $$ LANGUAGE plpgsql IMMUTABLE;
+        `);
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      console.error("Failed to initialize PostgreSQL custom helper functions:", err.message);
+    }
+    
+    pgPool = pool;
+    return pool;
+  })();
+
+  return pgPoolPromise;
+}
+
+async function getRedisClient() {
+  if (redisClient) return redisClient;
+  if (!redisUrl) {
+    return null;
+  }
+  redisClient = createClient({ url: redisUrl });
+  redisClient.on("error", () => {
+    // Suppress error logs to keep console clean, client will retry
+  });
+  await redisClient.connect();
+  return redisClient;
+}
+
+// Convert SQLite placeholders (?) to Postgres placeholders ($1, $2, etc.)
+// Ignores question marks inside single or double quotes
+function sqliteToPgSql(sql) {
+  let paramIndex = 1;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+  let result = "";
+
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i];
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+    } else if (char === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+    }
+
+    if (char === "?" && !inSingleQuote && !inDoubleQuote) {
+      result += `$${paramIndex++}`;
+    } else {
+      result += char;
+    }
+  }
+
+  return result;
+}
+
+async function handleRequest(req) {
+  const { type, sql, params, cmd, key, val, ttl } = req;
+
+  if (type === "db") {
+    const pool = await getPgPool();
+    
+    // SQLite Compatibility Translation
+    let pgSql = sql;
+    
+    // 1. Convert INSERT OR IGNORE INTO ... VALUES ... (;|\Z)
+    pgSql = pgSql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*([\s\S]*?)(;|\Z)/gi, "INSERT INTO $1 ($2) VALUES $3 ON CONFLICT DO NOTHING$4");
+    
+    // 2. Convert autoincrement schema elements
+    pgSql = pgSql.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/gi, "SERIAL PRIMARY KEY");
+    pgSql = pgSql.replace(/\bAUTOINCREMENT\b/gi, "");
+    
+    // 3. Convert BEGIN IMMEDIATE to BEGIN
+    pgSql = pgSql.replace(/\bBEGIN\s+IMMEDIATE\b/gi, "BEGIN");
+    
+    // 4. Map SQLite system functions or constants
+    pgSql = pgSql
+      .replace(/\bdatetime\(current_timestamp\)/gi, "NOW()")
+      .replace(/\bdatetime\('now'\)/gi, "NOW()")
+      .replace(/\bcurrent_timestamp\b/gi, "NOW()");
+
+    // 5. Convert placeholders (?) to Postgres style ($1, $2)
+    pgSql = sqliteToPgSql(pgSql);
+
+    const res = await pool.query(pgSql, params || []);
+    return {
+      rows: res.rows,
+      rowCount: res.rowCount,
+    };
+  }
+
+  if (type === "redis") {
+    const client = await getRedisClient();
+    if (!client) {
+      return { ok: false, error: "redis_not_configured" };
+    }
+
+    if (cmd === "get") {
+      const data = await client.get(key);
+      return { ok: true, data };
+    }
+    if (cmd === "set") {
+      const options = ttl ? { EX: Number(ttl) } : undefined;
+      await client.set(key, val, options);
+      return { ok: true };
+    }
+    if (cmd === "del") {
+      await client.del(key);
+      return { ok: true };
+    }
+  }
+
+  throw new Error(`Unsupported request type: ${type}`);
+}
+
+parentPort.on("message", async () => {
+  try {
+    // Read request from buffer
+    const reqLength = sabInts[1];
+    const reqBytes = Buffer.from(sabBuffer.buffer, sabBuffer.byteOffset + 8, reqLength);
+    const req = JSON.parse(reqBytes.toString("utf8"));
+
+    const result = await handleRequest(req);
+
+    // Write response to buffer
+    const resStr = JSON.stringify({ ok: true, data: result });
+    const resBytes = Buffer.from(resStr, "utf8");
+    sabInts[1] = resBytes.length;
+    resBytes.copy(sabBuffer, 8);
+
+    // Set status to 2 (Success)
+    Atomics.store(sabInts, 0, 2);
+  } catch (error) {
+    // Write error to buffer
+    const resStr = JSON.stringify({ ok: false, error: error.message });
+    const resBytes = Buffer.from(resStr, "utf8");
+    sabInts[1] = resBytes.length;
+    resBytes.copy(sabBuffer, 8);
+
+    // Set status to 3 (Error)
+    Atomics.store(sabInts, 0, 3);
+  } finally {
+    // Notify main thread
+    Atomics.notify(sabInts, 0, 1);
+  }
+});

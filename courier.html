@@ -11,69 +11,87 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=1781795596172">
+  <link rel="stylesheet" href="/styles.css?v=1781800000000">
 </head>
-<body class="theme-courier">
-  <div class="role-shell wide-shell">
-    <main class="role-main courier-main expanded-main">
-      <section class="topbar glass-panel dark-panel workspace-hero">
-        <div>
-          <div class="brand-mark light">Delivera Express</div>
-          <p class="eyebrow accent-gold">Kurye Paneli</p>
-          <h2>Sahadaki teslimatları hızlı ve net şekilde yönet.</h2>
-          <p class="soft-copy">Aktif görevler, canlı kurye durumu ve kapanan teslimat geçmişi tek panelde görünür.</p>
-        </div>
-        <div class="hero-summary-card dark">
-          <span>Kurye Özeti</span>
-          <strong id="courierSummary">Giriş yapıldığında aktif işler burada görünür.</strong>
-        </div>
-      </section>
-      <section id="loginPanel" class="topbar glass-panel dark-panel login-panel courier-login-panel">
-        <div>
-          <p class="eyebrow accent-gold">Login</p>
-          <h2>Kullanıcı adı ve şifre ile kurye girişi yap.</h2>
-          <p class="soft-copy">Kurye hesapları admin paneli üzerinden tanımlanır. Her kurye yalnızca kendine atanmış işleri görür.</p>
-        </div>
-        <form id="loginForm" class="login-form">
-          <label>
-            Kullanıcı Adı
-            <input name="username" type="text" placeholder="mert" autocomplete="username" required>
-          </label>
-          <label>
-            Şifre
-            <input name="password" type="password" placeholder="********" autocomplete="current-password" required>
-          </label>
-          <button class="primary-btn" type="submit">Giriş Yap</button>
-        </form>
-      </section>
+<body class="theme-courier app-unauthenticated">
+  <div class="courier-mobile-app">
+    
+    <section id="loginPanel" class="topbar glass-panel dark-panel login-panel courier-login-panel">
+      <div>
+        <p class="eyebrow accent-gold">Kurye Paneli</p>
+        <h2>Delivera Express<br>Mobil Giriş</h2>
+        <p class="soft-copy">Lütfen kurye hesap bilgilerinizle giriş yapın.</p>
+      </div>
+      <form id="loginForm" class="login-form">
+        <label>
+          Kullanıcı Adı
+          <input name="username" type="text" placeholder="Kullanıcı adınız" autocomplete="username" required>
+        </label>
+        <label>
+          Şifre
+          <input name="password" type="password" placeholder="********" autocomplete="current-password" required>
+        </label>
+        <button class="primary-btn huge-btn" type="submit" style="width: 100%; padding: 14px; font-size: 1.1rem; margin-top: 10px;">Giriş Yap</button>
+      </form>
+    </section>
 
-      <section id="workspacePanel" class="dashboard-grid courier-layout hidden">
-        <article class="glass-panel dark-panel courier-profile-panel">
-          <div class="panel-head">
+    <main class="courier-mobile-main">
+      
+      <!-- 1. AKTİF GÖREVLER (VARSAYILAN AÇIK) -->
+      <section id="courierWorkspace_active_missions" class="content-section active-section">
+        
+        <div class="courier-live-bar glass-panel dark-panel">
+          <div class="live-bar-header" style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <p class="eyebrow accent-gold">Kurye Hesabı</p>
-              <h3 id="courierName">Kurye</h3>
-            </div>
-            <button id="logoutButton" class="ghost-btn" type="button">Çıkış Yap</button>
-          </div>
-          <div class="courier-live-bar">
-            <div>
-              <p class="eyebrow accent-gold">Canlı Konum</p>
+              <p class="eyebrow accent-gold">Durum</p>
               <strong id="locationStatus">Konum izni bekleniyor.</strong>
             </div>
-            <div class="badge-row">
-              <button id="shareLocationButton" class="primary-btn" type="button">Konumu Aç</button>
-              <button id="availabilityButton" class="ghost-btn" type="button">Pasife Al</button>
+            <div class="live-bar-actions" style="display: flex; gap: 8px;">
+              <button id="shareLocationButton" class="primary-btn small-btn" type="button">Bağlan</button>
+              <button id="availabilityButton" class="ghost-btn small-btn" type="button">Pasif</button>
             </div>
           </div>
-          <div class="courier-focus-card">
-            <p class="eyebrow accent-gold">Sıradaki İş</p>
-            <strong id="courierFocusTitle">Aktif görev bekleniyor.</strong>
-            <p id="courierFocusText" class="soft-copy">Kurye aktif olduğunda en kritik teslimat burada özetlenir.</p>
+          <span id="courierLiveBadge" class="soft-badge" style="margin-top: 12px; display: inline-block;">Canlı akış bekleniyor</span>
+        </div>
+
+        <div class="courier-focus-card glass-panel dark-panel accent-border" style="margin-top: 16px; text-align: center; padding: 24px;">
+          <p class="eyebrow accent-gold">Sıradaki İş</p>
+          <strong id="courierFocusTitle" style="font-size: 1.6rem; display: block; margin: 12px 0;">Aktif görev bekleniyor.</strong>
+          <p id="courierFocusText" class="soft-copy" style="font-size: 1.1rem;">Yeni siparişler düştüğünde burada dev puntolarla görünecek.</p>
+        </div>
+
+        <div class="panel-head" style="margin-top: 24px; margin-bottom: 12px; padding: 0 4px;">
+          <div>
+            <h3 style="font-size: 1.2rem; color: var(--ink);">Üzerimdeki Paketler</h3>
           </div>
-          <div id="courierStats" class="mini-stat-list"></div>
-          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
-            <div class="panel-head">
+        </div>
+        <div id="courierPackages" class="package-list"></div>
+
+      </section>
+
+      <!-- 2. PROFIL & ÖZET (DASHBOARD) -->
+      <section id="courierWorkspace_dashboard" class="content-section">
+        <article class="glass-panel dark-panel courier-profile-panel">
+          <div class="panel-head" style="margin-bottom: 20px;">
+            <div>
+              <p class="eyebrow accent-gold">Kurye Hesabı</p>
+              <h3 id="courierName" style="font-size: 1.4rem;">Kurye</h3>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="profileSettingsButton" class="ghost-btn" type="button" title="Profil Ayarları">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              </button>
+              <button id="logoutButton" class="ghost-btn" type="button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                Çıkış
+              </button>
+            </div>
+          </div>
+          
+          <div id="courierStats" class="mini-stat-list" style="margin-bottom: 20px;"></div>
+          
+          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+            <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Gün Sonu</p>
                 <h3>Günlük Ciro</h3>
@@ -82,86 +100,85 @@
             </div>
             <div id="courierDayMetrics" class="mini-stat-list"></div>
           </div>
-          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
-            <div class="panel-head">
+          
+          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+            <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Kazanç ve Vardiya</p>
-                <h3>Kurye Kazanç Özeti</h3>
+                <h3>Kazanç Özeti</h3>
               </div>
-              <span id="courierLiveBadge" class="soft-badge">Canlı akış bekleniyor</span>
             </div>
             <div id="courierEarningsMetrics" class="mini-stat-list"></div>
-            <div id="courierShiftMetrics" class="stack-list compact-stack-list"></div>
+            <div id="courierShiftMetrics" class="stack-list compact-stack-list" style="margin-top: 12px;"></div>
           </div>
-          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
-            <div class="panel-head">
+
+          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+            <div class="panel-head" style="margin-bottom: 12px;">
               <div>
-                <p class="eyebrow accent-gold">Bildirim Merkezi</p>
-                <h3>Son atama ve operasyon olaylari</h3>
+                <p class="eyebrow accent-gold">Bildirimler</p>
               </div>
             </div>
             <div id="courierNotificationCenter" class="stack-list compact-stack-list"></div>
           </div>
-          <div class="glass-panel dark-panel courier-day-panel inner-day-panel">
-            <div class="panel-head">
+          
+          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+            <div class="panel-head" style="margin-bottom: 12px;">
               <div>
-                <p class="eyebrow accent-gold">Operasyon Duyurulari</p>
-                <h3>Admin duyurulari silinene kadar burada kalir</h3>
+                <p class="eyebrow accent-gold">Duyurular</p>
               </div>
             </div>
             <div id="courierAnnouncementList" class="stack-list compact-stack-list"></div>
           </div>
         </article>
+      </section>
 
+      <!-- 3. GEÇMİŞ TESLİMATLAR -->
+      <section id="courierWorkspace_history" class="content-section">
         <article class="glass-panel dark-panel courier-mission-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow accent-gold">Aktif Görevler</p>
-              <h3>Atanan Paketler</h3>
-            </div>
-          </div>
-          <div class="courier-mission-strip">
-            <div class="mini-stat-card">
-              <span>Görev Özeti</span>
-              <strong id="courierMissionMeta">Henüz aktif paket yok.</strong>
-            </div>
-          </div>
-          <div id="courierPackages" class="package-list"></div>
-        </article>
-
-        <article class="glass-panel dark-panel courier-mission-panel">
-          <div class="panel-head">
+          <div class="panel-head" style="margin-bottom: 16px;">
             <div>
               <p class="eyebrow accent-gold">Paket Geçmişi</p>
-              <h3>Geçmiş Teslimatlar</h3>
+              <h3 style="font-size: 1.4rem;">Geçmiş Teslimatlar</h3>
             </div>
           </div>
           <div class="history-shell">
-            <div class="history-toolbar">
-              <div class="badge-row" id="courierHistoryFilters">
-                <button class="ghost-btn active" type="button" data-range="7d">Son 7 Gün</button>
-                <button class="ghost-btn" type="button" data-range="today">Bugun</button>
-                <button class="ghost-btn" type="button" data-range="yesterday">Dun</button>
-                <button class="ghost-btn" type="button" data-range="30d">Son 30 Gün</button>
-                <button class="ghost-btn" type="button" data-range="all">Tüm Kayıtlar</button>
+            <div class="history-toolbar" style="flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 16px;">
+              <div class="badge-row" id="courierHistoryFilters" style="overflow-x: auto; padding-bottom: 8px;">
+                <button class="ghost-btn active" type="button" data-range="7d" style="white-space: nowrap;">Son 7 Gün</button>
+                <button class="ghost-btn" type="button" data-range="today" style="white-space: nowrap;">Bugün</button>
+                <button class="ghost-btn" type="button" data-range="yesterday" style="white-space: nowrap;">Dün</button>
+                <button class="ghost-btn" type="button" data-range="30d" style="white-space: nowrap;">30 Gün</button>
+                <button class="ghost-btn" type="button" data-range="all" style="white-space: nowrap;">Tümü</button>
               </div>
-              <strong id="courierHistoryMeta" class="history-meta">Son 50 kapanan teslimat görünüyor.</strong>
+              <strong id="courierHistoryMeta" class="history-meta" style="align-self: flex-start;">Son 50 kayıt</strong>
             </div>
             <div id="courierHistory" class="stack-list history-list"></div>
-            <div class="history-actions">
-              <button id="courierHistoryMore" class="ghost-btn" type="button">Daha Fazla Yükle</button>
+            <div class="history-actions" style="margin-top: 16px;">
+              <button id="courierHistoryMore" class="ghost-btn" type="button" style="width: 100%; padding: 12px;">Daha Fazla Yükle</button>
             </div>
           </div>
         </article>
       </section>
+
     </main>
+
+    <!-- Sabit Alt Navigasyon -->
+    <nav class="courier-bottom-nav">
+      <button class="nav-item tree-link active-link" data-section="courierWorkspace_active_missions">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <span>Görevler</span>
+      </button>
+      <button class="nav-item tree-link" data-section="courierWorkspace_dashboard">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        <span>Profil</span>
+      </button>
+      <button class="nav-item tree-link" data-section="courierWorkspace_history">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Geçmiş</span>
+      </button>
+    </nav>
   </div>
-  <nav class="courier-bottom-nav" aria-label="Kurye alt menusu">
-    <a href="#courierPackages" class="active"><i data-lucide="clipboard-list"></i><span>Gorevler</span></a>
-    <a href="#courierPackages"><i data-lucide="map"></i><span>Harita</span></a>
-    <a href="#courierEarningsMetrics"><i data-lucide="wallet"></i><span>Kazanc</span></a>
-    <a href="#courierName"><i data-lucide="user-round"></i><span>Profil</span></a>
-  </nav>
+
   <template id="courierPackageTemplate">
     <article class="package-card dark-card-shell courier-task-card">
       <div class="package-top">
@@ -209,13 +226,40 @@
       </div>
     </article>
   </template>
+
+  <!-- Profil Ayarlari Modali -->
+  <dialog id="courierProfileModal" class="glass-modal dark-panel">
+    <div class="modal-content">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow accent-gold">Ayarlar</p>
+          <h3>Profil Bilgileri</h3>
+        </div>
+        <button class="ghost-btn close-modal-btn" type="button"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg></button>
+      </div>
+      <form id="courierProfileForm" class="form-grid">
+        <label>Kullanici Adi
+          <input name="username" type="text" required>
+        </label>
+        <label>Yeni Sifre
+          <input name="password" type="password" placeholder="Degistirmek icin girin">
+        </label>
+        <button class="primary-btn full-width" type="submit" style="grid-column: 1 / -1;">Kaydet</button>
+      </form>
+    </div>
+  </dialog>
+
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   
   
   <script>
-    window.addEventListener("load", () => window.lucide?.createIcons());
+    if (window.lucide) {
+      window.lucide.createIcons();
+    } else {
+      window.addEventListener("load", () => window.lucide?.createIcons());
+    }
   </script>
-<script src="/shared.js?v=1781796422070"></script>
-  <script src="/courier.js?v=1781796422070"></script>
+  <script src="/shared.js?v=3"></script>
+  <script src="/courier.js?v=3"></script>
 </body>
 </html>
