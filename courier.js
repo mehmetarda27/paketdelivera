@@ -19,6 +19,7 @@ const courierState = {
   packageActionDrafts: new Map(),
   liveStream: null,
   lastWorkspaceLoadAt: 0,
+  connectionBusy: false,
   activeProfileSection: localStorage.getItem("deliveraCourierActiveSection") || "day-close",
 };
 
@@ -29,6 +30,20 @@ const COURIER_FAILURE_REASON_OPTIONS = [
   { value: "teknik_sorun", label: "Teknik sorun" },
   { value: "diger", label: "Diger" },
 ];
+
+const COURIER_PACKAGE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`;
+const COURIER_MOTO_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16A3 3 0 1 0 5 22A3 3 0 1 0 5 16Z"></path><path d="M19 16A3 3 0 1 0 19 22A3 3 0 1 0 19 16Z"></path><path d="M5 19H19"></path><path d="M8 15L10 9H15L17 15"></path><path d="M14 9L13 5H17"></path></svg>`;
+const COURIER_PIN_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>`;
+const COURIER_PERSON_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366F1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`;
+
+function escapeCourierHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 function courierFailureReasonLabel(reason) {
   return COURIER_FAILURE_REASON_OPTIONS.find((item) => item.value === reason)?.label || reason || "Sorun yok";
@@ -71,8 +86,8 @@ const courierRefs = {
   workspacePanel: document.getElementById("workspacePanel"),
   loginForm: document.getElementById("loginForm"),
   logoutButton: document.getElementById("logoutButton"),
-  shareLocationButton: document.getElementById("shareLocationButton"),
-  availabilityButton: document.getElementById("availabilityButton"),
+  connectionSwitch: document.getElementById("courierConnectionSwitch"),
+  connectionLabel: document.getElementById("courierConnectionLabel"),
   locationStatus: document.getElementById("locationStatus"),
   name: document.getElementById("courierName"),
   focusTitle: document.getElementById("courierFocusTitle"),
@@ -186,6 +201,22 @@ function openOrderMap(order, target = "customer") {
   }
   window.open(url, "_blank");
 }
+
+window.openCourierPackageDetailsById = function(packageId) {
+  const pkg = courierState.data?.packages?.find(p => p.id === packageId) ||
+              courierState.data?.historyPackages?.find(p => p.id === packageId);
+  if (pkg) {
+    window.openCourierPackageDetails(pkg);
+  }
+}
+
+window.openCourierPackageDetails = function(pkg) {
+  if (typeof window.showPackageDetailsModal === "function") {
+    window.showPackageDetailsModal(pkg);
+    return;
+  }
+  showToast("Siparis detaylari su anda acilamiyor.", "error");
+};
 
 function stopLocationWatch() {
   if (courierState.watchId !== null) {
@@ -402,15 +433,15 @@ function renderCourierStats(courier, packages) {
 
   courierRefs.stats.innerHTML = `
     <article class="mini-stat-card">
-      <span>Bolge</span>
+      <span class="entity-line">${COURIER_PIN_ICON} Bolge</span>
       <strong>${courier.zone}</strong>
     </article>
     <article class="mini-stat-card">
-      <span>Kullanici</span>
+      <span class="entity-line">${COURIER_PERSON_ICON} Kullanici</span>
       <strong>${courier.username}</strong>
     </article>
     <article class="mini-stat-card">
-      <span>Aktif Yuk</span>
+      <span class="entity-line">${COURIER_MOTO_ICON} Aktif Yuk</span>
       <strong>${courier.activeLoad}</strong>
     </article>
     <article class="mini-stat-card">
@@ -422,11 +453,11 @@ function renderCourierStats(courier, packages) {
       <strong>${inTransit}</strong>
     </article>
     <article class="mini-stat-card">
-      <span>Durum</span>
+      <span class="entity-line">${COURIER_PERSON_ICON} Durum</span>
       <strong>${courierStatusLabel(courier.status)}</strong>
     </article>
     <article class="mini-stat-card">
-      <span>Canli GPS</span>
+      <span class="entity-line">${COURIER_PIN_ICON} Canli GPS</span>
       <strong class="gps-stat">${locationLabel(courier)}</strong>
     </article>
   `;
@@ -710,16 +741,14 @@ function renderPackages(packages) {
     let selectedPaymentStatus = currentDraft.paymentStatus || pkg.paymentStatus || "";
     let selectedFailureReason = currentDraft.failureReason || "";
 
-    node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo}`;
+    node.querySelector(".tracking-no").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.trackingNo)} - ${escapeCourierHtml(pkg.externalOrderNo)}`;
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
-    node.querySelector(".platform-name").textContent = pkg.source === "external_manual" || pkg.source === "manual"
-      ? "Manuel Paket"
-      : pkg.sourcePlatform;
-    node.querySelector(".restaurant-name").textContent = pkg.restaurantName;
-    node.querySelector(".zone-name").textContent = `${pkg.zone} - ${pkg.address}`;
+    node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform)}`;
+    node.querySelector(".restaurant-name").innerHTML = `${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)}`;
+    node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)} - ${escapeCourierHtml(pkg.address)}`;
     node.querySelector(".eta-value").textContent = pkg.eta;
     node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
-    node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
+    node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.deliveryAddress || pkg.address)}`;
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
 
@@ -857,7 +886,7 @@ function renderPackages(packages) {
 
       const deliveredButton = document.createElement("button");
       deliveredButton.type = "button";
-      deliveredButton.className = "primary-btn";
+      deliveredButton.className = "primary-btn delivered-action";
       deliveredButton.textContent = "Teslim Edildi";
       deliveredButton.addEventListener("click", async () => {
         if (!selectedPaymentStatus) {
@@ -900,17 +929,18 @@ function renderPackages(packages) {
   courierRefs.packages.appendChild(fragment);
 }
 
-function renderCourierHistory(packages) {
-  const filteredHistory = [...packages]
+function renderCourierHistory(packages, historySource = null) {
+  const sourcePackages = Array.isArray(historySource) ? historySource : packages;
+  const filteredHistory = [...sourcePackages]
     .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
     .filter((pkg) => packageMatchesHistoryRange(pkg, courierState.historyRange))
     .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
-  const historyPackages = filteredHistory.slice(0, courierState.historyVisibleCount);
+  const visibleHistoryPackages = filteredHistory.slice(0, courierState.historyVisibleCount);
   const signature = [
     courierState.historyRange,
     courierState.historyVisibleCount,
     filteredHistory.length,
-    listRenderSignature(historyPackages, ["id", "trackingNo", "recipient", "restaurantName", "deliveryAddress", "address", "status", "paymentStatus", "failureReason", "updatedAt", "deliveredAt", "failedAt"]),
+    listRenderSignature(visibleHistoryPackages, ["id", "trackingNo", "recipient", "restaurantName", "deliveryAddress", "address", "status", "paymentStatus", "failureReason", "updatedAt", "deliveredAt", "failedAt"]),
   ].join("||");
   if (courierRefs.history.__deliveraRenderSignature === signature) {
     return;
@@ -918,28 +948,34 @@ function renderCourierHistory(packages) {
   courierRefs.history.__deliveraRenderSignature = signature;
   courierRefs.history.innerHTML = "";
 
-  courierRefs.historyMeta.textContent = `${filteredHistory.length} kapanan teslimattan ${historyPackages.length} kayit gorunuyor.`;
-  courierRefs.historyMore.classList.toggle("hidden", historyPackages.length >= filteredHistory.length);
+  courierRefs.historyMeta.textContent = `${filteredHistory.length} kapanan teslimattan ${visibleHistoryPackages.length} kayit gorunuyor.`;
+  courierRefs.historyMore.classList.toggle("hidden", visibleHistoryPackages.length >= filteredHistory.length);
   [...courierRefs.historyFilters.querySelectorAll("[data-range]")].forEach((button) => {
     button.classList.toggle("active", button.dataset.range === courierState.historyRange);
   });
 
-  if (historyPackages.length === 0) {
+  if (visibleHistoryPackages.length === 0) {
     courierRefs.history.innerHTML = '<div class="empty-state">Dun ve onceki gunlerden kapanan teslimat kaydi yok.</div>';
     return;
   }
 
-  historyPackages.forEach((pkg) => {
+  visibleHistoryPackages.forEach((pkg) => {
     const card = document.createElement("article");
-    card.className = "stack-card";
+    card.className = "stack-card courier-history-card";
     card.innerHTML = `
-      <div class="stack-top">
-        <div>
+      <div class="stack-top courier-history-card__top">
+        <div class="courier-history-card__summary">
           <strong>${pkg.trackingNo} - ${pkg.recipient}</strong>
-          <p>${pkg.restaurantName} - ${pkg.deliveryAddress || pkg.address}</p>
+          <p class="entity-line">${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)}</p>
+          <p class="entity-line">${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.deliveryAddress || pkg.address)}</p>
           <p>Kapanis: ${formatDate(pkg.updatedAt || pkg.deliveredAt || pkg.failedAt || pkg.createdAt)}</p>
         </div>
-        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+        <div class="courier-history-card__actions">
+          <span class="soft-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+          <button class="primary-btn details-btn courier-history-card__details" type="button" data-package-id="${pkg.id}" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule">
+            ${COURIER_PACKAGE_ICON} Detay
+          </button>
+        </div>
       </div>
       <div class="meta-grid compact-meta-grid">
         <div>
@@ -952,6 +988,9 @@ function renderCourierHistory(packages) {
         </div>
       </div>
     `;
+    card.querySelectorAll('.details-btn').forEach((button) => button.addEventListener('click', () => {
+      window.openCourierPackageDetails(pkg);
+    }));
     courierRefs.history.appendChild(card);
   });
 }
@@ -1008,8 +1047,22 @@ function renderCourierFocus(courier, packages) {
   if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = `${packages.length} aktif paket, ${packages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
 }
 
-function syncAvailabilityButton(courier) {
-  courierRefs.availabilityButton.textContent = courier.available ? "Pasife Al" : "Aktife Al";
+function syncConnectionSwitch(courier = courierState.data?.courier) {
+  if (!courierRefs.connectionSwitch) {
+    return;
+  }
+
+  const connected = Boolean(courier?.available && courierState.watchId !== null);
+  courierRefs.connectionSwitch.checked = connected;
+  courierRefs.connectionSwitch.disabled = courierState.connectionBusy;
+  courierRefs.connectionSwitch.setAttribute("aria-checked", String(connected));
+  if (courierRefs.connectionLabel) {
+    courierRefs.connectionLabel.textContent = courierState.connectionBusy
+      ? "İşleniyor..."
+      : connected
+        ? "Bağlantıyı Kes"
+        : "Bağlan";
+  }
 }
 
 function hydrateCourierWorkspace(data) {
@@ -1031,14 +1084,14 @@ function hydrateCourierWorkspace(data) {
     courierRefs.liveBadge.textContent = "Canli akis acik";
   }
   setLocationStatus(data.courier.lastLocationAt ? `Canli konum aktif. Son guncelleme ${formatTimeAgo(data.courier.lastLocationAt)}.` : "Konum izni verilirse admin paneli seni canli gorur.");
-  syncAvailabilityButton(data.courier);
+  syncConnectionSwitch(data.courier);
   renderCourierStats(data.courier, data.packages);
   renderCourierDayMetrics(data.dayMetrics);
   renderCourierEarnings(data.earningsSummary);
   renderCourierShiftSummary(data.shiftSummary);
   renderCourierFocus(data.courier, data.packages);
   renderPackages(data.packages);
-  renderCourierHistory(data.packages);
+  renderCourierHistory(data.packages, data.historyPackages);
   renderCourierNotifications(data.notifications || []);
   renderCourierAnnouncements(data.announcements || []);
 }
@@ -1051,14 +1104,14 @@ courierRefs.historyFilters?.addEventListener("click", (event) => {
   courierState.historyRange = button.dataset.range;
   courierState.historyVisibleCount = 50;
   if (courierState.data) {
-    renderCourierHistory(courierState.data.packages || []);
+    renderCourierHistory(courierState.data.packages || [], courierState.data.historyPackages || null);
   }
 });
 
 courierRefs.historyMore?.addEventListener("click", () => {
   courierState.historyVisibleCount += 50;
   if (courierState.data) {
-    renderCourierHistory(courierState.data.packages || []);
+    renderCourierHistory(courierState.data.packages || [], courierState.data.historyPackages || null);
   }
 });
 
@@ -1113,26 +1166,39 @@ function handleLocationError(error) {
   setLocationStatus(message);
 }
 
-function startLocationWatch() {
+function getCurrentCourierPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Bu cihazda konum desteği bulunmuyor."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 1_000,
+      timeout: 12_000,
+    });
+  });
+}
+
+function startLocationWatch(initialCoords = null) {
   if (!courierState.token) {
     return;
   }
 
   if (!navigator.geolocation) {
     setLocationStatus("Bu cihazda geolocation desteklenmiyor.");
-    return;
+    return false;
   }
 
   if (courierState.watchId !== null) {
     setLocationStatus("Canli konum zaten acik.");
-    return;
+    return true;
   }
 
-  setLocationStatus("Konum izni isteniyor...");
-
-  courierState.heartbeatId = window.setInterval(() => {
-    heartbeatCourierLocation();
-  }, LOCATION_PUSH_MS);
+  if (initialCoords) {
+    courierState.lastCoords = initialCoords;
+  }
 
   courierState.watchId = navigator.geolocation.watchPosition(
     async (position) => {
@@ -1164,6 +1230,63 @@ function startLocationWatch() {
       timeout: 12_000,
     }
   );
+
+  courierState.heartbeatId = window.setInterval(() => {
+    heartbeatCourierLocation();
+  }, LOCATION_PUSH_MS);
+  return true;
+}
+
+async function setCourierConnection(connected) {
+  if (courierState.connectionBusy || !courierState.data?.courier) {
+    syncConnectionSwitch();
+    return;
+  }
+
+  courierState.connectionBusy = true;
+  syncConnectionSwitch();
+
+  try {
+    if (connected) {
+      setLocationStatus("Konum izni isteniyor...");
+      const position = await getCurrentCourierPosition();
+      const coords = {
+        latitude: Number(position.coords.latitude.toFixed(6)),
+        longitude: Number(position.coords.longitude.toFixed(6)),
+      };
+      courierState.lastCoords = coords;
+      const data = await pushCourierLocation({ ...coords, available: true });
+      startLocationWatch(coords);
+      hydrateCourierWorkspace(data);
+      setLocationStatus("Canli konum acik, kurye online ve vardiya baslatildi.");
+      showToast("Baglanti acildi. Konum ve vardiya aktif.", "success");
+    } else {
+      stopLocationWatch();
+      const courier = courierState.data.courier;
+      const coords = courierState.lastCoords || {
+        latitude: courier.latitude,
+        longitude: courier.longitude,
+      };
+      const data = await pushCourierLocation({ ...coords, available: false });
+      hydrateCourierWorkspace(data);
+      setLocationStatus("Konum kapatildi, kurye offline ve vardiya bitirildi.");
+      showToast("Baglanti kapatildi. Vardiya bitirildi.", "success");
+    }
+  } catch (error) {
+    if (connected) {
+      stopLocationWatch();
+    } else if (courierState.data?.courier?.available) {
+      startLocationWatch(courierState.lastCoords);
+    }
+    const message = error?.code === 1
+      ? "Konum izni reddedildi. Baglanti acilamadi."
+      : error.message || "Baglanti durumu degistirilemedi.";
+    setLocationStatus(message);
+    showToast(message, "error");
+  } finally {
+    courierState.connectionBusy = false;
+    syncConnectionSwitch();
+  }
 }
 
 async function loadCourierWorkspace(options = {}) {
@@ -1215,40 +1338,29 @@ async function loadCourierWorkspace(options = {}) {
 
 courierRefs.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const formData = new FormData(courierRefs.loginForm);
-  const data = await api("/api/courier/login", {
-    method: "POST",
-    body: JSON.stringify({
-      username: formData.get("username"),
-      password: formData.get("password"),
-    }),
-  });
-  persistCourierAuth(data);
-  const workspace = await api("/api/courier/me", {
-    headers: authHeaders(courierState.token),
-    retryWithRefresh: refreshCourierAccess,
-  });
-  courierRefs.loginForm.reset();
-  hydrateCourierWorkspace(workspace);
-});
-
-courierRefs.shareLocationButton?.addEventListener("click", () => {
-  startLocationWatch();
-});
-
-courierRefs.availabilityButton?.addEventListener("click", async () => {
-  if (!courierState.data?.courier) {
-    return;
+  try {
+    const formData = new FormData(courierRefs.loginForm);
+    const data = await api("/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: formData.get("username"),
+        password: formData.get("password"),
+      }),
+    });
+    persistCourierAuth(data);
+    const workspace = await api("/api/courier/me", {
+      headers: authHeaders(courierState.token),
+      retryWithRefresh: refreshCourierAccess,
+    });
+    courierRefs.loginForm.reset();
+    hydrateCourierWorkspace(workspace);
+  } catch (error) {
+    showToast(error.message || "Giris basarisiz oldu.", "error");
   }
+});
 
-  const nextAvailable = !courierState.data.courier.available;
-  const data = await pushCourierLocation({
-    available: nextAvailable,
-    latitude: courierState.data.courier.latitude,
-    longitude: courierState.data.courier.longitude,
-  });
-  setLocationStatus(nextAvailable ? "Kurye atamaya acildi." : "Kurye pasife alindi. Yeni paket dusmeyecek.");
-  hydrateCourierWorkspace(data);
+courierRefs.connectionSwitch?.addEventListener("change", async (event) => {
+  await setCourierConnection(event.currentTarget.checked);
 });
 
 courierRefs.dayCloseButton?.addEventListener("click", async () => {

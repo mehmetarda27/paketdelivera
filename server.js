@@ -514,6 +514,8 @@ db.exec(`
     total_amount REAL NOT NULL DEFAULT 0,
     paid_online_amount REAL NOT NULL DEFAULT 0,
     cash_collected_amount REAL NOT NULL DEFAULT 0,
+    credit_card_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending_approval',
     package_ids_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -695,6 +697,17 @@ db.prepare(`
 `).run();
 
 const courierReportColumns = db.prepare("PRAGMA table_info(courier_daily_reports)").all().map((column) => column.name);
+if (courierReportColumns.length > 0) {
+  if (!courierReportColumns.includes('status')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_approval'");
+  }
+  if (!courierReportColumns.includes('credit_card_amount')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN credit_card_amount REAL NOT NULL DEFAULT 0");
+  }
+}
+
+const dummy_variable_to_preserve_structure = true;
+
 if (courierReportColumns.length === 0) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS courier_daily_reports (
@@ -2861,6 +2874,9 @@ function sendFile(res, fileName) {
   };
 
   writeSecurityHeaders(res);
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   res.writeHead(200, { "Content-Type": typeMap[ext] || "text/plain; charset=utf-8" });
   fs.createReadStream(filePath).pipe(res);
 }
@@ -3468,8 +3484,8 @@ function mapPackageRow(row, restaurantMap = new Map()) {
 
 function getCourierPackages(courierId, pagination = null) {
   const rows = pagination
-    ? db.prepare("SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(courierId, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
-    : db.prepare("SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC").all(courierId);
+    ? db.prepare(`SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?`).all(courierId, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
+    : db.prepare(`SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC`).all(courierId);
   const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];
   const restaurantMap = new Map(
     restaurantIds.map((restaurantId) => {
@@ -3479,6 +3495,32 @@ function getCourierPackages(courierId, pagination = null) {
   );
 
   return rows.map((row) => mapPackageRow(row, restaurantMap));
+}
+
+function mapPackageRowsWithRestaurants(rows) {
+  const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];
+  const restaurantMap = new Map(
+    restaurantIds.map((restaurantId) => {
+      const restaurant = db.prepare("SELECT name FROM restaurants WHERE id = ?").get(restaurantId);
+      return [restaurantId, restaurant?.name || "Bilinmeyen Restoran"];
+    })
+  );
+
+  return rows.map((row) => mapPackageRow(row, restaurantMap));
+}
+
+function getCourierHistoryPackages(courierId, limit = 500) {
+  const historyLimit = Math.max(1, Math.min(1000, parsePositiveInteger(limit, 500)));
+  const rows = db.prepare(`
+    SELECT *
+    FROM packages
+    WHERE assigned_courier_id = ?
+      AND status IN (?, ?, ?)
+    ORDER BY datetime(COALESCE(delivered_at, failed_at, updated_at, created_at)) DESC
+    LIMIT ?
+  `).all(courierId, DELIVERED_STATUS, FAILED_STATUS, "cancelled", historyLimit);
+
+  return mapPackageRowsWithRestaurants(rows);
 }
 
 function rangeStart(daysBack = 0) {
@@ -3701,6 +3743,7 @@ function buildCourierWorkspace(courierId, options = {}) {
 
   const pagination = options.pagination || { limit: DEFAULT_PAGE_LIMIT, offset: 0 };
   const packages = getCourierPackages(courierId, pagination);
+  const historyPackages = getCourierHistoryPackages(courierId);
   const packagesPagination = pageMeta(countTable("packages", "assigned_courier_id = ?", [courierId]), pagination);
   const todayPackages = deliveredPackagesForCourierOnDate(courierId, dayKey());
   const daySummary = summarizeCourierDay(todayPackages);
@@ -3711,6 +3754,7 @@ function buildCourierWorkspace(courierId, options = {}) {
       activeLoad: packages.filter((item) => isCapacityBlockingPackage(item)).length,
     },
     packages,
+    historyPackages,
     dayMetrics: {
       reportDate: dayKey(),
       deliveredCount: daySummary.deliveredCount,
@@ -3762,8 +3806,9 @@ function deliveredPackagesForCourierOnDate(courierId, reportDate = dayKey()) {
     WHERE assigned_courier_id = ?
       AND status = ?
       AND substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) = ?
+      AND id NOT IN (SELECT value FROM courier_daily_reports, json_each(courier_daily_reports.package_ids_json) WHERE courier_id = ? AND status = 'approved')
     ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
-  `).all(courierId, DELIVERED_STATUS, reportDate);
+  `).all(courierId, DELIVERED_STATUS, reportDate, courierId);
   const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];
   const restaurantMap = new Map(
     restaurantIds.map((restaurantId) => {
@@ -3785,6 +3830,9 @@ function summarizeCourierDay(packages) {
     if (pkg.paymentStatus === CASH_COLLECTED_PAYMENT_STATUS || pkg.paymentStatus === CASH_EXPECTED_PAYMENT_STATUS) {
       summary.cashCollectedAmount += amount;
     }
+    if (pkg.paymentStatus === CREDIT_CARD_PAYMENT_STATUS) {
+      summary.creditCardAmount += amount;
+    }
     summary.packageIds.push(pkg.id);
     return summary;
   }, {
@@ -3792,12 +3840,13 @@ function summarizeCourierDay(packages) {
     totalAmount: 0,
     paidOnlineAmount: 0,
     cashCollectedAmount: 0,
+    creditCardAmount: 0,
     packageIds: [],
   });
 }
 
-function getCourierDailyReports(limit = 50) {
-  return db.prepare("SELECT * FROM courier_daily_reports ORDER BY datetime(updated_at) DESC LIMIT ?").all(limit).map((row) => ({
+function mapCourierDailyReportRow(row) {
+  return {
     id: row.id,
     courierId: row.courier_id,
     courierName: row.courier_name,
@@ -3807,10 +3856,16 @@ function getCourierDailyReports(limit = 50) {
     totalAmount: Number(row.total_amount || 0),
     paidOnlineAmount: Number(row.paid_online_amount || 0),
     cashCollectedAmount: Number(row.cash_collected_amount || 0),
+    creditCardAmount: Number(row.credit_card_amount || 0),
+    status: row.status || 'pending_approval',
     packageIds: parseJson(row.package_ids_json, []),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  }));
+  };
+}
+
+function getCourierDailyReports(limit = 50) {
+  return db.prepare("SELECT * FROM courier_daily_reports ORDER BY datetime(updated_at) DESC LIMIT ?").all(limit).map(mapCourierDailyReportRow);
 }
 
 function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
@@ -3827,8 +3882,8 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
   if (existing) {
     db.prepare(`
       UPDATE courier_daily_reports
-      SET courier_name = ?, zone = ?, delivered_count = ?, total_amount = ?, paid_online_amount = ?, cash_collected_amount = ?,
-          package_ids_json = ?, updated_at = ?
+      SET courier_name = ?, zone = ?, delivered_count = ?, total_amount = ?, paid_online_amount = ?, cash_collected_amount = ?, credit_card_amount = ?,
+          status = 'pending_approval', package_ids_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
       courier.name,
@@ -3837,6 +3892,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
       Number(summary.totalAmount.toFixed(2)),
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
+      Number(summary.creditCardAmount.toFixed(2)),
       json(summary.packageIds),
       stamp,
       existing.id
@@ -3845,8 +3901,8 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
     db.prepare(`
       INSERT INTO courier_daily_reports (
         id, courier_id, courier_name, zone, report_date, delivered_count, total_amount, paid_online_amount,
-        cash_collected_amount, package_ids_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cash_collected_amount, credit_card_amount, package_ids_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       uid("cdr"),
       courierId,
@@ -3857,19 +3913,15 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
       Number(summary.totalAmount.toFixed(2)),
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
+      Number(summary.creditCardAmount.toFixed(2)),
       json(summary.packageIds),
       stamp,
       stamp
     );
   }
 
-  return {
-    reportDate,
-    ...summary,
-    totalAmount: Number(summary.totalAmount.toFixed(2)),
-    paidOnlineAmount: Number(summary.paidOnlineAmount.toFixed(2)),
-    cashCollectedAmount: Number(summary.cashCollectedAmount.toFixed(2)),
-  };
+  const savedReport = db.prepare("SELECT * FROM courier_daily_reports WHERE courier_id = ? AND report_date = ?").get(courierId, reportDate);
+  return mapCourierDailyReportRow(savedReport);
 }
 
 function currentState(filter = {}) {
@@ -8871,6 +8923,26 @@ async function handleApi(req, res, pathname) {
       ...decorateState(),
       auditLogs: getAuditLogs(20),
     });
+    return;
+  }
+
+  const adminDayCloseApproveMatch = pathname.match(/^\/api\/admin\/day-close\/([^\/]+)\/approve$/);
+  if (req.method === "POST" && adminDayCloseApproveMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const reportId = adminDayCloseApproveMatch[1];
+
+    try {
+      db.prepare("UPDATE courier_daily_reports SET status = 'approved', updated_at = ? WHERE id = ?").run(nowIso(), reportId);
+
+      broadcastLiveEvent({ type: "workspace-update", message: "Kurye gün sonu raporu onaylandı." });
+      sendJson(res, 200, { success: true });
+    } catch (err) {
+      sendJson(res, 500, { error: "Rapor onaylanirken hata olustu." });
+    }
     return;
   }
 

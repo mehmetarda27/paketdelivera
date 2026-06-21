@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=1781800000000">
+  <link rel="stylesheet" href="/styles.css?v=1782067000000">
 </head>
 <body class="theme-courier app-unauthenticated">
   <div class="courier-mobile-app">
@@ -44,12 +44,15 @@
           <div class="live-bar-header" style="display: flex; justify-content: space-between; align-items: center;">
             <div>
               <p class="eyebrow accent-gold">Durum</p>
-              <strong id="locationStatus">Konum izni bekleniyor.</strong>
+              <span class="entity-line courier-location-line">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                <strong id="locationStatus">Konum izni bekleniyor.</strong>
+              </span>
             </div>
-            <div class="live-bar-actions" style="display: flex; gap: 8px;">
-              <button id="shareLocationButton" class="primary-btn small-btn" type="button">Bağlan</button>
-              <button id="availabilityButton" class="ghost-btn small-btn" type="button">Pasif</button>
-            </div>
+            <label class="courier-connection-control" for="courierConnectionSwitch">
+              <input id="courierConnectionSwitch" class="switch" type="checkbox" role="switch" aria-label="Canlı konum ve vardiya bağlantısı">
+              <span id="courierConnectionLabel">Bağlan</span>
+            </label>
           </div>
           <span id="courierLiveBadge" class="soft-badge" style="margin-top: 12px; display: inline-block;">Canlı akış bekleniyor</span>
         </div>
@@ -62,7 +65,10 @@
 
         <div class="panel-head" style="margin-top: 24px; margin-bottom: 12px; padding: 0 4px;">
           <div>
-            <h3 style="font-size: 1.2rem; color: var(--ink);">Üzerimdeki Paketler</h3>
+            <h3 class="entity-line" style="font-size: 1.2rem; color: var(--ink);">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16A3 3 0 1 0 5 22A3 3 0 1 0 5 16Z"></path><path d="M19 16A3 3 0 1 0 19 22A3 3 0 1 0 19 16Z"></path><path d="M5 19H19"></path><path d="M8 15L10 9H15L17 15"></path><path d="M14 9L13 5H17"></path></svg>
+              Üzerimdeki Paketler
+            </h3>
           </div>
         </div>
         <div id="courierPackages" class="package-list"></div>
@@ -259,7 +265,7 @@
       window.addEventListener("load", () => window.lucide?.createIcons());
     }
   </script>
-  <script src="/shared.js?v=3"></script>
-  <script src="/courier.js?v=3"></script>
+  <script src="/shared.js?v=1782067000000"></script>
+  <script src="/courier.js?v=1782067000000"></script>
 </body>
 </html>

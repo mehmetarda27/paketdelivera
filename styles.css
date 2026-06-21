@@ -1232,8 +1232,8 @@ code {
 }
 
 .status-delivered {
-  color: #88e2b7;
-  background: rgba(87, 209, 162, 0.14);
+  color: #ffffff;
+  background: #10B981;
 }
 
 .status-cancelled {
@@ -1793,7 +1793,6 @@ body.theme-admin {
 .theme-admin .primary-btn,
 .theme-courier .primary-btn,
 .theme-courier .courier-task-card .primary-btn,
-.theme-courier #shareLocationButton,
 .theme-courier #courierDayCloseButton {
   color: #fff7ed;
   border: 1px solid rgba(255, 237, 213, 0.2);
@@ -2272,6 +2271,71 @@ body.app-unauthenticated .courier-bottom-nav {
   fill: rgba(255, 215, 0, 0.2);
 }
 
+.entity-line {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.entity-line > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-right: 0 !important;
+}
+
+.courier-location-line {
+  margin-top: 4px;
+}
+
+/* Courier history cards use page scrolling and keep every detail visible. */
+.theme-courier #courierHistory.history-list {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.theme-courier .courier-history-card {
+  overflow: visible;
+  contain: layout;
+}
+
+.courier-history-card__summary {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.courier-history-card__summary strong,
+.courier-history-card__summary p {
+  overflow-wrap: anywhere;
+}
+
+.courier-history-card__summary p {
+  margin: 8px 0 0;
+}
+
+.courier-history-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.courier-history-card__details {
+  min-height: 40px !important;
+  padding: 8px 14px !important;
+  border-radius: 10px !important;
+  font-size: 0.82rem !important;
+  font-weight: 800 !important;
+  white-space: nowrap !important;
+}
+
+.courier-history-card .compact-meta-grid {
+  margin-top: 16px;
+}
+
 .huge-btn {
   font-size: 1.2rem;
   padding: 16px 24px;
@@ -2426,4 +2490,508 @@ body.app-unauthenticated .courier-bottom-nav {
   .courier-mobile-main {
     padding: 12px;
   }
+
+  .theme-courier .courier-mission-panel {
+    padding: 16px;
+  }
+
+  .theme-courier .courier-history-card {
+    padding: 16px;
+  }
+
+  .courier-history-card__top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  .courier-history-card__actions {
+    align-items: stretch;
+  }
+
+  .courier-history-card__actions .soft-badge {
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .courier-history-card .compact-meta-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 420px) {
+  .courier-history-card__top {
+    grid-template-columns: 1fr;
+  }
+
+  .courier-history-card__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+
+
+/* === SAFE MODERNIZATION CLASSES === */
+
+.modern-card {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+}
+
+.modern-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes pulsePreparing {
+  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+.anim-pulse-preparing {
+  animation: pulsePreparing 2s infinite;
+  border: 1px solid rgba(245, 158, 11, 0.5) !important;
+}
+
+.modern-btn {
+  padding: 12px 24px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  cursor: pointer;
+}
+
+.btn-accept {
+  background: var(--green);
+  color: white;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.btn-accept:hover {
+  background: #059669; /* Darker green */
+  transform: scale(1.02);
+  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+}
+
+.btn-accept:active {
+  transform: scale(0.98);
+}
+
+.btn-primary-modern {
+  background: var(--blue);
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-primary-modern:hover {
+  background: #2563eb;
+  transform: scale(1.02);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+}
+
+
+/* === GLOBAL CARD MODERNIZATION === */
+.glass-panel, .dark-panel, .stack-card, .package-card, .mini-stat-card {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel:hover, .dark-panel:hover, .stack-card:hover, .package-card:hover, .mini-stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+}
+
+/* === GLOBAL BUTTON MODERNIZATION === */
+.primary-btn, .accept-action-btn, .ghost-btn {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.primary-btn:hover, .accept-action-btn:hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+}
+
+.primary-btn:active, .accept-action-btn:active {
+  transform: scale(0.98);
+}
+
+
+/* =========================================================
+   🚀 DELIVERA EXPRESS - PREMIUM MODERN UI OVERHAUL 🚀
+   (Inspired by Trendyol Yemek, Yemeksepeti, Uber Eats)
+   ========================================================= */
+
+:root {
+  --bg-app-modern: #F3F4F6 !important;
+  --card-bg-modern: #FFFFFF !important;
+  --text-main-modern: #111827 !important;
+  --text-muted-modern: #6B7280 !important;
+
+  --brand-orange: #F27A1A !important;
+  --brand-orange-hover: #D96B16 !important;
+  --brand-green: #10B981 !important;
+  --brand-green-hover: #059669 !important;
+  --brand-dark: #1F2937 !important;
+
+  --shadow-elegant: 0 4px 20px rgba(0, 0, 0, 0.05) !important;
+  --shadow-hover: 0 10px 30px rgba(0, 0, 0, 0.1) !important;
+
+  --radius-card: 16px !important;
+  --radius-btn: 9999px !important; /* Pill shape */
+
+  --border-light: 1px solid #E5E7EB !important;
+}
+
+/* 1. Kök Arka Plan ve Genel Renkler */
+body {
+  background: var(--bg-app-modern) !important;
+  color: var(--text-main-modern) !important;
+  font-family: "Inter", "Segoe UI", sans-serif !important; /* Daha modern bir font algısı */
+}
+
+/* 2. Sol Menü (Sidebar) Modernleştirme */
+.role-sidebar, .courier-sidebar, .dark-panel.role-sidebar {
+  background: var(--card-bg-modern) !important;
+  border-right: var(--border-light) !important;
+  color: var(--text-main-modern) !important;
+  box-shadow: 2px 0 10px rgba(0,0,0,0.02) !important;
+}
+.role-sidebar h1, .role-sidebar .eyebrow {
+  color: var(--text-muted-modern) !important;
+}
+.role-sidebar .brand-mark {
+  color: var(--brand-orange) !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.5px !important;
+}
+
+/* 3. Tüm Kartlar (Glass-panel, dark-panel, stack-card vb.) Bembeyaz ve Gölgeli */
+.glass-panel, .dark-panel, .package-card, .stack-card, .mini-stat-card, .login-panel {
+  background: var(--card-bg-modern) !important;
+  border: var(--border-light) !important;
+  border-radius: var(--radius-card) !important;
+  box-shadow: var(--shadow-elegant) !important;
+  color: var(--text-main-modern) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+  backdrop-filter: none !important; /* Cam efektini iptal et, temiz beyaz kullan */
+}
+
+.glass-panel:hover, .package-card:hover, .stack-card:hover, .mini-stat-card:hover {
+  transform: translateY(-4px) !important;
+  box-shadow: var(--shadow-hover) !important;
+}
+
+/* Kart içi metin renkleri düzeltmesi */
+.glass-panel h2, .glass-panel h3, .glass-panel h4, .package-card strong, .stack-card strong {
+  color: var(--text-main-modern) !important;
+  font-weight: 700 !important;
+}
+.glass-panel p, .package-card span, .stack-card span {
+  color: var(--text-muted-modern) !important;
+}
+
+/* 4. Mükemmel Butonlar (Trendyol/Uber Tarzı) */
+button, .primary-btn, .ghost-btn, .btn-accept, .modern-btn {
+  border-radius: var(--radius-btn) !important;
+  padding: 12px 24px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.2px !important;
+  border: none !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.primary-btn {
+  background: var(--brand-orange) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 12px rgba(242, 122, 26, 0.3) !important;
+}
+.primary-btn:hover {
+  background: var(--brand-orange-hover) !important;
+  transform: scale(1.02) !important;
+  box-shadow: 0 6px 16px rgba(242, 122, 26, 0.4) !important;
+}
+
+/* "Paketi Kabul Et" veya Onay Butonları için Yeşil */
+.btn-accept, .accept-action-btn, button[class*="accept"], button[class*="confirm"], .primary-btn {
+  background: var(--brand-green) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
+}
+.btn-accept:hover, .accept-action-btn:hover, button[class*="accept"]:hover, button[class*="confirm"]:hover, .primary-btn:hover {
+  background: var(--brand-green-hover) !important;
+  transform: scale(1.02) !important;
+  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4) !important;
+}
+
+.ghost-btn {
+  background: #F3F4F6 !important;
+  color: var(--text-main-modern) !important;
+  border: 1px solid #E5E7EB !important;
+}
+.ghost-btn:hover {
+  background: #E5E7EB !important;
+  color: var(--brand-dark) !important;
+}
+.ghost-btn.active {
+  background: var(--brand-dark) !important;
+  color: #fff !important;
+  border-color: var(--brand-dark) !important;
+}
+
+/* 5. Nabız Animasyonu (Pulse) */
+@keyframes modernPulse {
+  0% { box-shadow: 0 0 0 0 rgba(242, 122, 26, 0.5); }
+  70% { box-shadow: 0 0 0 15px rgba(242, 122, 26, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(242, 122, 26, 0); }
+}
+.anim-pulse-preparing {
+  animation: modernPulse 2s infinite !important;
+  border: 2px solid var(--brand-orange) !important;
+}
+
+/* Sekmeler / Toolbars (Tümüyle Trendyol/Uber esintisi) */
+.history-toolbar, .panel-head {
+  border-bottom: 1px solid #F3F4F6 !important;
+  padding-bottom: 12px !important;
+  margin-bottom: 16px !important;
+}
+.badge-row {
+  gap: 12px !important;
+}
+.soft-badge {
+  background: #F3F4F6 !important;
+  color: var(--text-main-modern) !important;
+  border-radius: var(--radius-btn) !important;
+  padding: 6px 14px !important;
+  font-weight: 600 !important;
+  border: 1px solid #E5E7EB !important;
+}
+
+/* Girdi Alanları (Inputlar) */
+input, select, textarea {
+  background: #F9FAFB !important;
+  border: 1px solid #D1D5DB !important;
+  border-radius: 12px !important;
+  padding: 12px 16px !important;
+  color: var(--text-main-modern) !important;
+  transition: border-color 0.2s ease !important;
+}
+input:focus, select:focus {
+  border-color: var(--brand-orange) !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(242, 122, 26, 0.1) !important;
+}
+
+/* =========================================================
+   🚚 Kurye Üst Panel (Live Bar) Özelleştirmeleri 🚚
+   ========================================================= */
+
+/* Üst Panel Arka Plan ve Düzen */
+.courier-live-bar {
+  background: var(--card-bg-modern) !important;
+  border: 1px solid #E5E7EB !important;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.05) !important;
+  padding: 20px !important;
+  border-radius: 20px !important; /* Çok şık ve tam yuvarlak köşeli */
+  margin-bottom: 24px !important;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Durum Metni Büyütme */
+.courier-live-bar .eyebrow {
+  font-size: 0.9rem !important;
+  color: var(--text-muted-modern) !important;
+  margin-bottom: 4px !important;
+}
+
+.courier-live-bar strong#locationStatus {
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  color: var(--text-main-modern) !important;
+}
+
+.courier-connection-control {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.switch {
+  position: relative;
+  height: 1.5rem !important;
+  width: 3rem !important;
+  min-height: 1.5rem !important;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0 !important;
+  border-radius: 9999px !important;
+  padding: 0 !important;
+  background-color: rgba(100, 116, 139, 0.377) !important;
+  box-shadow: none !important;
+  transition: all 0.3s ease !important;
+}
+
+.switch:checked {
+  background-color: rgba(77, 175, 80, 1) !important;
+}
+
+.switch::before {
+  position: absolute;
+  content: "";
+  left: -0.1rem;
+  top: -0.05rem;
+  display: block;
+  height: 1.6rem;
+  width: 1.6rem;
+  cursor: pointer;
+  border: 1px solid rgba(100, 116, 139, 0.527);
+  border-radius: 9999px;
+  background-color: rgba(255, 255, 255, 1);
+  box-shadow: 0 3px 10px rgba(100, 116, 139, 0.327);
+  transition: all 0.3s ease;
+}
+
+.switch:hover::before {
+  box-shadow: 0 0 0 8px rgba(0, 0, 0, 0.15);
+}
+
+.switch:checked:hover::before {
+  box-shadow: 0 0 0 8px rgba(77, 175, 80, 0.15);
+}
+
+.switch:checked::before {
+  transform: translateX(100%);
+  border-color: rgba(77, 175, 80, 1);
+}
+
+.switch:focus-visible {
+  outline: 3px solid rgba(77, 175, 80, 0.25) !important;
+  outline-offset: 4px;
+}
+
+.switch:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+
+/* Canlı Akış Badge (Kalp Atışı) Sınıfları */
+#courierLiveBadge {
+  padding: 8px 16px !important;
+  font-size: 0.85rem !important;
+  border-radius: 9999px !important;
+  font-weight: 600 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  transition: all 0.3s ease !important;
+}
+
+.badge-online {
+  background: rgba(16, 185, 129, 0.1) !important;
+  color: #059669 !important;
+  border: 1px solid #34D399 !important;
+  animation: pulseLiveBadgeGreen 2s infinite !important;
+}
+
+.badge-offline {
+  background: rgba(239, 68, 68, 0.1) !important;
+  color: #EF4444 !important;
+  border: 1px solid #F87171 !important;
+  /* Kırmızıdayken kalp atışı olmasın veya kırmızı olsun */
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+@keyframes pulseLiveBadgeGreen {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* =========================================================
+   👑 PREMIUM CARD & TEXT CONTRAST FIX 👑
+   ========================================================= */
+
+/* 1. Kart İçini ve Metin Kontrastını Güçlendirme */
+.glass-panel, .dark-panel, .package-card, .stack-card, .courier-live-bar {
+  /* Daha zengin, dolgun bir beyaz/gri tonu ve çok hafif bir parlaklık */
+  background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%) !important;
+  border: 1px solid #E2E8F0 !important;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.04), 0 2px 10px rgba(0,0,0,0.02) !important;
+}
+
+/* 2. Soluk Kalan (Açık) Yazıları Koyu ve Belirgin Yapma */
+.glass-panel p, .package-card span, .stack-card span, .courier-live-bar p, .courier-address-block span {
+  color: #334155 !important; /* Daha koyu, dolgun bir antrasit gri (Eski #6B7280 çok soluktu) */
+  font-weight: 500 !important; /* Biraz daha kalın */
+  letter-spacing: 0.2px !important;
+}
+
+.glass-panel h2, .glass-panel h3, .glass-panel h4, .package-card strong, .stack-card strong, .tracking-no {
+  color: #0F172A !important; /* Tamamen simsiyah/koyu lacivert güçlü başlıklar */
+  font-weight: 800 !important;
+}
+
+/* Kurye Live Bar (Üst Panel) Ekstra Premiumlaştırma */
+.courier-live-bar {
+  border-left: 5px solid #F27A1A !important; /* Trendyol Turuncusu Kalın Çizgi */
+  background: linear-gradient(to right, #ffffff, #fdfbf9) !important;
+}
+
+/* Teslim durumu: admin, restoran ve kurye panellerinde tek görünüm. */
+.theme-admin .status-badge.status-delivered,
+.theme-restaurant .status-badge.status-delivered,
+.theme-courier .status-badge.status-delivered,
+.theme-admin .soft-badge.status-delivered,
+.theme-restaurant .soft-badge.status-delivered,
+.theme-courier .soft-badge.status-delivered,
+.status-select.status-select-delivered,
+button.delivered-action {
+  color: #ffffff !important;
+  background: #10B981 !important;
+  border-color: #10B981 !important;
+  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.28) !important;
+}
+
+button.delivered-action:hover,
+button.delivered-action:focus-visible,
+.status-select.status-select-delivered:hover,
+.status-select.status-select-delivered:focus {
+  color: #ffffff !important;
+  background: #059669 !important;
+  border-color: #059669 !important;
+}
+
+/* Keep utility hiding stronger than later global button display rules. */
+.hidden,
+button.hidden,
+.ghost-btn.hidden,
+.primary-btn.hidden {
+  display: none !important;
 }

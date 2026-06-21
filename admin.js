@@ -1,3 +1,10 @@
+
+const SVG_PACKAGE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F27A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`;
+const SVG_PHONE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F27A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+const SVG_MOTO = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M5 16A3 3 0 1 0 5 22A3 3 0 1 0 5 16Z"></path><path d="M19 16A3 3 0 1 0 19 22A3 3 0 1 0 19 16Z"></path><path d="M5 19H19"></path><path d="M8 15L10 9H15L17 15"></path><path d="M14 9L13 5H17"></path></svg>`;
+const SVG_PIN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>`;
+const SVG_COURIER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366F1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`;
+
 const ADMIN_TOKEN_KEY = "deliveraAdminToken";
 const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
 const ADMIN_REFRESH_MS = 20_000;
@@ -543,10 +550,10 @@ function renderAdminCouriers(couriers) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${courier.name}</strong>
+          <strong class="entity-line">${SVG_MOTO} ${courier.name}</strong>
           <p>@${courier.username}</p>
-          <p>${courier.zone} bolgesi - GPS ${Number(courier.latitude).toFixed(5)}, ${Number(courier.longitude).toFixed(5)}</p>
-          <p>${courier.activeLoad} aktif paket - ${courier.available ? "Atamaya acik" : "Pasif"}</p>
+          <p class="entity-line">${SVG_PIN} ${courier.zone} bolgesi - GPS ${Number(courier.latitude).toFixed(5)}, ${Number(courier.longitude).toFixed(5)}</p>
+          <p class="entity-line">${SVG_COURIER} ${courier.activeLoad} aktif paket - ${courier.available ? "Atamaya acik" : "Pasif"}</p>
           <p>${motionLabel} - Son sinyal ${liveLabel}</p>
         </div>
         <span class="soft-badge">${courierStatusLabel(courier.status)}</span>
@@ -593,8 +600,8 @@ function renderZoneBoard(zones) {
     const card = document.createElement("article");
     card.className = "zone-card";
     card.innerHTML = `
-      <strong>${zone.name}</strong>
-      <p>${zone.packageCount} paket - ${zone.activeCourierCount}/${zone.courierCount} aktif kurye</p>
+      <strong class="entity-line">${SVG_PIN} ${zone.name}</strong>
+      <p class="entity-line">${SVG_MOTO} ${zone.packageCount} paket - ${zone.activeCourierCount}/${zone.courierCount} aktif kurye</p>
       <p>${zone.waitingCount} paket bekliyor</p>
     `;
     adminRefs.zoneBoard.appendChild(card);
@@ -638,6 +645,7 @@ function packageVisible(pkg) {
   }
 
   return [
+    pkg.trackingNo,
     pkg.sourcePlatform,
     pkg.externalOrderNo,
     pkg.restaurantName,
@@ -742,7 +750,7 @@ function openPackagePrintWindow(pkg) {
       <body>
         <h1>${pkg.restaurantName || "Delivera Express"}</h1>
         <p>Platform: ${pkg.sourcePlatform || "-"}</p>
-        <p>Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
+        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
         <p>Musteri: ${pkg.recipient || "-"}</p>
         <p>Telefon: ${pkg.phone || "-"}</p>
         <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
@@ -773,14 +781,24 @@ function buildPackageCard(pkg) {
   if (!pkg.assignedCourierId && ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status)) {
     wrapper.classList.add("priority-alert-card");
   }
-  node.querySelector(".tracking-no").textContent = `${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)}`;
-  node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
-  node.querySelector(".platform-name").textContent = pkg.sourcePlatform;
-  node.querySelector(".restaurant-name").textContent = pkg.restaurantName;
-  node.querySelector(".courier-name").textContent = pkg.assignedCourierName || "Kurye bekleniyor";
+  node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)}`;
+  node.querySelector(".recipient-name").innerHTML = `${SVG_PHONE} ${pkg.recipient} - ${pkg.phone}`;
+  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform}`;
+  node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${pkg.restaurantName}`;
+  node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}`;
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
-  node.querySelector(".address-value").textContent = pkg.deliveryAddress || pkg.address;
+  node.querySelector(".address-value").innerHTML = `${SVG_PIN} ${pkg.deliveryAddress || pkg.address}`;
+
+  if (!node.querySelector(".details-btn-injected")) {
+    const actionsRow = document.createElement('div');
+    actionsRow.style.cssText = "margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; text-align: right;";
+    actionsRow.innerHTML = `<button class="ghost-btn details-btn-injected" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>`;
+    actionsRow.querySelector('.details-btn-injected').addEventListener('click', () => {
+      if (typeof showPackageDetailsModal === 'function') showPackageDetailsModal(pkg);
+    });
+    wrapper.appendChild(actionsRow);
+  }
   const platformLogText = Array.isArray(pkg.platformStatusLogs) && pkg.platformStatusLogs.length
     ? ` - Platform: ${pkg.platformStatusLogs.map((item) => item.message).join(" | ")}`
     : "";
@@ -791,8 +809,10 @@ function buildPackageCard(pkg) {
   badge.className = `status-badge ${statusClassName(pkg.status)}`;
   select.innerHTML = createStatusOptions(pkg.status);
   select.value = pkg.status;
+  select.classList.toggle("status-select-delivered", pkg.status === "delivered");
 
   select.addEventListener("change", async (event) => {
+    select.classList.toggle("status-select-delivered", event.target.value === "delivered");
     const data = await api(`/api/admin/packages/${pkg.id}/status`, {
       method: "PATCH",
       headers: adminHeaders(),
@@ -935,12 +955,12 @@ function renderAwaitingPackages(packages) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${pkg.trackingNo} - ${pkg.restaurantName}</strong>
-          <p>${pkg.recipient} - ${pkg.deliveryAddress || pkg.address}</p>
+          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${SVG_MOTO} ${pkg.restaurantName}</strong>
+          <p class="entity-line">${SVG_PIN} ${pkg.recipient} - ${pkg.deliveryAddress || pkg.address}</p>
           <p>Son deneme: ${pkg.lastAssignmentAttemptAt ? formatDate(pkg.lastAssignmentAttemptAt) : "-"}</p>
           <p>Hata: ${pkg.lastAssignmentError || "-"}</p>
         </div>
-        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
       </div>
     `;
     adminRefs.awaitingPackageList.appendChild(card);
@@ -967,9 +987,9 @@ function renderActiveCourierOps(couriers) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${courier.name}</strong>
-          <p>@${courier.username} - ${courier.zone}</p>
-          <p>${courier.activeLoad} aktif is - Son sinyal ${courier.lastLocationAt ? formatTimeAgo(courier.lastLocationAt) : "yok"}</p>
+          <strong class="entity-line">${SVG_MOTO} ${courier.name}</strong>
+          <p class="entity-line">${SVG_PIN} @${courier.username} - ${courier.zone}</p>
+          <p class="entity-line">${SVG_COURIER} ${courier.activeLoad} aktif is - Son sinyal ${courier.lastLocationAt ? formatTimeAgo(courier.lastLocationAt) : "yok"}</p>
         </div>
         <span class="soft-badge">${courierStatusLabel(courier.status)}</span>
       </div>
@@ -1040,7 +1060,7 @@ function renderAuditLogs(logs) {
 }
 
 function renderCourierDailyReports(reports) {
-  const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "updatedAt"]);
+  const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "status", "updatedAt"]);
   if (adminRefs.courierDailyReportList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1055,19 +1075,30 @@ function renderCourierDailyReports(reports) {
   reports.slice(0, 20).forEach((report) => {
     const card = document.createElement("article");
     card.className = "stack-card";
+    const isPending = report.status === 'pending_approval';
     card.innerHTML = `
-      <div class="stack-top">
+      <div class="stack-top" style="align-items: flex-start;">
         <div>
           <strong>${report.courierName} - ${report.reportDate}</strong>
           <p>${report.zone} bolgesi - ${report.deliveredCount} teslimat</p>
-          <p>Toplam Ciro: ${formatCurrency(report.totalAmount)}</p>
+          <p style="font-weight: bold; color: #10B981;">Toplam Ciro: ${formatCurrency(report.totalAmount)}</p>
         </div>
-        <span class="soft-badge">${formatDate(report.updatedAt)}</span>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+          <span class="soft-badge" style="${isPending ? 'background: #FEF3C7; color: #D97706; border-color: #FCD34D;' : 'background: #D1FAE5; color: #059669; border-color: #6EE7B7;'}">
+            ${isPending ? 'Onay Bekliyor' : 'Onaylandı'}
+          </span>
+          <span class="soft-badge" style="font-size: 0.75rem;">${formatDate(report.updatedAt)}</span>
+          ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${report.id}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button>` : ''}
+        </div>
       </div>
-      <div class="meta-grid compact-meta-grid">
+      <div class="meta-grid compact-meta-grid" style="margin-top: 12px; border-top: 1px solid #E2E8F0; padding-top: 12px; grid-template-columns: repeat(4, 1fr);">
         <div>
-          <span>Online Odeme</span>
+          <span>Online</span>
           <strong>${formatCurrency(report.paidOnlineAmount)}</strong>
+        </div>
+        <div>
+          <span>K. Kartı</span>
+          <strong>${formatCurrency(report.creditCardAmount || 0)}</strong>
         </div>
         <div>
           <span>Nakit</span>
@@ -1075,10 +1106,30 @@ function renderCourierDailyReports(reports) {
         </div>
         <div>
           <span>Paket</span>
-          <strong>${report.packageIds.length} kayit</strong>
+          <strong>${report.packageIds.length}</strong>
         </div>
       </div>
     `;
+
+    if (isPending) {
+        const btn = card.querySelector('.approve-btn');
+        btn.addEventListener('click', async () => {
+            btn.textContent = "Onaylanıyor...";
+            btn.disabled = true;
+            try {
+                const res = await api(`/api/admin/day-close/${report.id}/approve`, {
+                    method: 'POST',
+                    headers: authHeaders(adminState.token)
+                });
+                showToast("Gün sonu başarıyla onaylandı.", "success");
+            } catch (err) {
+                showToast("Onay hatası: " + err.message, "error");
+                btn.textContent = "Onayla";
+                btn.disabled = false;
+            }
+        });
+    }
+
     adminRefs.courierDailyReportList.appendChild(card);
   });
 }

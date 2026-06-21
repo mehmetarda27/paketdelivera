@@ -201,12 +201,16 @@ async function api(path, options = {}) {
 }
 
 function formatDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return "-";
+
   return new Intl.DateTimeFormat("tr-TR", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function formatCurrency(value) {
@@ -642,3 +646,56 @@ document.addEventListener("DOMContentLoaded", function() {
     window.lucide.createIcons();
   }
 });
+
+window.showPackageDetailsModal = function(pkg) {
+  const shell = document.createElement("div");
+  shell.className = "modal-shell";
+  shell.innerHTML = `
+    <div class="modal-backdrop"></div>
+    <div class="modal-card glass-panel" style="padding: 24px; max-width: 600px; width: 100%;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--line); padding-bottom: 16px;">
+        <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F27A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          Paket Detayı
+        </h3>
+        <button class="ghost-btn close-modal" style="padding: 6px 12px; color: var(--ink-soft);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; justify-content: space-between; background: var(--bg); padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line);">
+             <div>
+               <span style="font-size: 0.8rem; color: var(--ink-soft); display: block; margin-bottom: 4px;">Durum</span>
+               <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+             </div>
+             <div style="text-align: right;">
+               <span style="font-size: 0.8rem; color: var(--ink-soft); display: block; margin-bottom: 4px;">Sipariş Kodu</span>
+               <strong style="font-size: 1.1rem;">${pkg.trackingNo || "-"}</strong>
+             </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; background: var(--bg); padding: 16px; border-radius: 12px; border: 1px solid var(--line);">
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform</span><br><strong>${pkg.sourcePlatform || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Harici No</span><br><strong>${pkg.externalOrderNo || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Müşteri</span><br><strong>${pkg.recipient || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Telefon</span><br><strong>${pkg.phone || "-"}</strong></div>
+            <div style="grid-column: 1 / -1;"><span style="color: var(--ink-soft); font-size: 0.85rem;">Adres</span><br><strong>${pkg.deliveryAddress || pkg.address || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Ödeme</span><br><strong>${pkg.paymentMethod || "-"} - ${formatCurrency(pkg.orderAmount)}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Kurye</span><br><strong>${pkg.assignedCourierName || "Atama Bekliyor"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Oluşturulma</span><br><strong>${formatDate(pkg.createdAt)}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Güncellenme</span><br><strong>${formatDate(pkg.updatedAt || pkg.createdAt)}</strong></div>
+          </div>
+
+          ${pkg.customerNote || pkg.note ? `
+          <div style="background: rgba(242, 122, 26, 0.08); padding: 16px; border-radius: 12px; border: 1px solid rgba(242, 122, 26, 0.2);">
+            <strong style="color: #F27A1A; display: block; margin-bottom: 8px;">Müşteri Notu:</strong>
+            <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">${pkg.customerNote || pkg.note}</p>
+          </div>
+          ` : ""}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(shell);
+
+  shell.querySelector('.close-modal').addEventListener('click', () => shell.remove());
+  shell.querySelector('.modal-backdrop').addEventListener('click', () => shell.remove());
+};

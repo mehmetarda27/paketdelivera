@@ -1275,12 +1275,43 @@ async function run() {
     if (deliveredManualPackage.paymentStatus !== "cash_collected") {
       throw new Error("Manuel paket odeme yasam dongusu guncellenemedi.");
     }
+
+    const dayCloseWorkspace = await request("/api/courier/day-close", {
+      method: "POST",
+      headers: courierHeaders,
+      body: "{}",
+    });
+    const dayCloseReport = dayCloseWorkspace.dayCloseReport;
+    if (!dayCloseReport || dayCloseReport.status !== "pending_approval") {
+      throw new Error("Kurye gun sonu raporu olusmadi veya onay bekleme durumuna gecmedi.");
+    }
+    if (!Number.isFinite(Number(dayCloseReport.creditCardAmount))) {
+      throw new Error("Kurye gun sonu kredi karti tutari sayisal donmedi.");
+    }
+
+    const dayCloseApproval = await request(`/api/admin/day-close/${dayCloseReport.id}/approve`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: "{}",
+    });
+    if (!dayCloseApproval.success) {
+      throw new Error("Admin kurye gun sonu raporunu onaylayamadi.");
+    }
+
+    const approvedDayCloseState = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    const approvedDayCloseReport = (approvedDayCloseState.courierDailyReports || []).find((report) => report.id === dayCloseReport.id);
+    if (!approvedDayCloseReport || approvedDayCloseReport.status !== "approved") {
+      throw new Error("Onaylanan kurye gun sonu raporu admin paneline yansimadi.");
+    }
+
     const deliveredWebhookPackage = bootstrap.packages.find((pkg) => pkg.id === assignedWebhookAfterDelivery.id);
     if (!deliveredWebhookPackage?.platformStatusLogs?.some((item) => item.status === "delivered")) {
       throw new Error("Platform delivered callback logu yazilmadi.");
     }
 
-    console.log("Smoke test başarılı: admin, restoran, kurye, webhook, otomatik atama ve harita akışı çalıştı.");
+    console.log("Smoke test başarılı: admin, restoran, kurye, webhook, otomatik atama, harita ve gün sonu akışı çalıştı.");
   } finally {
     server.kill("SIGTERM");
     try {

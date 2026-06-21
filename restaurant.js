@@ -1,3 +1,10 @@
+
+const SVG_PACKAGE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F27A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`;
+const SVG_PHONE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F27A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>`;
+const SVG_MOTO = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M5 16A3 3 0 1 0 5 22A3 3 0 1 0 5 16Z"></path><path d="M19 16A3 3 0 1 0 19 22A3 3 0 1 0 19 16Z"></path><path d="M5 19H19"></path><path d="M8 15L10 9H15L17 15"></path><path d="M14 9L13 5H17"></path></svg>`;
+const SVG_PIN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>`;
+const SVG_COURIER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366F1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`;
+
 const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
 const RESTAURANT_ID_KEY = "deliveraRestaurantId";
@@ -33,6 +40,7 @@ const restaurantRefs = {
   restaurantList: document.getElementById("restaurantList"),
   platformAccountList: document.getElementById("platformAccountList"),
   recentOrders: document.getElementById("recentOrders"),
+  searchInput: document.getElementById("restaurantSearchInput"),
   integrationEndpoint: document.getElementById("integrationEndpoint"),
   integrationRestaurant: document.getElementById("integrationRestaurant"),
   integrationApiKey: document.getElementById("integrationApiKey"),
@@ -693,7 +701,7 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
       <body>
         <h1>${restaurantName}</h1>
         <p>Platform: ${pkg.sourcePlatform || "-"}</p>
-        <p>Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
+        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
         <p>Musteri: ${pkg.recipient || "-"}</p>
         <p>Telefon: ${pkg.phone || "-"}</p>
         <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
@@ -1138,20 +1146,20 @@ function renderRecentOrders(packages) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${pkg.packageType || "Standart Paket"} - ${pkg.externalOrderNo}</strong>
-          <p>${pkg.restaurantName} - ${pkg.recipient}</p>
+          <strong class="entity-line">${SVG_PACKAGE} ${pkg.packageType || "Standart Paket"} - ${pkg.externalOrderNo}</strong>
+          <p class="entity-line">${SVG_MOTO} ${pkg.restaurantName} - ${pkg.recipient}</p>
           <p>Kaynak: ${packageSourceLabel(pkg)}</p>
         </div>
-        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
       </div>
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Adres</span>
-          <strong>${pkg.deliveryAddress || pkg.address}</strong>
+          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address}</strong>
         </div>
         <div>
           <span>Kurye</span>
-          <strong>${pkg.assignedCourierName || "Kurye bekleniyor"}</strong>
+          <strong class="entity-line">${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}</strong>
         </div>
         <div>
           <span>Odeme</span>
@@ -1162,7 +1170,13 @@ function renderRecentOrders(packages) {
           <strong>${formatDate(pkg.createdAt)}</strong>
         </div>
       </div>
+      <div style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; text-align: right;">
+        <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
+      </div>
     `;
+    card.querySelector('.details-btn')?.addEventListener('click', () => {
+      if (typeof showPackageDetailsModal === 'function') showPackageDetailsModal(pkg);
+    });
     restaurantRefs.recentOrders.appendChild(card);
   });
 }
@@ -1203,17 +1217,17 @@ function renderActiveOrders(data) {
     const isConfirmed = String(pkg.assignmentReason || "").toLowerCase().includes("onay");
 
     const card = document.createElement("article");
-    card.className = "stack-card order-summary-card";
+    card.className = `stack-card order-summary-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
+          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
           <p>Kaynak: ${sourceLabel} - Musteri: ${pkg.recipient}</p>
           <p>Olusturulma: ${formatDate(pkg.createdAt)}</p>
         </div>
         <div class="badge-row">
           <span class="${assignmentTone}">${assignmentBadge}</span>
-          <span class="soft-badge">${statusLabel(pkg.status)}</span>
+          <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
           <span class="soft-badge">${paymentStatusLabel(pkg.paymentStatus)}</span>
         </div>
       </div>
@@ -1228,7 +1242,7 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Adres</span>
-          <strong>${pkg.deliveryAddress || pkg.address}</strong>
+          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address}</strong>
         </div>
         <div>
           <span>Not</span>
@@ -1240,11 +1254,11 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Kurye</span>
-          <strong>${pkg.assignedCourierName || "Henuz atanmadÄ±"}</strong>
+          <strong class="entity-line">${SVG_MOTO} ${pkg.assignedCourierName || "Henüz atanmadı"}</strong>
         </div>
         <div>
           <span>Kurye Durumu</span>
-          <strong>${courier ? courierStatusLabel(courier.status) : "-"}</strong>
+          <strong class="entity-line">${SVG_COURIER} ${courier ? courierStatusLabel(courier.status) : "-"}</strong>
         </div>
         <div>
           <span>Kurye Telefon</span>
@@ -1354,15 +1368,15 @@ function renderOrderHistory(packages) {
 
   list.forEach((pkg) => {
     const card = document.createElement("article");
-    card.className = "stack-card order-summary-card";
+    card.className = `stack-card order-summary-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
-          <p>${pkg.packageType || "Standart Paket"} - ${pkg.deliveryAddress || pkg.address}</p>
+          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
+          <p class="entity-line">${SVG_PIN} ${pkg.packageType || "Standart Paket"} - ${pkg.deliveryAddress || pkg.address}</p>
           <p>Guncelleme: ${formatDate(pkg.updatedAt || pkg.createdAt)}</p>
         </div>
-        <span class="soft-badge">${statusLabel(pkg.status)}</span>
+        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
       </div>
       <div class="meta-grid compact-meta-grid">
         <div>
@@ -1371,14 +1385,20 @@ function renderOrderHistory(packages) {
         </div>
         <div>
           <span>Kurye</span>
-          <strong>${pkg.assignedCourierName || "Atama yok"}</strong>
+          <strong class="entity-line">${SVG_MOTO} ${pkg.assignedCourierName || "Atama yok"}</strong>
         </div>
         <div>
           <span>Odeme</span>
           <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
         </div>
       </div>
+      <div style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; text-align: right;">
+        <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
+      </div>
     `;
+    card.querySelector('.details-btn')?.addEventListener('click', () => {
+      if (typeof showPackageDetailsModal === 'function') showPackageDetailsModal(pkg);
+    });
     restaurantRefs.orderHistory.appendChild(card);
   });
 }
