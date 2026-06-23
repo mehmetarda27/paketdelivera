@@ -1643,8 +1643,11 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   if (loweredMethod.includes("nakit")) {
     return CASH_EXPECTED_PAYMENT_STATUS;
   }
-  if (loweredMethod.includes("online") || loweredMethod.includes("kart") || loweredMethod.includes("pos")) {
+  if (loweredMethod.includes("online")) {
     return PAID_ONLINE_PAYMENT_STATUS;
+  }
+  if (loweredMethod.includes("kart") || loweredMethod.includes("kredi") || loweredMethod.includes("pos")) {
+    return CREDIT_CARD_PAYMENT_STATUS;
   }
 
   return UNPAID_PAYMENT_STATUS;
@@ -3819,18 +3822,35 @@ function deliveredPackagesForCourierOnDate(courierId, reportDate = dayKey()) {
   return rows.map((row) => mapPackageRow(row, restaurantMap));
 }
 
+function paymentAccountingBucket(pkg) {
+  const paymentStatus = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
+  const paymentMethod = trimmed(pkg.paymentMethod).toLowerCase();
+
+  if (paymentStatus === CASH_COLLECTED_PAYMENT_STATUS || paymentStatus === CASH_EXPECTED_PAYMENT_STATUS || paymentMethod.includes("nakit")) {
+    return "cash";
+  }
+  if (paymentStatus === CREDIT_CARD_PAYMENT_STATUS || (!paymentMethod.includes("online") && (paymentMethod.includes("kart") || paymentMethod.includes("kredi") || paymentMethod.includes("pos")))) {
+    return "card";
+  }
+  if (paymentStatus === PAID_ONLINE_PAYMENT_STATUS || paymentMethod.includes("online")) {
+    return "online";
+  }
+  return "unknown";
+}
+
 function summarizeCourierDay(packages) {
   return packages.reduce((summary, pkg) => {
     const amount = normalizeMoney(pkg.orderAmount);
+    const bucket = paymentAccountingBucket(pkg);
     summary.deliveredCount += 1;
     summary.totalAmount += amount;
-    if (pkg.paymentStatus === PAID_ONLINE_PAYMENT_STATUS) {
+    if (bucket === "online") {
       summary.paidOnlineAmount += amount;
     }
-    if (pkg.paymentStatus === CASH_COLLECTED_PAYMENT_STATUS || pkg.paymentStatus === CASH_EXPECTED_PAYMENT_STATUS) {
+    if (bucket === "cash") {
       summary.cashCollectedAmount += amount;
     }
-    if (pkg.paymentStatus === CREDIT_CARD_PAYMENT_STATUS) {
+    if (bucket === "card") {
       summary.creditCardAmount += amount;
     }
     summary.packageIds.push(pkg.id);
@@ -8936,10 +8956,18 @@ async function handleApi(req, res, pathname) {
     const reportId = adminDayCloseApproveMatch[1];
 
     try {
-      db.prepare("UPDATE courier_daily_reports SET status = 'approved', updated_at = ? WHERE id = ?").run(nowIso(), reportId);
+      const result = db.prepare("UPDATE courier_daily_reports SET status = 'approved', updated_at = ? WHERE id = ?").run(nowIso(), reportId);
+      if (!result.changes) {
+        sendJson(res, 404, { error: "Kurye gun sonu raporu bulunamadi." });
+        return;
+      }
 
       broadcastLiveEvent({ type: "workspace-update", message: "Kurye gün sonu raporu onaylandı." });
-      sendJson(res, 200, { success: true });
+      sendJson(res, 200, {
+        success: true,
+        ...decorateState({ req }),
+        auditLogs: getAuditLogs(20),
+      });
     } catch (err) {
       sendJson(res, 500, { error: "Rapor onaylanirken hata olustu." });
     }

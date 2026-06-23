@@ -737,6 +737,52 @@ async function run() {
     });
     await delay(1200);
 
+    const cardAddress = `Mersin Kartli teslim noktasi ${Date.now()} no 18`;
+    const cardPackageState = await request("/api/restaurant/packages", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        restaurantId: createdRestaurantRecord.id,
+        deliveryAddress: cardAddress,
+        packageType: "Kartli Paket",
+        orderAmount: 275,
+        customerName: "Kartli Musteri",
+        phone: "05550000018",
+        paymentMethod: "Kapida Kart POS",
+      }),
+    });
+    const cardPackage = cardPackageState.packages.find((pkg) => pkg.deliveryAddress === cardAddress);
+    if (!cardPackage) {
+      throw new Error("Kartli gun sonu test paketi olusturulamadi.");
+    }
+    if (cardPackage.paymentStatus !== "credit_card") {
+      throw new Error("Kapida kart/POS odemesi kredi karti olarak normalize edilmedi.");
+    }
+    const cardCourierHeaders = cardPackage.assignedCourierId === createdCourier.id
+      ? courierHeaders
+      : cardPackage.assignedCourierId === createdCourier2.id
+        ? courier2Headers
+        : null;
+    if (!cardCourierHeaders) {
+      throw new Error("Kartli paket beklenen kuryelerden birine otomatik atanamadi.");
+    }
+    await request(`/api/courier/packages/${cardPackage.id}/status`, {
+      method: "PATCH",
+      headers: cardCourierHeaders,
+      body: JSON.stringify({ status: "accepted_by_courier" }),
+    });
+    await request(`/api/courier/packages/${cardPackage.id}/status`, {
+      method: "PATCH",
+      headers: cardCourierHeaders,
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    await request(`/api/courier/packages/${cardPackage.id}/status`, {
+      method: "PATCH",
+      headers: cardCourierHeaders,
+      body: JSON.stringify({ status: "delivered", paymentStatus: "credit_card" }),
+    });
+    await delay(1200);
+
     let retryPackageInitial = null;
     for (let attempt = 0; attempt < 12; attempt += 1) {
       await delay(500);
@@ -1288,6 +1334,12 @@ async function run() {
     if (!Number.isFinite(Number(dayCloseReport.creditCardAmount))) {
       throw new Error("Kurye gun sonu kredi karti tutari sayisal donmedi.");
     }
+    if (Number(dayCloseReport.cashCollectedAmount) < 250) {
+      throw new Error("Kurye gun sonu nakit tutari beklenen teslimattan dusuk dondu.");
+    }
+    if (cardPackage.assignedCourierId === createdCourier.id && Number(dayCloseReport.creditCardAmount) < 275) {
+      throw new Error("Kurye gun sonu kapida kart/POS tutari kredi karti kirilimina yansimadi.");
+    }
 
     const dayCloseApproval = await request(`/api/admin/day-close/${dayCloseReport.id}/approve`, {
       method: "POST",
@@ -1296,6 +1348,40 @@ async function run() {
     });
     if (!dayCloseApproval.success) {
       throw new Error("Admin kurye gun sonu raporunu onaylayamadi.");
+    }
+    const approvedReportFromResponse = (dayCloseApproval.courierDailyReports || []).find((report) => report.id === dayCloseReport.id);
+    if (!approvedReportFromResponse || approvedReportFromResponse.status !== "approved") {
+      throw new Error("Gun sonu onay yaniti guncel admin rapor listesini dondurmedi.");
+    }
+    for (const field of ["paidOnlineAmount", "cashCollectedAmount", "creditCardAmount"]) {
+      if (!Number.isFinite(Number(approvedReportFromResponse[field]))) {
+        throw new Error(`Gun sonu onay yanitinda ${field} sayisal donmedi.`);
+      }
+    }
+
+    const courier2DayCloseWorkspace = await request("/api/courier/day-close", {
+      method: "POST",
+      headers: courier2Headers,
+      body: "{}",
+    });
+    const courier2DayCloseReport = courier2DayCloseWorkspace.dayCloseReport;
+    if (!courier2DayCloseReport || courier2DayCloseReport.status !== "pending_approval") {
+      throw new Error("Ikinci kurye gun sonu raporu olusmadi veya onay bekleme durumuna gecmedi.");
+    }
+    if (Number(courier2DayCloseReport.paidOnlineAmount) < 180) {
+      throw new Error("Kurye gun sonu online tutari beklenen teslimattan dusuk dondu.");
+    }
+    if (cardPackage.assignedCourierId === createdCourier2.id && Number(courier2DayCloseReport.creditCardAmount) < 275) {
+      throw new Error("Kurye gun sonu kapida kart/POS tutari kredi karti kirilimina yansimadi.");
+    }
+    const courier2DayCloseApproval = await request(`/api/admin/day-close/${courier2DayCloseReport.id}/approve`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: "{}",
+    });
+    const approvedCourier2Report = (courier2DayCloseApproval.courierDailyReports || []).find((report) => report.id === courier2DayCloseReport.id);
+    if (!approvedCourier2Report || approvedCourier2Report.status !== "approved") {
+      throw new Error("Ikinci kurye gun sonu onayi admin rapor listesine yansimadi.");
     }
 
     const approvedDayCloseState = await request("/api/admin/bootstrap", {

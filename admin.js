@@ -1121,6 +1121,7 @@ function renderCourierDailyReports(reports) {
                     method: 'POST',
                     headers: authHeaders(adminState.token)
                 });
+                hydrateAdmin(res);
                 showToast("Gün sonu başarıyla onaylandı.", "success");
             } catch (err) {
                 showToast("Onay hatası: " + err.message, "error");

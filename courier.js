@@ -1052,7 +1052,7 @@ function syncConnectionSwitch(courier = courierState.data?.courier) {
     return;
   }
 
-  const connected = Boolean(courier?.available && courierState.watchId !== null);
+  const connected = Boolean(courier?.available);
   courierRefs.connectionSwitch.checked = connected;
   courierRefs.connectionSwitch.disabled = courierState.connectionBusy;
   courierRefs.connectionSwitch.setAttribute("aria-checked", String(connected));
@@ -1063,6 +1063,22 @@ function syncConnectionSwitch(courier = courierState.data?.courier) {
         ? "Bağlantıyı Kes"
         : "Bağlan";
   }
+}
+
+function restoreCourierConnectionFromWorkspace(courier = courierState.data?.courier) {
+  if (!courier || courierState.connectionBusy) {
+    return;
+  }
+
+  if (courier.available) {
+    startLocationWatch({
+      latitude: courier.latitude,
+      longitude: courier.longitude,
+    });
+    return;
+  }
+
+  stopLocationWatch();
 }
 
 function hydrateCourierWorkspace(data) {
@@ -1083,6 +1099,7 @@ function hydrateCourierWorkspace(data) {
   if (courierRefs.liveBadge) {
     courierRefs.liveBadge.textContent = "Canli akis acik";
   }
+  restoreCourierConnectionFromWorkspace(data.courier);
   setLocationStatus(data.courier.lastLocationAt ? `Canli konum aktif. Son guncelleme ${formatTimeAgo(data.courier.lastLocationAt)}.` : "Konum izni verilirse admin paneli seni canli gorur.");
   syncConnectionSwitch(data.courier);
   renderCourierStats(data.courier, data.packages);
