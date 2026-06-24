@@ -1807,22 +1807,19 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
     paymentMethod: "Panel Kaydi",
   };
 
-  if (!restaurantRefs.packageImageInput || restaurantRefs.packageImageInput.files.length === 0) {
-    showToast("Siparis fotografi zorunludur. Lutfen bir fotograf ekleyin.", "error");
-    return;
-  }
-
-  const file = restaurantRefs.packageImageInput.files[0];
-  if (file.size > 10 * 1024 * 1024) {
-    showToast("Fotograf 10MB'dan kucuk olmalidir.", "error");
-    return;
-  }
-  try {
-    payload.photoBase64 = await compressImage(file);
-  } catch (err) {
-    console.error("Image compression error:", err);
-    showToast("Fotograf islenemedi: " + (err.message || 'Bilinmeyen hata'), "error");
-    return;
+  const file = restaurantRefs.packageImageInput?.files?.[0] || null;
+  if (file) {
+    if (file.size > 10 * 1024 * 1024) {
+      showToast("Fotograf 10MB'dan kucuk olmalidir.", "error");
+      return;
+    }
+    try {
+      payload.photoBase64 = await compressImage(file);
+    } catch (err) {
+      console.error("Image compression error:", err);
+      showToast("Fotograf islenemedi: " + (err.message || "Bilinmeyen hata"), "error");
+      return;
+    }
   }
 
   try {

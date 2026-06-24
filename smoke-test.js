@@ -1048,8 +1048,16 @@ async function run() {
       throw new Error("Yazdirma ekrani window.print akisini icermiyor.");
     }
     const courierSource = fs.readFileSync(path.join(__dirname, "courier.js"), "utf8");
-    if (!courierSource.includes("Restorani Haritada Ac") || !courierSource.includes("Musteriyi Haritada Ac") || !courierSource.includes("openOrderMap") || !courierSource.includes("buildOrderMapUrl") || !courierSource.includes("encodeURIComponent(address)")) {
+    if (!courierSource.includes('textContent = "Restoran"') ||
+      !courierSource.includes('textContent = "Musteri"') ||
+      !courierSource.includes("openOrderMap") ||
+      !courierSource.includes("buildOrderMapUrl") ||
+      !courierSource.includes("encodeURIComponent(address)")) {
       throw new Error("Kurye paneli restoran/musteri harita butonlarini icermiyor.");
+    }
+    const courierHtmlSource = fs.readFileSync(path.join(__dirname, "courier.html"), "utf8");
+    if (!courierHtmlSource.includes("courierDestinationMap") || !courierHtmlSource.includes("courierMapButton")) {
+      throw new Error("Kurye paneli gidecegim adres harita kartini icermiyor.");
     }
 
     await delay(1200);

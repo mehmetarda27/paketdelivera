@@ -20,7 +20,8 @@ const courierState = {
   liveStream: null,
   lastWorkspaceLoadAt: 0,
   connectionBusy: false,
-  activeProfileSection: localStorage.getItem("deliveraCourierActiveSection") || "day-close",
+  focusPackage: null,
+  activeProfileSection: localStorage.getItem("deliveraCourierCompactSection") || "",
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -30,6 +31,7 @@ const COURIER_FAILURE_REASON_OPTIONS = [
   { value: "teknik_sorun", label: "Teknik sorun" },
   { value: "diger", label: "Diger" },
 ];
+const COURIER_CLOSED_STATUSES = ["delivered", "failed", "cancelled"];
 
 const COURIER_PACKAGE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"></line><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`;
 const COURIER_MOTO_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16A3 3 0 1 0 5 22A3 3 0 1 0 5 16Z"></path><path d="M19 16A3 3 0 1 0 19 22A3 3 0 1 0 19 16Z"></path><path d="M5 19H19"></path><path d="M8 15L10 9H15L17 15"></path><path d="M14 9L13 5H17"></path></svg>`;
@@ -47,6 +49,10 @@ function escapeCourierHtml(value = "") {
 
 function courierFailureReasonLabel(reason) {
   return COURIER_FAILURE_REASON_OPTIONS.find((item) => item.value === reason)?.label || reason || "Sorun yok";
+}
+
+function isActiveCourierPackage(pkg) {
+  return pkg && !COURIER_CLOSED_STATUSES.includes(pkg.status);
 }
 
 function historyDateForPackage(pkg) {
@@ -90,9 +96,15 @@ const courierRefs = {
   connectionLabel: document.getElementById("courierConnectionLabel"),
   locationStatus: document.getElementById("locationStatus"),
   name: document.getElementById("courierName"),
+  focusCard: document.querySelector(".courier-focus-card"),
+  focusLabel: document.querySelector(".courier-focus-card .eyebrow"),
   focusTitle: document.getElementById("courierFocusTitle"),
   focusText: document.getElementById("courierFocusText"),
   missionMeta: document.getElementById("courierMissionMeta"),
+  destinationMap: document.getElementById("courierDestinationMap"),
+  mapTitle: document.getElementById("courierMapTitle"),
+  mapAddress: document.getElementById("courierMapAddress"),
+  mapButton: document.getElementById("courierMapButton"),
   stats: document.getElementById("courierStats"),
   dayMetrics: document.getElementById("courierDayMetrics"),
   earningsMetrics: document.getElementById("courierEarningsMetrics"),
@@ -162,6 +174,10 @@ function setLoggedIn(isLoggedIn) {
 
 function setLocationStatus(message) {
   if (courierRefs.locationStatus) courierRefs.locationStatus.textContent = message;
+}
+
+function setShiftGreetingStatus(available = courierState.data?.courier?.available) {
+  setLocationStatus(available ? "Hayırlı günler" : "Hayırlı akşamlar");
 }
 
 function hasMapTarget(latitudeValue, longitudeValue, addressValue) {
@@ -347,7 +363,7 @@ function notifyNewAssignment(pkg) {
 
 function processIncomingPackageNotifications(packages) {
   const nextSnapshot = new Map();
-  const activePackages = packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+  const activePackages = packages.filter(isActiveCourierPackage);
 
   activePackages.forEach((pkg) => {
     const signature = `${pkg.status}|${pkg.assignedAt || ""}`;
@@ -395,7 +411,7 @@ function setPackageDraft(pkgId, nextDraft) {
 }
 
 function clearResolvedPackageDrafts(packages) {
-  const activeIds = new Set((packages || []).filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).map((pkg) => pkg.id));
+  const activeIds = new Set((packages || []).filter(isActiveCourierPackage).map((pkg) => pkg.id));
   [...courierState.packageActionDrafts.keys()].forEach((pkgId) => {
     if (!activeIds.has(pkgId)) {
       courierState.packageActionDrafts.delete(pkgId);
@@ -580,7 +596,7 @@ function initializeCourierProfilePanels() {
       courierState.activeProfileSection = courierState.activeProfileSection === panel.dataset.section
         ? ""
         : panel.dataset.section;
-      localStorage.setItem("deliveraCourierActiveSection", courierState.activeProfileSection);
+      localStorage.setItem("deliveraCourierCompactSection", courierState.activeProfileSection);
       syncCourierProfilePanels();
       panels.forEach((item) => {
         const itemHeader = item.querySelector(".panel-head");
@@ -715,7 +731,7 @@ function renderCourierShiftSummary(shiftSummary) {
 }
 
 function renderPackages(packages) {
-  const activePackages = packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+  const activePackages = packages.filter(isActiveCourierPackage);
   const signature = listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError"]);
   if (courierRefs.packages.__deliveraRenderSignature === signature) {
     return;
@@ -724,7 +740,6 @@ function renderPackages(packages) {
   courierRefs.packages.innerHTML = "";
 
   if (activePackages.length === 0) {
-    courierRefs.packages.innerHTML = '<div class="empty-state">Bu kuryeye atanmis paket yok.</div>';
     return;
   }
 
@@ -745,7 +760,7 @@ function renderPackages(packages) {
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
     node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform)}`;
     node.querySelector(".restaurant-name").innerHTML = `${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)}`;
-    node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)} - ${escapeCourierHtml(pkg.address)}`;
+    node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)}`;
     node.querySelector(".eta-value").textContent = pkg.eta;
     node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
     node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.deliveryAddress || pkg.address)}`;
@@ -826,8 +841,8 @@ function renderPackages(packages) {
     if (hasMapTarget(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, pkg.restaurantAddress || pkg.restaurantName || pkg.zone)) {
       const restaurantMapButton = document.createElement("button");
       restaurantMapButton.type = "button";
-      restaurantMapButton.className = "ghost-btn";
-      restaurantMapButton.textContent = "Restorani Haritada Ac";
+      restaurantMapButton.className = "ghost-btn courier-action-secondary courier-map-action";
+      restaurantMapButton.textContent = "Restoran";
       restaurantMapButton.addEventListener("click", () => {
         openOrderMap(pkg, "restaurant");
       });
@@ -837,8 +852,8 @@ function renderPackages(packages) {
     if (hasMapTarget(pkg.customerLat ?? pkg.customerLatitude, pkg.customerLng ?? pkg.customerLongitude, pkg.customerAddress || pkg.deliveryAddress || pkg.address)) {
       const customerMapButton = document.createElement("button");
       customerMapButton.type = "button";
-      customerMapButton.className = "ghost-btn";
-      customerMapButton.textContent = "Musteriyi Haritada Ac";
+      customerMapButton.className = "ghost-btn courier-action-secondary courier-map-action";
+      customerMapButton.textContent = "Musteri";
       customerMapButton.addEventListener("click", () => {
         openOrderMap(pkg, "customer");
       });
@@ -848,8 +863,8 @@ function renderPackages(packages) {
     if (pkg.status === "assigned") {
       const acceptButton = document.createElement("button");
       acceptButton.type = "button";
-      acceptButton.className = "primary-btn";
-      acceptButton.textContent = "Paketi Kabul Et";
+      acceptButton.className = "primary-btn courier-action-main";
+      acceptButton.textContent = "Kabul Et";
       acceptButton.addEventListener("click", async () => {
         await submitStatus("accepted_by_courier");
       });
@@ -859,7 +874,7 @@ function renderPackages(packages) {
     if (pkg.status === "accepted_by_courier") {
       const routeButton = document.createElement("button");
       routeButton.type = "button";
-      routeButton.className = "primary-btn";
+      routeButton.className = "primary-btn courier-action-main";
       routeButton.textContent = "Yola Ciktim";
       routeButton.addEventListener("click", async () => {
         await submitStatus("on_route");
@@ -869,7 +884,7 @@ function renderPackages(packages) {
 
     if (pkg.status === "on_route") {
       const paymentSelect = document.createElement("select");
-      paymentSelect.className = "status-select";
+      paymentSelect.className = "status-select courier-action-select";
       paymentSelect.innerHTML = [
         '<option value="">Odeme durumunu sec</option>',
         '<option value="cash_collected">Nakit</option>',
@@ -886,7 +901,7 @@ function renderPackages(packages) {
 
       const deliveredButton = document.createElement("button");
       deliveredButton.type = "button";
-      deliveredButton.className = "primary-btn delivered-action";
+      deliveredButton.className = "primary-btn delivered-action courier-action-delivered";
       deliveredButton.textContent = "Teslim Edildi";
       deliveredButton.addEventListener("click", async () => {
         if (!selectedPaymentStatus) {
@@ -901,7 +916,7 @@ function renderPackages(packages) {
 
     if (["assigned", "accepted_by_courier", "on_route"].includes(pkg.status)) {
       const failureSelect = document.createElement("select");
-      failureSelect.className = "status-select";
+      failureSelect.className = "status-select courier-action-select";
       failureSelect.innerHTML = ['<option value="">Sorun nedeni sec</option>']
         .concat(COURIER_FAILURE_REASON_OPTIONS.map((item) => `<option value="${item.value}">${item.label}</option>`))
         .join("");
@@ -913,8 +928,8 @@ function renderPackages(packages) {
 
       const failureButton = document.createElement("button");
       failureButton.type = "button";
-      failureButton.className = "ghost-btn";
-      failureButton.textContent = "Reddet / Sorun Bildir";
+      failureButton.className = "ghost-btn courier-action-danger";
+      failureButton.textContent = "Sorun Bildir";
       failureButton.addEventListener("click", async () => {
         await submitStatus("failed", selectedFailureReason);
       });
@@ -1031,20 +1046,36 @@ function renderCourierAnnouncements(items) {
 }
 
 function renderCourierFocus(courier, packages) {
-  const priority = packages.find((pkg) => pkg.status === "on_route") || packages.find((pkg) => pkg.status === "accepted_by_courier") || packages[0] || null;
+  const activePackages = packages.filter(isActiveCourierPackage);
+  const priority = activePackages.find((pkg) => pkg.status === "on_route") || activePackages.find((pkg) => pkg.status === "accepted_by_courier") || activePackages[0] || null;
+  courierState.focusPackage = priority;
 
   if (!priority) {
-    courierRefs.focusTitle.textContent = courier.available ? "Yeni gorev bekleniyor." : "Kurye pasif durumda.";
+    courierRefs.focusCard?.classList.add("hidden");
+    courierRefs.destinationMap?.classList.add("hidden");
+    if (courierRefs.focusLabel) courierRefs.focusLabel.textContent = "Yeni Paket";
+    courierRefs.focusTitle.textContent = courier.available ? "Yeni Paket Bekleniyor" : "Vardiya Kapali";
     courierRefs.focusText.textContent = courier.available
-      ? "Konum acik ve atamaya hazirsin. Yeni paket geldiginde burada ilk durak gorunecek."
-      : "Pasif modda oldugun icin yeni paket dusmez. Hazir oldugunda tekrar aktif yap.";
+      ? "Paket dustugunde burada tek kart olarak gorunecek."
+      : "Hazir oldugunda baglan, yeni paketler burada gorunsun.";
+    if (courierRefs.mapTitle) courierRefs.mapTitle.textContent = "Harita bekleniyor";
+    if (courierRefs.mapAddress) courierRefs.mapAddress.textContent = "Yeni paket geldiginde gidecegin adres burada gorunecek.";
+    courierRefs.destinationMap?.classList.add("map-empty");
+    courierRefs.mapButton?.setAttribute("disabled", "disabled");
     if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = "Henuz aktif paket yok.";
     return;
   }
 
-  courierRefs.focusTitle.textContent = `${priority.recipient} - ${statusLabel(priority.status)}`;
-  courierRefs.focusText.textContent = `${priority.restaurantName} cikisli teslimat. ${priority.zone} bolgesi, odeme ${priority.paymentMethod}.`;
-  if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = `${packages.length} aktif paket, ${packages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
+  courierRefs.focusCard?.classList.remove("hidden");
+  courierRefs.destinationMap?.classList.remove("hidden");
+  if (courierRefs.focusLabel) courierRefs.focusLabel.textContent = "Yeni Paket Dustu";
+  courierRefs.focusTitle.textContent = `${priority.trackingNo} - ${priority.recipient}`;
+  courierRefs.focusText.textContent = `${statusLabel(priority.status)} - ${priority.restaurantName} cikisli paket.`;
+  if (courierRefs.mapTitle) courierRefs.mapTitle.textContent = priority.recipient || "Teslimat";
+  if (courierRefs.mapAddress) courierRefs.mapAddress.textContent = priority.deliveryAddress || priority.address || "Adres bilgisi bekleniyor.";
+  courierRefs.destinationMap?.classList.remove("map-empty");
+  courierRefs.mapButton?.removeAttribute("disabled");
+  if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = `${activePackages.length} aktif paket, ${activePackages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
 }
 
 function syncConnectionSwitch(courier = courierState.data?.courier) {
@@ -1094,13 +1125,13 @@ function hydrateCourierWorkspace(data) {
   courierRefs.name.textContent = data.courier.name;
   if (courierRefs.summary) {
     courierRefs.summary.textContent =
-      `${data.courier.name} hesabinda ${data.packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status)).length} aktif paket var.`;
+      `${data.courier.name} hesabinda ${data.packages.filter(isActiveCourierPackage).length} aktif paket var.`;
   }
   if (courierRefs.liveBadge) {
     courierRefs.liveBadge.textContent = "Canli akis acik";
   }
   restoreCourierConnectionFromWorkspace(data.courier);
-  setLocationStatus(data.courier.lastLocationAt ? `Canli konum aktif. Son guncelleme ${formatTimeAgo(data.courier.lastLocationAt)}.` : "Konum izni verilirse admin paneli seni canli gorur.");
+  setShiftGreetingStatus(data.courier.available);
   syncConnectionSwitch(data.courier);
   renderCourierStats(data.courier, data.packages);
   renderCourierDayMetrics(data.dayMetrics);
@@ -1130,6 +1161,14 @@ courierRefs.historyMore?.addEventListener("click", () => {
   if (courierState.data) {
     renderCourierHistory(courierState.data.packages || [], courierState.data.historyPackages || null);
   }
+});
+
+courierRefs.mapButton?.addEventListener("click", () => {
+  if (!courierState.focusPackage) {
+    showToast("Once aktif paket gelsin.", "error");
+    return;
+  }
+  openOrderMap(courierState.focusPackage, "customer");
 });
 
 async function pushCourierLocation(payload) {
@@ -1170,7 +1209,7 @@ async function heartbeatCourierLocation() {
       ...coords,
       available: courierState.data.courier.available,
     });
-    setLocationStatus(`Canli konum 2 saniyede bir guncelleniyor. Son sinyal ${formatTimeAgo(new Date().toISOString())}.`);
+    setShiftGreetingStatus(courierState.data?.courier?.available);
   } catch (error) {
     setLocationStatus(error.message);
   }
@@ -1209,7 +1248,7 @@ function startLocationWatch(initialCoords = null) {
   }
 
   if (courierState.watchId !== null) {
-    setLocationStatus("Canli konum zaten acik.");
+    setShiftGreetingStatus(true);
     return true;
   }
 
@@ -1230,7 +1269,7 @@ function startLocationWatch(initialCoords = null) {
         Math.abs(last.longitude - coords.longitude) > 0.00005;
 
       courierState.lastCoords = coords;
-      setLocationStatus(moved ? "Canli konum admine gonderiliyor..." : "Konum sabit, heartbeat gonderiliyor...");
+      setShiftGreetingStatus(courierState.data?.courier?.available ?? true);
       try {
         await pushCourierLocation({
           ...coords,
@@ -1275,7 +1314,7 @@ async function setCourierConnection(connected) {
       const data = await pushCourierLocation({ ...coords, available: true });
       startLocationWatch(coords);
       hydrateCourierWorkspace(data);
-      setLocationStatus("Canli konum acik, kurye online ve vardiya baslatildi.");
+      setShiftGreetingStatus(true);
       showToast("Baglanti acildi. Konum ve vardiya aktif.", "success");
     } else {
       stopLocationWatch();
@@ -1286,7 +1325,7 @@ async function setCourierConnection(connected) {
       };
       const data = await pushCourierLocation({ ...coords, available: false });
       hydrateCourierWorkspace(data);
-      setLocationStatus("Konum kapatildi, kurye offline ve vardiya bitirildi.");
+      setShiftGreetingStatus(false);
       showToast("Baglanti kapatildi. Vardiya bitirildi.", "success");
     }
   } catch (error) {
@@ -1420,7 +1459,7 @@ courierRefs.logoutButton?.addEventListener("click", async () => {
   }
   clearCourierAuth();
   setLoggedIn(false);
-  setLocationStatus("Konum kapatildi.");
+  setShiftGreetingStatus(false);
   if (courierRefs.summary) {
     courierRefs.summary.textContent = "Cikis yapildi.";
   }

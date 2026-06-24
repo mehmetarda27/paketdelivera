@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=1782067000000">
+  <link rel="stylesheet" href="/styles.css?v=1782425200000">
 </head>
 <body class="theme-courier app-unauthenticated">
   <div class="courier-mobile-app">
@@ -71,6 +71,21 @@
             </h3>
           </div>
         </div>
+        <div id="courierDestinationMap" class="courier-destination-map glass-panel dark-panel" aria-live="polite">
+          <div class="courier-map-canvas" aria-hidden="true">
+            <span class="map-road map-road-a"></span>
+            <span class="map-road map-road-b"></span>
+            <span class="map-route"></span>
+            <span class="map-pin map-pin-start"></span>
+            <span class="map-pin map-pin-target"></span>
+          </div>
+          <div class="courier-map-copy">
+            <p class="eyebrow accent-gold">Gidecegim adres</p>
+            <strong id="courierMapTitle">Harita bekleniyor</strong>
+            <span id="courierMapAddress">Yeni paket geldiginde rota burada gorunecek.</span>
+            <button id="courierMapButton" class="primary-btn courier-action-main courier-map-action" type="button">Haritada Ac</button>
+          </div>
+        </div>
         <div id="courierPackages" class="package-list"></div>
 
       </section>
@@ -96,7 +111,7 @@
           
           <div id="courierStats" class="mini-stat-list" style="margin-bottom: 20px;"></div>
           
-          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel" style="margin-bottom: 16px; padding: 16px;">
             <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Gün Sonu</p>
@@ -107,7 +122,7 @@
             <div id="courierDayMetrics" class="mini-stat-list"></div>
           </div>
           
-          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel" style="margin-bottom: 16px; padding: 16px;">
             <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Kazanç ve Vardiya</p>
@@ -118,7 +133,7 @@
             <div id="courierShiftMetrics" class="stack-list compact-stack-list" style="margin-top: 12px;"></div>
           </div>
 
-          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel" style="margin-bottom: 16px; padding: 16px;">
             <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Bildirimler</p>
@@ -127,7 +142,7 @@
             <div id="courierNotificationCenter" class="stack-list compact-stack-list"></div>
           </div>
           
-          <div class="glass-panel dark-panel courier-day-panel" style="margin-bottom: 16px; padding: 16px;">
+          <div class="glass-panel dark-panel courier-day-panel inner-day-panel" style="margin-bottom: 16px; padding: 16px;">
             <div class="panel-head" style="margin-bottom: 12px;">
               <div>
                 <p class="eyebrow accent-gold">Duyurular</p>
@@ -194,6 +209,8 @@
         </div>
         <span class="status-badge"></span>
       </div>
+      <details class="courier-extra-details">
+        <summary>Bilgi</summary>
       <div class="meta-grid">
         <div>
           <span>Platform</span>
@@ -216,6 +233,7 @@
           <strong class="payment-method"></strong>
         </div>
       </div>
+      </details>
       <div class="courier-address-block">
         <span>Teslimat Adresi</span>
         <strong class="address-value"></strong>
@@ -265,7 +283,7 @@
       window.addEventListener("load", () => window.lucide?.createIcons());
     }
   </script>
-  <script src="/shared.js?v=1782067000000"></script>
-  <script src="/courier.js?v=1782067000000"></script>
+  <script src="/shared.js?v=1782425200000"></script>
+  <script src="/courier.js?v=1782425200000"></script>
 </body>
 </html>
