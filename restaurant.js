@@ -1787,7 +1787,6 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
 
   const formData = new FormData(restaurantRefs.packageForm);
   const payload = {
-    restaurantId: currentRestaurant.id,
     deliveryAddress: formData.get("deliveryAddress"),
     packageType: formData.get("packageType"),
     orderAmount: formData.get("orderAmount"),

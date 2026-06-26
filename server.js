@@ -8993,8 +8993,16 @@ async function handleApi(req, res, pathname) {
     }
 
     const { json: body } = await readRequestBody(req);
+    const bodyRestaurantId = trimmed(body.restaurant_id ?? body.restaurantId);
+    if (bodyRestaurantId && bodyRestaurantId !== session.restaurant_id) {
+      logger.warn("PACKAGE_BODY_RESTAURANT_ID_IGNORED", {
+        requestId: req.requestId,
+        bodyRestaurantId,
+        sessionRestaurantId: session.restaurant_id,
+      });
+    }
     const draft = {
-      restaurantId: trimmed(body.restaurant_id ?? body.restaurantId) || session.restaurant_id,
+      restaurantId: session.restaurant_id,
       deliveryAddress: trimmed(body.delivery_address ?? body.deliveryAddress),
       packageType: trimmed(body.package_type ?? body.packageType),
       orderAmount: normalizeMoney(body.order_amount ?? body.orderAmount),
@@ -9013,15 +9021,6 @@ async function handleApi(req, res, pathname) {
     if (errors.length > 0) {
       logInsertSkipped("packages", "validation_failed", req, { errors });
       sendJson(res, 400, { error: errors.join(" ") });
-      return;
-    }
-
-    if (draft.restaurantId !== session.restaurant_id) {
-      logInsertSkipped("packages", "restaurant_id_session_mismatch", req, {
-        draftRestaurantId: draft.restaurantId,
-        sessionRestaurantId: session.restaurant_id,
-      });
-      sendJson(res, 403, { error: "restaurant_id oturumdaki restoran ile eslesmiyor." });
       return;
     }
 

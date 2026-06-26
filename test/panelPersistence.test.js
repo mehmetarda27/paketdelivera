@@ -68,6 +68,8 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
   const adminPassword = "Delivera123!";
   const restaurantUsername = `rest_${Date.now()}`;
   const restaurantPassword = "Rest12345!";
+  const secondRestaurantUsername = `rest2_${Date.now()}`;
+  const secondRestaurantPassword = "Rest22345!";
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
@@ -116,6 +118,23 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.ok(restaurantState.createdRestaurant?.id);
     assert.ok(readRow(dbFile, "SELECT id FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id));
+
+    const secondRestaurantState = await request(baseUrl, "/restaurants", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "Second Persistence Test Restaurant",
+        portalUsername: secondRestaurantUsername,
+        portalPassword: secondRestaurantPassword,
+        zone: "Mezitli",
+        latitude: 36.75,
+        longitude: 34.55,
+        platforms: ["POS"],
+      }),
+    });
+    assert.ok(secondRestaurantState.createdRestaurant?.id);
+    assert.notEqual(secondRestaurantState.createdRestaurant.id, restaurantState.createdRestaurant.id);
+    assert.ok(readRow(dbFile, "SELECT id FROM restaurants WHERE id = ?", secondRestaurantState.createdRestaurant.id));
 
     const courierState = await request(baseUrl, "/couriers", {
       method: "POST",
@@ -211,11 +230,50 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.ok(packageState.createdPackage?.id);
     assert.ok(readRow(dbFile, "SELECT id FROM packages WHERE id = ?", packageState.createdPackage.id));
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", packageState.createdPackage.id).restaurant_id,
+      restaurantState.createdRestaurant.id
+    );
+
+    const secondRestaurantLogin = await request(baseUrl, "/api/restaurant/session", {
+      method: "POST",
+      body: JSON.stringify({ username: secondRestaurantUsername, password: secondRestaurantPassword }),
+    });
+    const secondRestaurantHeaders = { Authorization: `Bearer ${secondRestaurantLogin.token}` };
+    const secondPackageState = await request(baseUrl, "/packages", {
+      method: "POST",
+      headers: secondRestaurantHeaders,
+      body: JSON.stringify({
+        restaurantId: restaurantState.createdRestaurant.id,
+        deliveryAddress: "Second restaurant package address",
+        packageType: "Second Test Paket",
+        orderAmount: 175,
+        customerName: "Second Restaurant Customer",
+        phone: "5559998877",
+        customerNote: "body restaurantId must be ignored",
+        paymentMethod: "Panel Kaydi",
+      }),
+    });
+    assert.ok(secondPackageState.createdPackage?.id);
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", secondPackageState.createdPackage.id).restaurant_id,
+      secondRestaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(DISTINCT restaurant_id) AS count FROM packages").count,
+      2
+    );
 
     const reloadedRestaurantState = await request(baseUrl, "/api/restaurant/bootstrap", {
       headers: restaurantHeaders,
     });
     assert.ok(reloadedRestaurantState.packages.some((pkg) => pkg.id === packageState.createdPackage.id));
+    assert.ok(!reloadedRestaurantState.packages.some((pkg) => pkg.id === secondPackageState.createdPackage.id));
+    const reloadedSecondRestaurantState = await request(baseUrl, "/api/restaurant/bootstrap", {
+      headers: secondRestaurantHeaders,
+    });
+    assert.ok(reloadedSecondRestaurantState.packages.some((pkg) => pkg.id === secondPackageState.createdPackage.id));
+    assert.ok(!reloadedSecondRestaurantState.packages.some((pkg) => pkg.id === packageState.createdPackage.id));
 
     const counts = readRow(dbFile, `
       SELECT
