@@ -44,6 +44,7 @@ const {
   normalizeErrorCode,
 } = require("./services/connectionHealthService");
 const { verifyPlatformSignature } = require("./services/platformSignature");
+const { mapOrderStatus } = require("./utils/orderStatusMapper");
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = resolveDbFile();
@@ -78,6 +79,13 @@ const CORS_ALLOWED_ORIGINS = String(process.env.DELIVERA_CORS_ORIGINS || process
 const TRUST_PROXY = ["1", "true", "yes"].includes(String(process.env.TRUST_PROXY || "").toLowerCase());
 const FORCE_HTTPS = ["1", "true", "yes"].includes(String(process.env.FORCE_HTTPS || "").toLowerCase());
 const REDIS_URL = trimmed(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL);
+const WEBHOOK_SECRET = trimmed(process.env.WEBHOOK_SECRET);
+const WEBHOOK_ENABLED = !["0", "false", "no"].includes(String(process.env.WEBHOOK_ENABLED || "true").toLowerCase());
+const WEBHOOK_LOG_ENABLED = !["0", "false", "no"].includes(String(process.env.WEBHOOK_LOG_ENABLED || "true").toLowerCase());
+const WEBHOOK_ALLOWED_IPS = String(process.env.WEBHOOK_ALLOWED_IPS || "")
+  .split(",")
+  .map((ip) => ip.trim())
+  .filter(Boolean);
 const RATE_LIMITS = {
   integrations: { limit: 100, windowMs: RATE_LIMIT_WINDOW_MS },
   courierLogin: { limit: 10, windowMs: RATE_LIMIT_WINDOW_MS },
@@ -486,7 +494,7 @@ db.exec(`
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
   );
 
-      CREATE TABLE IF NOT EXISTS platform_orders (
+  CREATE TABLE IF NOT EXISTS platform_orders (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL,
     platform_order_id TEXT NOT NULL,
@@ -502,6 +510,51 @@ db.exec(`
     updated_at TEXT NOT NULL,
     UNIQUE(platform, platform_order_id, restaurant_id),
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS order_items (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    external_product_id TEXT,
+    product_id TEXT,
+    name TEXT,
+    quantity REAL NOT NULL DEFAULT 1,
+    price REAL NOT NULL DEFAULT 0,
+    option_price REAL NOT NULL DEFAULT 0,
+    price_with_option REAL NOT NULL DEFAULT 0,
+    total_price REAL NOT NULL DEFAULT 0,
+    total_option_price REAL NOT NULL DEFAULT 0,
+    total_price_with_option REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    removed_ingredients TEXT,
+    extra_ingredients TEXT,
+    raw_payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES packages(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS unmatched_orders (
+    id TEXT PRIMARY KEY,
+    external_order_id TEXT,
+    confirmation_id TEXT,
+    external_restaurant_id TEXT,
+    restaurant_name_from_payload TEXT,
+    platform TEXT,
+    platform_slug TEXT,
+    provider_name TEXT,
+    customer_name TEXT,
+    customer_phone TEXT,
+    total_price REAL NOT NULL DEFAULT 0,
+    status TEXT,
+    raw_payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_resolved INTEGER NOT NULL DEFAULT 0,
+    resolved_restaurant_id TEXT,
+    resolved_package_id TEXT,
+    resolved_at TEXT,
+    FOREIGN KEY (resolved_restaurant_id) REFERENCES restaurants(id)
   );
 
   CREATE TABLE IF NOT EXISTS courier_daily_reports (
@@ -660,6 +713,36 @@ if (!packageColumns.includes("platform_status_logs_json")) {
 if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN assignment_tried_courier_ids_json TEXT");
 }
+[
+  ["confirmation_id", "TEXT"],
+  ["external_restaurant_id", "TEXT"],
+  ["restaurant_name_from_payload", "TEXT"],
+  ["platform_slug", "TEXT"],
+  ["provider_id", "TEXT"],
+  ["provider_name", "TEXT"],
+  ["contact_phone", "TEXT"],
+  ["city", "TEXT"],
+  ["district", "TEXT"],
+  ["street", "TEXT"],
+  ["building_no", "TEXT"],
+  ["floor", "TEXT"],
+  ["door_no", "TEXT"],
+  ["address_description", "TEXT"],
+  ["status_text", "TEXT"],
+  ["raw_status", "TEXT"],
+  ["discounted_price", "REAL"],
+  ["total_discount", "REAL"],
+  ["pos_payment_method", "TEXT"],
+  ["pos_ticket", "TEXT"],
+  ["short_code", "TEXT"],
+  ["delivery_type", "TEXT"],
+  ["is_scheduled", "INTEGER NOT NULL DEFAULT 0"],
+  ["scheduled_date", "TEXT"],
+].forEach(([columnName, definition]) => {
+  if (!packageColumns.includes(columnName)) {
+    db.exec(`ALTER TABLE packages ADD COLUMN ${columnName} ${definition}`);
+  }
+});
 
 const webhookLogColumns = db.prepare("PRAGMA table_info(webhook_logs)").all().map((row) => row.name);
 if (!webhookLogColumns.includes("retry_count")) {
@@ -752,6 +835,37 @@ if (!restaurantColumns.includes("password_hash")) {
 if (!restaurantColumns.includes("password_salt")) {
   db.exec("ALTER TABLE restaurants ADD COLUMN password_salt TEXT");
 }
+[
+  ["trendyol_restaurant_id", "TEXT"],
+  ["yemeksepeti_restaurant_id", "TEXT"],
+  ["getir_restaurant_id", "TEXT"],
+  ["migros_restaurant_id", "TEXT"],
+  ["external_restaurant_ids", "TEXT"],
+].forEach(([columnName, definition]) => {
+  if (!restaurantColumns.includes(columnName)) {
+    db.exec(`ALTER TABLE restaurants ADD COLUMN ${columnName} ${definition}`);
+  }
+});
+
+const webhookLogColumnsAfterApiExpansion = db.prepare("PRAGMA table_info(webhook_logs)").all().map((row) => row.name);
+[
+  ["request_id", "TEXT"],
+  ["provider", "TEXT"],
+  ["platform", "TEXT"],
+  ["external_restaurant_id", "TEXT"],
+  ["external_order_id", "TEXT"],
+  ["is_matched", "INTEGER"],
+  ["status", "TEXT"],
+  ["http_status", "INTEGER"],
+  ["error_message", "TEXT"],
+  ["raw_payload", "TEXT"],
+  ["headers", "TEXT"],
+  ["ip_address", "TEXT"],
+].forEach(([columnName, definition]) => {
+  if (!webhookLogColumnsAfterApiExpansion.includes(columnName)) {
+    db.exec(`ALTER TABLE webhook_logs ADD COLUMN ${columnName} ${definition}`);
+  }
+});
 
 const platformAccountColumns = db.prepare("PRAGMA table_info(platform_accounts)").all().map((row) => row.name);
 if (!platformAccountColumns.includes("external_id")) {
@@ -883,6 +997,31 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_webhook_logs_restaurant_id_desc
   ON webhook_logs (restaurant_id, id DESC);
 
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_restaurants_trendyol_external
+  ON restaurants (trendyol_restaurant_id)
+  WHERE trendyol_restaurant_id IS NOT NULL AND trendyol_restaurant_id != '';
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_restaurants_yemeksepeti_external
+  ON restaurants (yemeksepeti_restaurant_id)
+  WHERE yemeksepeti_restaurant_id IS NOT NULL AND yemeksepeti_restaurant_id != '';
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_restaurants_getir_external
+  ON restaurants (getir_restaurant_id)
+  WHERE getir_restaurant_id IS NOT NULL AND getir_restaurant_id != '';
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_restaurants_migros_external
+  ON restaurants (migros_restaurant_id)
+  WHERE migros_restaurant_id IS NOT NULL AND migros_restaurant_id != '';
+
+  CREATE INDEX IF NOT EXISTS idx_order_items_order_id
+  ON order_items (order_id);
+
+  CREATE INDEX IF NOT EXISTS idx_unmatched_orders_created
+  ON unmatched_orders (is_resolved, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_api_order_lookup
+  ON packages (external_order_id, confirmation_id, restaurant_id);
+
   CREATE TABLE IF NOT EXISTS platform_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT,
@@ -978,6 +1117,92 @@ function normalizeIdList(value) {
     return [];
   }
   return [...new Set(value.map((item) => trimmed(item)).filter(Boolean))];
+}
+
+function parseExternalRestaurantIds(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") {
+          return { platform: "", restaurantId: trimmed(item) };
+        }
+        return {
+          platform: trimmed(item?.platform || item?.source || item?.slug),
+          restaurantId: trimmed(item?.restaurantId || item?.restaurant_id || item?.id),
+        };
+      })
+      .filter((item) => item.restaurantId);
+  }
+  const text = trimmed(value);
+  if (!text) {
+    return [];
+  }
+  const parsed = parseJson(text, null);
+  if (parsed) {
+    return parseExternalRestaurantIds(parsed);
+  }
+  return text
+    .split(/[\n,;]/)
+    .map((restaurantId) => ({ platform: "", restaurantId: trimmed(restaurantId) }))
+    .filter((item) => item.restaurantId);
+}
+
+function normalizeRestaurantPlatformIds(body = {}) {
+  return {
+    trendyolRestaurantId: trimmed(body.trendyolRestaurantId ?? body.trendyol_restaurant_id),
+    yemeksepetiRestaurantId: trimmed(body.yemeksepetiRestaurantId ?? body.yemeksepeti_restaurant_id),
+    getirRestaurantId: trimmed(body.getirRestaurantId ?? body.getir_restaurant_id),
+    migrosRestaurantId: trimmed(body.migrosRestaurantId ?? body.migros_restaurant_id),
+    externalRestaurantIds: parseExternalRestaurantIds(body.externalRestaurantIds ?? body.external_restaurant_ids),
+  };
+}
+
+function assertUniqueRestaurantPlatformIds(platformIds, excludeRestaurantId = "") {
+  const checks = [
+    ["trendyol_restaurant_id", "Trendyol Restoran ID", platformIds.trendyolRestaurantId],
+    ["yemeksepeti_restaurant_id", "Yemeksepeti Restoran ID", platformIds.yemeksepetiRestaurantId],
+    ["getir_restaurant_id", "Getir Restoran ID", platformIds.getirRestaurantId],
+    ["migros_restaurant_id", "Migros Yemek Restoran ID", platformIds.migrosRestaurantId],
+  ];
+  checks.forEach(([columnName, label, value]) => {
+    if (!value) return;
+    const row = excludeRestaurantId
+      ? db.prepare(`SELECT id, name FROM restaurants WHERE ${columnName} = ? AND id != ?`).get(value, excludeRestaurantId)
+      : db.prepare(`SELECT id, name FROM restaurants WHERE ${columnName} = ?`).get(value);
+    if (row) {
+      throw validationError(`${label} baska bir restoranda kullaniliyor: ${row.name}`);
+    }
+  });
+
+  const incoming = new Map();
+  checks.forEach(([, label, value]) => {
+    if (!value) return;
+    if (incoming.has(value)) {
+      throw validationError(`${value} birden fazla platform ID alaninda kullanilamaz.`);
+    }
+    incoming.set(value, label);
+  });
+  platformIds.externalRestaurantIds.forEach((item) => {
+    if (incoming.has(item.restaurantId)) {
+      throw validationError(`${item.restaurantId} birden fazla platform ID alaninda kullanilamaz.`);
+    }
+    incoming.set(item.restaurantId, item.platform || "External ID");
+  });
+
+  const rows = db.prepare(`
+    SELECT id, name, trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, external_restaurant_ids
+    FROM restaurants
+    WHERE id != ?
+  `).all(excludeRestaurantId || "");
+  for (const row of rows) {
+    const ids = parseExternalRestaurantIds(row.external_restaurant_ids);
+    ["trendyol_restaurant_id", "yemeksepeti_restaurant_id", "getir_restaurant_id", "migros_restaurant_id"].forEach((columnName) => {
+      if (row[columnName]) ids.push({ platform: columnName, restaurantId: row[columnName] });
+    });
+    if (ids.some((item) => incoming.has(item.restaurantId))) {
+      throw validationError(`External platform ID baska bir restoranda kullaniliyor: ${row.name}`);
+    }
+  }
 }
 
 function normalizePlatformInput(value) {
@@ -1286,6 +1511,7 @@ function validateRestaurantDraft(body) {
   const { latitude, longitude } = parseLatitudeLongitude(body);
   const portalUsername = trimmed(body.portalUsername || body.username);
   const portalPassword = String(body.portalPassword || body.password || "");
+  const platformIds = normalizeRestaurantPlatformIds(body);
   const draft = {
     name: trimmed(body.name),
     zone: trimmed(body.zone),
@@ -1294,6 +1520,7 @@ function validateRestaurantDraft(body) {
     portalUsername,
     portalPassword,
     platforms: Array.isArray(body.platforms) ? body.platforms.map((item) => trimmed(item)).filter(Boolean) : [],
+    ...platformIds,
   };
 
   if (!draft.name || !draft.zone || Number.isNaN(draft.latitude) || Number.isNaN(draft.longitude)) {
@@ -2809,6 +3036,7 @@ function streamMatchesAudience(stream, event) {
 function broadcastLiveEvent(event) {
   persistNotificationsForEvent(event);
   const payload = `event: ${event.type || "workspace-update"}\ndata: ${JSON.stringify({
+    ...event,
     type: event.type || "workspace-update",
     restaurantId: event.restaurantId || null,
     courierId: event.courierId || null,
@@ -3240,6 +3468,11 @@ function getRestaurants(filter = {}) {
     passwordHash: row.password_hash,
     passwordSalt: row.password_salt,
     platforms: parseJson(row.platforms_json, []),
+    trendyolRestaurantId: row.trendyol_restaurant_id || "",
+    yemeksepetiRestaurantId: row.yemeksepeti_restaurant_id || "",
+    getirRestaurantId: row.getir_restaurant_id || "",
+    migrosRestaurantId: row.migros_restaurant_id || "",
+    externalRestaurantIds: parseExternalRestaurantIds(row.external_restaurant_ids),
     apiKey: row.api_key,
     webhookSecret: row.webhook_secret,
     createdAt: row.created_at,
@@ -3332,11 +3565,25 @@ function getPackages(filter = {}) {
     deliveryAddress: row.delivery_address || row.address,
     packageType: row.package_type || "Standart Paket",
     sourcePlatform: row.source_platform,
+    platformSlug: row.platform_slug || "",
     externalOrderNo: row.external_order_no,
     externalOrderId: row.external_order_id || row.external_order_no,
+    confirmationId: row.confirmation_id || "",
+    externalRestaurantId: row.external_restaurant_id || "",
+    restaurantNameFromPayload: row.restaurant_name_from_payload || "",
+    providerId: row.provider_id || "",
+    providerName: row.provider_name || "",
     recipient: row.recipient,
     phone: row.phone,
+    contactPhone: row.contact_phone || "",
     address: row.address,
+    city: row.city || "",
+    district: row.district || "",
+    street: row.street || "",
+    buildingNo: row.building_no || "",
+    floor: row.floor || "",
+    doorNo: row.door_no || "",
+    addressDescription: row.address_description || "",
     zone: row.zone,
     eta: row.eta,
     paymentMethod: row.payment_method,
@@ -3346,6 +3593,14 @@ function getPackages(filter = {}) {
     longitude: row.y,
     note: row.note,
     customerNote: row.customer_note || "",
+    discountedPrice: Number(row.discounted_price || 0),
+    totalDiscount: Number(row.total_discount || 0),
+    posPaymentMethod: row.pos_payment_method || "",
+    posTicket: row.pos_ticket || "",
+    shortCode: row.short_code || "",
+    deliveryType: row.delivery_type || "",
+    isScheduled: Boolean(row.is_scheduled),
+    scheduledDate: row.scheduled_date || null,
     customerLat: row.customer_lat,
     customerLng: row.customer_lng,
     customerAddress: row.customer_address || row.delivery_address || row.address,
@@ -3356,6 +3611,8 @@ function getPackages(filter = {}) {
     rawPayload: parseJson(row.raw_payload_json, null),
     platformStatusLogs: parseJson(row.platform_status_logs_json, []),
     status: normalizeStatus(row.status),
+    statusText: row.status_text || "",
+    rawStatus: row.raw_status || "",
     assignmentStatus: row.assignment_status || assignmentStatusForOrder(row.status),
     assignedCourierId: row.assigned_courier_id,
     assignedCourierName: row.assigned_courier_name,
@@ -3787,10 +4044,20 @@ function getWebhookLogs(limit = 20, filter = {}) {
     id: row.id,
     restaurantId: row.restaurant_id,
     sourcePlatform: row.source_platform,
+    provider: row.provider,
+    platform: row.platform || row.source_platform,
+    externalRestaurantId: row.external_restaurant_id,
     externalOrderNo: row.external_order_no,
+    externalOrderId: row.external_order_id || row.external_order_no,
     signatureValid: Boolean(row.signature_valid),
+    isMatched: row.is_matched === null || row.is_matched === undefined ? null : Boolean(row.is_matched),
+    status: row.status,
     responseStatus: row.response_status,
+    httpStatus: row.http_status || row.response_status,
+    errorMessage: row.error_message || row.last_error,
     requestBody: row.request_body,
+    rawPayload: parseJson(row.raw_payload, null),
+    ipAddress: row.ip_address,
     retryCount: row.retry_count || 0,
     nextRetryAt: row.next_retry_at,
     deadLetteredAt: row.dead_lettered_at,
@@ -4934,6 +5201,7 @@ function decorateState(filter = {}) {
     restaurants: state.restaurants.map((restaurant) => sanitizeRestaurant(restaurant, Boolean(filter.includeRestaurantSecrets))),
     platformAccounts: sanitizedPlatformAccounts,
     platformOrders: state.platformOrders,
+    unmatchedOrders: getUnmatchedOrders(100),
     couriers,
     packages,
     courierDailyReports: getCourierDailyReports(50),
@@ -4975,8 +5243,10 @@ function logWebhookAttempt(entry) {
   const result = db.prepare(`
     INSERT INTO webhook_logs (
       restaurant_id, source_platform, external_order_no, signature_valid, response_status, request_body,
-      retry_count, next_retry_at, dead_lettered_at, last_error, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      retry_count, next_retry_at, dead_lettered_at, last_error, request_id, provider, platform,
+      external_restaurant_id, external_order_id, is_matched, status, http_status, error_message,
+      raw_payload, headers, ip_address, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.restaurantId || null,
     entry.sourcePlatform || null,
@@ -4988,12 +5258,568 @@ function logWebhookAttempt(entry) {
     entry.nextRetryAt || null,
     entry.deadLetteredAt || null,
     entry.lastError || null,
+    entry.requestId || null,
+    entry.provider || null,
+    entry.platform || entry.sourcePlatform || null,
+    entry.externalRestaurantId || null,
+    entry.externalOrderId || entry.externalOrderNo || null,
+    entry.isMatched === undefined ? null : (entry.isMatched ? 1 : 0),
+    entry.status || null,
+    entry.httpStatus || entry.responseStatus || null,
+    entry.errorMessage || entry.lastError || null,
+    entry.rawPayload ? json(entry.rawPayload) : safeRequestBody,
+    entry.headers ? json(entry.headers) : null,
+    entry.ipAddress || null,
     new Date().toISOString()
   );
 
   const line = `[${new Date().toISOString()}] status=${entry.responseStatus} signature=${entry.signatureValid ? "valid" : "invalid"} restaurant=${entry.restaurantId || "-"} platform=${entry.sourcePlatform || "-"} order=${entry.externalOrderNo || "-"}${"\n"}`;
   fs.appendFileSync(WEBHOOK_LOG_FILE, line);
   return Number(result.lastInsertRowid || 0);
+}
+
+function webhookPlatformLabel(slug, providerName = "") {
+  const value = trimmed(slug || providerName).toLowerCase();
+  if (["ys", "yemeksepeti", "yemek-sepeti", "yemek sepeti"].includes(value)) return "Yemeksepeti";
+  if (value.includes("trendyol")) return "Trendyol Yemek";
+  if (value.includes("getir")) return "Getir Yemek";
+  if (value.includes("migros")) return "Migros Yemek";
+  return normalizePlatformInput(value) || trimmed(providerName || slug) || "Diger";
+}
+
+function pickLocalizedText(value) {
+  if (typeof value === "string") return trimmed(value);
+  return trimmed(value?.tr || value?.en || value?.title?.tr || value?.title?.en);
+}
+
+function extractWebhookRestaurantId(payload = {}) {
+  return trimmed(
+    payload.restaurantId ||
+    payload.restaurant?.id ||
+    payload.provider?.restaurantId ||
+    payload.branchId ||
+    payload.storeId
+  );
+}
+
+function normalizeWebhookOrderPayload(payload = {}) {
+  const provider = payload.provider && typeof payload.provider === "object" ? payload.provider : {};
+  const client = payload.client && typeof payload.client === "object" ? payload.client : {};
+  const address = client.deliveryAddress && typeof client.deliveryAddress === "object" ? client.deliveryAddress : {};
+  const location = client.location && typeof client.location === "object" ? client.location : {};
+  const externalRestaurantId = extractWebhookRestaurantId(payload);
+  const platformSlug = trimmed(provider.slug || provider.kaynak || provider.id || provider.alici);
+  const providerName = trimmed(provider.kaynak || provider.name || provider.alici || platformSlug);
+  const statusInfo = mapOrderStatus(payload.status);
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  const addressText = trimmed(address.address || client.address || location.text || payload.addressText);
+  const street = trimmed(address.street || address.address);
+  const fullAddress = [
+    addressText,
+    address.aptNo ? `No: ${address.aptNo}` : "",
+    address.floor ? `Kat: ${address.floor}` : "",
+    address.doorNo ? `Daire: ${address.doorNo}` : "",
+    address.district,
+    address.city,
+  ].filter(Boolean).join(", ");
+
+  return {
+    externalOrderId: trimmed(payload.pid || payload.externalOrderId || payload.orderId || payload.id),
+    confirmationId: trimmed(payload.confirmationId),
+    externalRestaurantId,
+    restaurantNameFromPayload: trimmed(payload.restaurantName || payload.restaurant?.name),
+    platform: webhookPlatformLabel(platformSlug, providerName),
+    platformSlug,
+    providerId: trimmed(provider.id),
+    providerName,
+    customerName: trimmed(client.name || payload.customerName),
+    customerPhone: trimmed(client.clientPhoneNumber || payload.customerPhone),
+    contactPhone: trimmed(client.contactPhoneNumber || payload.contactPhone),
+    addressText: fullAddress || addressText || "-",
+    city: trimmed(address.city),
+    district: trimmed(address.district),
+    street,
+    buildingNo: trimmed(address.aptNo || address.buildingNo),
+    floor: trimmed(address.floor),
+    doorNo: trimmed(address.doorNo),
+    addressDescription: trimmed(address.description),
+    latitude: Number.isFinite(Number(location.lat)) ? Number(location.lat) : null,
+    longitude: Number.isFinite(Number(location.lon ?? location.lng)) ? Number(location.lon ?? location.lng) : null,
+    status: statusInfo.status,
+    statusText: statusInfo.statusText,
+    rawStatus: statusInfo.rawStatus,
+    totalPrice: normalizeMoney(payload.totalPrice),
+    discountedPrice: normalizeMoney(payload.totalDiscountedPrice ?? payload.discountedPrice),
+    totalDiscount: normalizeMoney(payload.totalDiscount),
+    paymentMethod: trimmed(payload.paymentMethod),
+    paymentMethodText: pickLocalizedText(payload.paymentMethodText),
+    posPaymentMethod: trimmed(payload.posPaymentMethod),
+    posTicket: trimmed(payload.pos_ticket || payload.posTicket),
+    clientNote: trimmed(payload.clientNote),
+    shortCode: trimmed(payload.shortCode),
+    deliveryType: trimmed(payload.deliveryType),
+    isScheduled: Boolean(payload.isScheduled),
+    scheduledDate: trimmed(payload.scheduledDate),
+    products,
+    rawPayload: payload,
+  };
+}
+
+function restaurantMatchesExternalId(restaurant, externalRestaurantId, platform = "") {
+  const incoming = trimmed(externalRestaurantId);
+  if (!incoming) return false;
+  const platformKey = trimmed(platform).toLowerCase();
+  if (restaurant.trendyolRestaurantId === incoming && platformKey.includes("trendyol")) return true;
+  if (restaurant.yemeksepetiRestaurantId === incoming && (platformKey.includes("yemek") || platformKey === "ys")) return true;
+  if (restaurant.getirRestaurantId === incoming && platformKey.includes("getir")) return true;
+  if (restaurant.migrosRestaurantId === incoming && platformKey.includes("migros")) return true;
+  if ([restaurant.trendyolRestaurantId, restaurant.yemeksepetiRestaurantId, restaurant.getirRestaurantId, restaurant.migrosRestaurantId].includes(incoming)) return true;
+  return (restaurant.externalRestaurantIds || []).some((item) => item.restaurantId === incoming);
+}
+
+function findRestaurantByExternalRestaurantId(externalRestaurantId, platform = "") {
+  return getRestaurants().find((restaurant) => restaurantMatchesExternalId(restaurant, externalRestaurantId, platform)) || null;
+}
+
+function apiPackageDraftFromWebhook(order, restaurant) {
+  return {
+    restaurantId: restaurant.id,
+    source: "platform_webhook",
+    sourcePlatform: order.platform,
+    externalOrderNo: order.externalOrderId || order.confirmationId || `WEBHOOK-${Date.now()}`,
+    externalOrderId: order.externalOrderId || order.confirmationId,
+    recipient: order.customerName || "Musteri",
+    phone: order.customerPhone || order.contactPhone || "-",
+    address: order.addressText || "-",
+    zone: restaurant.zone,
+    paymentMethod: order.paymentMethodText || order.posPaymentMethod || order.paymentMethod || "Platform Odeme",
+    orderAmount: order.discountedPrice || order.totalPrice,
+    customerNote: order.clientNote,
+    customerLatitude: order.latitude,
+    customerLongitude: order.longitude,
+    customerAddress: order.addressText,
+    latitude: restaurant.latitude,
+    longitude: restaurant.longitude,
+    rawPayload: order.rawPayload,
+    items: order.products.map((item) => ({
+      id: trimmed(item.id),
+      productId: trimmed(item.product),
+      name: pickLocalizedText(item.name) || pickLocalizedText(item.displayInfo) || "Urun",
+      quantity: normalizeMoney(item.count ?? item.quantity, 1),
+      price: normalizeMoney(item.price),
+      optionPrice: normalizeMoney(item.optionPrice),
+      priceWithOption: normalizeMoney(item.priceWithOption ?? item.price),
+      totalPrice: normalizeMoney(item.totalPrice),
+      note: trimmed(item.note),
+    })),
+    note: order.clientNote ? `Platform notu: ${order.clientNote}` : "Platform webhook siparisi alindi.",
+    status: order.status === "pending" ? PENDING_STATUS : normalizeStatus(order.status),
+    assignmentStatus: "pending",
+    assignmentReason: "Platform webhook siparisi alindi, restoran onayi bekliyor.",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+}
+
+function updatePackageApiMetadata(packageId, order) {
+  db.prepare(`
+    UPDATE packages
+    SET confirmation_id = ?, external_restaurant_id = ?, restaurant_name_from_payload = ?, platform_slug = ?,
+        provider_id = ?, provider_name = ?, contact_phone = ?, city = ?, district = ?, street = ?,
+        building_no = ?, floor = ?, door_no = ?, address_description = ?, status_text = ?, raw_status = ?,
+        discounted_price = ?, total_discount = ?, pos_payment_method = ?, pos_ticket = ?, short_code = ?,
+        delivery_type = ?, is_scheduled = ?, scheduled_date = ?, raw_payload_json = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    order.confirmationId || null,
+    order.externalRestaurantId || null,
+    order.restaurantNameFromPayload || null,
+    order.platformSlug || null,
+    order.providerId || null,
+    order.providerName || null,
+    order.contactPhone || null,
+    order.city || null,
+    order.district || null,
+    order.street || null,
+    order.buildingNo || null,
+    order.floor || null,
+    order.doorNo || null,
+    order.addressDescription || null,
+    order.statusText || null,
+    order.rawStatus || null,
+    order.discountedPrice || null,
+    order.totalDiscount || null,
+    order.posPaymentMethod || null,
+    order.posTicket || null,
+    order.shortCode || null,
+    order.deliveryType || null,
+    order.isScheduled ? 1 : 0,
+    order.scheduledDate || null,
+    json(order.rawPayload || null),
+    nowIso(),
+    packageId
+  );
+}
+
+function replaceOrderItems(packageId, products = []) {
+  const stamp = nowIso();
+  db.prepare("DELETE FROM order_items WHERE order_id = ?").run(packageId);
+  products.forEach((item) => {
+    const name = pickLocalizedText(item.name) || pickLocalizedText(item.displayInfo) || "Urun";
+    db.prepare(`
+      INSERT INTO order_items (
+        id, order_id, external_product_id, product_id, name, quantity, price, option_price, price_with_option,
+        total_price, total_option_price, total_price_with_option, note, removed_ingredients, extra_ingredients,
+        raw_payload, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      uid("itm"),
+      packageId,
+      trimmed(item.id) || null,
+      trimmed(item.product || item.productId) || null,
+      name,
+      normalizeMoney(item.count ?? item.quantity, 1),
+      normalizeMoney(item.price),
+      normalizeMoney(item.optionPrice),
+      normalizeMoney(item.priceWithOption ?? item.price),
+      normalizeMoney(item.totalPrice),
+      normalizeMoney(item.totalOptionPrice),
+      normalizeMoney(item.totalPriceWithOption ?? item.totalPrice),
+      trimmed(item.note) || null,
+      json(item.removedIngredients || []),
+      json(item.extraIngredients || []),
+      json(item),
+      stamp,
+      stamp
+    );
+  });
+}
+
+function upsertWebhookPackage(order, restaurant) {
+  const existing = db.prepare(`
+    SELECT * FROM packages
+    WHERE restaurant_id = ?
+      AND (
+        (external_order_id IS NOT NULL AND external_order_id != '' AND external_order_id = ?)
+        OR (confirmation_id IS NOT NULL AND confirmation_id != '' AND confirmation_id = ?)
+      )
+    ORDER BY datetime(created_at) DESC
+  `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "");
+
+  if (existing) {
+    db.prepare(`
+      UPDATE packages
+      SET source_platform = ?, external_order_no = ?, recipient = ?, phone = ?, address = ?, delivery_address = ?,
+          payment_method = ?, order_amount = ?, customer_lat = ?, customer_lng = ?, customer_address = ?,
+          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      order.platform,
+      order.externalOrderId || order.confirmationId || existing.external_order_no,
+      order.customerName || existing.recipient,
+      order.customerPhone || order.contactPhone || existing.phone,
+      order.addressText || existing.address,
+      order.addressText || existing.delivery_address || existing.address,
+      order.paymentMethodText || order.posPaymentMethod || order.paymentMethod || existing.payment_method,
+      order.discountedPrice || order.totalPrice || existing.order_amount,
+      order.latitude,
+      order.longitude,
+      order.addressText || existing.customer_address,
+      order.clientNote || existing.customer_note,
+      order.clientNote ? `Platform notu: ${order.clientNote}` : existing.note,
+      json(apiPackageDraftFromWebhook(order, restaurant).items),
+      order.status === "pending" ? normalizeStatus(existing.status) : normalizeStatus(order.status),
+      existing.assignment_status || assignmentStatusForOrder(existing.status),
+      nowIso(),
+      existing.id
+    );
+    updatePackageApiMetadata(existing.id, order);
+    replaceOrderItems(existing.id, order.products);
+    return { packageId: existing.id, duplicate: true };
+  }
+
+  const draft = apiPackageDraftFromWebhook(order, restaurant);
+  const pkg = validateIntegrationDraft(draft, {
+    id: restaurant.id,
+    zone: restaurant.zone,
+    latitude: restaurant.latitude,
+    longitude: restaurant.longitude,
+  });
+  pkg.status = draft.status;
+  pkg.assignmentStatus = draft.assignmentStatus;
+  pkg.assignmentReason = draft.assignmentReason;
+  createPackageRecord(pkg, "Platform Siparisi");
+  updatePackageApiMetadata(pkg.id, order);
+  replaceOrderItems(pkg.id, order.products);
+  upsertPlatformOrderRecord({
+    platform: order.platform,
+    orderId: order.externalOrderId || order.confirmationId,
+    customerName: order.customerName,
+    phone: order.customerPhone || order.contactPhone,
+    address: order.addressText,
+    totalPrice: order.discountedPrice || order.totalPrice,
+    customerNote: order.clientNote,
+    rawPayload: order.rawPayload,
+  }, restaurant.id, order.statusText || "pending_approval");
+  return { packageId: pkg.id, duplicate: false };
+}
+
+function upsertUnmatchedOrder(order) {
+  const existing = db.prepare(`
+    SELECT id FROM unmatched_orders
+    WHERE is_resolved = 0
+      AND (
+        (external_order_id IS NOT NULL AND external_order_id != '' AND external_order_id = ?)
+        OR (confirmation_id IS NOT NULL AND confirmation_id != '' AND confirmation_id = ?)
+      )
+  `).get(order.externalOrderId || "", order.confirmationId || "");
+  const stamp = nowIso();
+  if (existing) {
+    db.prepare(`
+      UPDATE unmatched_orders
+      SET external_restaurant_id = ?, restaurant_name_from_payload = ?, platform = ?, platform_slug = ?, provider_name = ?,
+          customer_name = ?, customer_phone = ?, total_price = ?, status = ?, raw_payload = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      order.externalRestaurantId || null,
+      order.restaurantNameFromPayload || null,
+      order.platform || null,
+      order.platformSlug || null,
+      order.providerName || null,
+      order.customerName || null,
+      order.customerPhone || order.contactPhone || null,
+      order.discountedPrice || order.totalPrice || 0,
+      order.statusText || order.rawStatus || null,
+      json(order.rawPayload || {}),
+      stamp,
+      existing.id
+    );
+    return existing.id;
+  }
+  const id = uid("unm");
+  db.prepare(`
+    INSERT INTO unmatched_orders (
+      id, external_order_id, confirmation_id, external_restaurant_id, restaurant_name_from_payload, platform,
+      platform_slug, provider_name, customer_name, customer_phone, total_price, status, raw_payload, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    order.externalOrderId || null,
+    order.confirmationId || null,
+    order.externalRestaurantId || null,
+    order.restaurantNameFromPayload || null,
+    order.platform || null,
+    order.platformSlug || null,
+    order.providerName || null,
+    order.customerName || null,
+    order.customerPhone || order.contactPhone || null,
+    order.discountedPrice || order.totalPrice || 0,
+    order.statusText || order.rawStatus || null,
+    json(order.rawPayload || {}),
+    stamp,
+    stamp
+  );
+  return id;
+}
+
+function resolveUnmatchedOrderForMatchedPackage(order, restaurantId, packageId) {
+  db.prepare(`
+    UPDATE unmatched_orders
+    SET is_resolved = 1, resolved_restaurant_id = ?, resolved_package_id = ?, resolved_at = ?, updated_at = ?
+    WHERE is_resolved = 0
+      AND (
+        (external_order_id IS NOT NULL AND external_order_id != '' AND external_order_id = ?)
+        OR (confirmation_id IS NOT NULL AND confirmation_id != '' AND confirmation_id = ?)
+      )
+  `).run(
+    restaurantId,
+    packageId,
+    nowIso(),
+    nowIso(),
+    order.externalOrderId || "",
+    order.confirmationId || ""
+  );
+}
+
+function getUnmatchedOrders(limit = 100) {
+  return db.prepare("SELECT * FROM unmatched_orders ORDER BY is_resolved ASC, datetime(created_at) DESC LIMIT ?").all(clampLimit(limit)).map((row) => ({
+    id: row.id,
+    externalOrderId: row.external_order_id,
+    confirmationId: row.confirmation_id,
+    externalRestaurantId: row.external_restaurant_id,
+    restaurantNameFromPayload: row.restaurant_name_from_payload,
+    platform: row.platform,
+    platformSlug: row.platform_slug,
+    providerName: row.provider_name,
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone,
+    totalPrice: Number(row.total_price || 0),
+    status: row.status,
+    rawPayload: parseJson(row.raw_payload, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    isResolved: Boolean(row.is_resolved),
+    resolvedRestaurantId: row.resolved_restaurant_id,
+    resolvedPackageId: row.resolved_package_id,
+    resolvedAt: row.resolved_at,
+  }));
+}
+
+function updateRestaurantPlatformIds(restaurantId, body = {}) {
+  const current = db.prepare("SELECT * FROM restaurants WHERE id = ?").get(restaurantId);
+  if (!current) {
+    throw httpError(404, "Restoran bulunamadi.");
+  }
+  const platformIds = normalizeRestaurantPlatformIds({
+    trendyolRestaurantId: body.trendyolRestaurantId ?? current.trendyol_restaurant_id,
+    yemeksepetiRestaurantId: body.yemeksepetiRestaurantId ?? current.yemeksepeti_restaurant_id,
+    getirRestaurantId: body.getirRestaurantId ?? current.getir_restaurant_id,
+    migrosRestaurantId: body.migrosRestaurantId ?? current.migros_restaurant_id,
+    externalRestaurantIds: body.externalRestaurantIds ?? current.external_restaurant_ids,
+  });
+  assertUniqueRestaurantPlatformIds(platformIds, restaurantId);
+  db.prepare(`
+    UPDATE restaurants
+    SET trendyol_restaurant_id = ?, yemeksepeti_restaurant_id = ?, getir_restaurant_id = ?,
+        migros_restaurant_id = ?, external_restaurant_ids = ?
+    WHERE id = ?
+  `).run(
+    platformIds.trendyolRestaurantId || null,
+    platformIds.yemeksepetiRestaurantId || null,
+    platformIds.getirRestaurantId || null,
+    platformIds.migrosRestaurantId || null,
+    json(platformIds.externalRestaurantIds || []),
+    restaurantId
+  );
+  return getRestaurants({ restaurantId })[0];
+}
+
+function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId) {
+  const incoming = trimmed(externalRestaurantId);
+  if (!incoming) return null;
+  const lowerPlatform = trimmed(platform).toLowerCase();
+  const field = lowerPlatform.includes("trendyol")
+    ? "trendyolRestaurantId"
+    : lowerPlatform.includes("yemek") || lowerPlatform === "ys"
+      ? "yemeksepetiRestaurantId"
+      : lowerPlatform.includes("getir")
+        ? "getirRestaurantId"
+        : lowerPlatform.includes("migros")
+          ? "migrosRestaurantId"
+          : "";
+  const restaurant = getRestaurants({ restaurantId })[0];
+  if (!restaurant) return null;
+  if (field && !restaurant[field]) {
+    return updateRestaurantPlatformIds(restaurantId, { [field]: incoming });
+  }
+  if (!restaurant.externalRestaurantIds.some((item) => item.restaurantId === incoming)) {
+    return updateRestaurantPlatformIds(restaurantId, {
+      externalRestaurantIds: [...restaurant.externalRestaurantIds, { platform, restaurantId: incoming }],
+    });
+  }
+  return restaurant;
+}
+
+function matchUnmatchedOrder(unmatchedOrderId, restaurantId, options = {}) {
+  const row = db.prepare("SELECT * FROM unmatched_orders WHERE id = ?").get(unmatchedOrderId);
+  if (!row) {
+    throw httpError(404, "Eslestirilemeyen siparis bulunamadi.");
+  }
+  if (row.is_resolved) {
+    throw validationError("Bu siparis zaten eslestirilmis.");
+  }
+  const restaurant = getRestaurants({ restaurantId })[0];
+  if (!restaurant) {
+    throw httpError(404, "Restoran bulunamadi.");
+  }
+  const order = normalizeWebhookOrderPayload(parseJson(row.raw_payload, {}));
+  const result = upsertWebhookPackage(order, restaurant);
+  db.prepare(`
+    UPDATE unmatched_orders
+    SET is_resolved = 1, resolved_restaurant_id = ?, resolved_package_id = ?, resolved_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(restaurantId, result.packageId, nowIso(), nowIso(), unmatchedOrderId);
+  if (options.saveExternalId !== false) {
+    saveExternalIdToRestaurant(restaurantId, order.platform, order.externalRestaurantId);
+  }
+  return {
+    packageId: result.packageId,
+    duplicate: result.duplicate,
+    restaurant: getRestaurants({ restaurantId })[0],
+  };
+}
+
+function sampleWebhookPayload() {
+  return {
+    pid: `TEST-${Date.now()}`,
+    restaurantId: "6377deac15d5d59aee02bf51",
+    restaurantName: "Cizbiz Sucuk",
+    confirmationId: `CONF-${Date.now()}`,
+    provider: { slug: "ys", kaynak: "Yemek Sepeti", id: "60cdef4f451ac719569864f4", alici: "yswh" },
+    client: {
+      name: "Orhan Genckiren",
+      location: { lat: "41.1185938", lon: "29.0022812", text: "41.1185938 29.0022812" },
+      clientPhoneNumber: "5421803474",
+      contactPhoneNumber: "5421803474",
+      deliveryAddress: {
+        address: "190. Sk.",
+        aptNo: "8-C",
+        floor: "Giris",
+        doorNo: "0",
+        city: "Istanbul",
+        district: "Ayazaga Sariyer",
+        street: "190. Sk.",
+        description: "0",
+      },
+    },
+    status: 900,
+    totalPrice: 400,
+    totalDiscountedPrice: 340,
+    totalDiscount: 60,
+    clientNote: "CATAL BICAK GONDERMEYIN Nakit",
+    deliveryType: 2,
+    paymentMethod: "1",
+    paymentMethodText: { tr: "Nakit", en: "Nakit" },
+    posPaymentMethod: "Nakit",
+    pos_ticket: 228664,
+    products: [{
+      id: "3294488",
+      count: "1",
+      product: "fb470646-2ee9-4109-bd05-8bbc96cc96ff",
+      note: "tursu olmasin icinde lutfen",
+      name: { tr: "Tam Ekmek Arasi Karisik Izgara", en: "Tam Ekmek Arasi Karisik Izgara" },
+      price: "400",
+      optionPrice: 0,
+      priceWithOption: 400,
+      totalPrice: 400,
+    }],
+    restaurant: { id: "6377deac15d5d59aee02bf51", name: "Cizbiz Sucuk" },
+    shortCode: "5586",
+  };
+}
+
+function logApiWebhookAttempt({ req, order, restaurantId = null, isMatched = false, httpStatus = 200, status = "success", errorMessage = "" }) {
+  if (!WEBHOOK_LOG_ENABLED) return 0;
+  return logWebhookAttempt({
+    restaurantId,
+    sourcePlatform: order?.platform,
+    externalOrderNo: order?.externalOrderId,
+    signatureValid: httpStatus !== 401,
+    responseStatus: httpStatus,
+    requestBody: json(order?.rawPayload || {}),
+    requestId: req.requestId,
+    provider: order?.providerName,
+    platform: order?.platform,
+    externalRestaurantId: order?.externalRestaurantId,
+    externalOrderId: order?.externalOrderId,
+    isMatched,
+    status,
+    httpStatus,
+    errorMessage,
+    rawPayload: order?.rawPayload,
+    headers: req.headers,
+    ipAddress: clientIp(req),
+  });
 }
 
 function logPlatformEvent(entry = {}) {
@@ -5399,10 +6225,14 @@ function createRestaurantRecord(body) {
   if (db.prepare("SELECT id FROM restaurants WHERE username = ?").get(restaurant.username)) {
     throw validationError("Bu restoran kullanici adi zaten kullaniliyor.");
   }
+  assertUniqueRestaurantPlatformIds(restaurant);
 
   db.prepare(`
-    INSERT INTO restaurants (id, name, zone, x, y, username, password_hash, password_salt, platforms_json, api_key, webhook_secret, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO restaurants (
+      id, name, zone, x, y, username, password_hash, password_salt, platforms_json, api_key, webhook_secret,
+      trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, external_restaurant_ids,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     restaurant.id,
     restaurant.name,
@@ -5415,6 +6245,11 @@ function createRestaurantRecord(body) {
     json(restaurant.platforms),
     restaurant.apiKey,
     restaurant.webhookSecret,
+    restaurant.trendyolRestaurantId || null,
+    restaurant.yemeksepetiRestaurantId || null,
+    restaurant.getirRestaurantId || null,
+    restaurant.migrosRestaurantId || null,
+    json(restaurant.externalRestaurantIds || []),
     new Date().toISOString()
   );
 
@@ -6461,6 +7296,117 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/webhooks/health") {
+    sendJson(res, 200, {
+      ok: true,
+      enabled: WEBHOOK_ENABLED,
+      secretConfigured: Boolean(WEBHOOK_SECRET),
+      allowedIpsConfigured: WEBHOOK_ALLOWED_IPS.length > 0,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/webhooks/orders") {
+    const retryAfter = await applyRateLimit(req, "platformOrder", RATE_LIMITS.platformOrder);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    if (!WEBHOOK_ENABLED) {
+      sendJson(res, 503, { success: false, message: "Webhook endpoint disabled" });
+      return;
+    }
+    const contentType = String(req.headers["content-type"] || "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      sendJson(res, 415, { success: false, message: "Content-Type application/json olmalidir." });
+      return;
+    }
+    const incomingIp = clientIp(req);
+    if (WEBHOOK_ALLOWED_IPS.length > 0 && !WEBHOOK_ALLOWED_IPS.includes(incomingIp)) {
+      logApiWebhookAttempt({ req, order: null, httpStatus: 401, status: "error", errorMessage: "IP not allowed" });
+      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
+      return;
+    }
+    const incomingSecret = trimmed(req.headers["x-webhook-secret"]);
+    const secretValid = Boolean(WEBHOOK_SECRET) &&
+      incomingSecret.length === WEBHOOK_SECRET.length &&
+      crypto.timingSafeEqual(Buffer.from(incomingSecret), Buffer.from(WEBHOOK_SECRET));
+    if (!secretValid) {
+      logApiWebhookAttempt({ req, order: null, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
+      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
+      return;
+    }
+
+    let body;
+    try {
+      ({ json: body } = await readRequestBody(req));
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { success: false, message: error.message });
+      return;
+    }
+    const order = normalizeWebhookOrderPayload(body);
+    try {
+      const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
+      if (!restaurant) {
+        const unmatchedId = upsertUnmatchedOrder(order);
+        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 202, status: "unmatched" });
+        broadcastLiveEvent({
+          type: "order:unmatched",
+          message: `Eslestirilemeyen platform siparisi alindi: ${order.externalRestaurantId || "-"}`,
+        });
+        sendJson(res, 202, {
+          success: true,
+          matched: false,
+          unmatchedOrderId: unmatchedId,
+          message: "Order accepted as unmatched",
+        });
+        return;
+      }
+
+      const result = upsertWebhookPackage(order, restaurant);
+      resolveUnmatchedOrderForMatchedPackage(order, restaurant.id, result.packageId);
+      rebalancePackages();
+      const createdPackage = getPackageById(result.packageId);
+      logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 200, status: result.duplicate ? "updated" : "created" });
+      writeAuditLog({
+        actorRole: "webhook",
+        actorId: order.providerName || order.platform,
+        action: result.duplicate ? "webhook_order_updated" : "webhook_order_created",
+        packageId: result.packageId,
+        restaurantId: restaurant.id,
+        details: {
+          platform: order.platform,
+          externalOrderId: order.externalOrderId,
+          externalRestaurantId: order.externalRestaurantId,
+          duplicate: result.duplicate,
+        },
+      });
+      broadcastLiveEvent({
+        type: "order:new",
+        restaurantId: restaurant.id,
+        message: `Yeni ${order.platform} siparisi geldi.`,
+        orderId: result.packageId,
+        platform: order.platform,
+        customerName: order.customerName,
+        totalPrice: order.discountedPrice || order.totalPrice,
+        shortCode: order.shortCode,
+      });
+      sendJson(res, 200, {
+        success: true,
+        matched: true,
+        duplicate: result.duplicate,
+        orderId: result.packageId,
+        package: createdPackage,
+      });
+      return;
+    } catch (error) {
+      logger.error("API webhook order failed", { error, requestId: req.requestId });
+      logApiWebhookAttempt({ req, order, httpStatus: error.statusCode || 500, status: "error", errorMessage: error.message });
+      sendJson(res, error.statusCode || 500, { success: false, message: error.message || "Webhook order failed" });
+      return;
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/system-status") {
     const adminSession = getAdminSession(req);
     if (!adminSession) {
@@ -6603,6 +7549,169 @@ async function handleApi(req, res, pathname) {
     payload.restaurants = getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant));
     payload.auditLogs = getAuditLogs(20, { restaurantId: restaurantId || undefined });
     sendJson(res, 200, payload);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/restaurants") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, restaurants: getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant, true)) });
+    return;
+  }
+
+  const adminRestaurantMatch = pathname.match(/^\/api\/admin\/restaurants\/([^/]+)$/);
+  if (req.method === "PUT" && adminRestaurantMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const restaurant = updateRestaurantPlatformIds(adminRestaurantMatch[1], body);
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "restaurant_platform_ids_updated",
+        restaurantId: restaurant.id,
+        details: normalizeRestaurantPlatformIds(body),
+      });
+      sendJson(res, 200, { ok: true, restaurant: sanitizeRestaurant(restaurant, true), ...decorateState() });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && adminRestaurantMatch) {
+    sendJson(res, 405, { error: "Restoran silme bu sistemde mevcut akisi korumak icin kapali." });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/orders") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    sendJson(res, 200, {
+      ok: true,
+      orders: getPackages({
+        restaurantId: trimmed(requestUrl.searchParams.get("restaurantId")) || undefined,
+        platform: trimmed(requestUrl.searchParams.get("platform")) || undefined,
+        status: trimmed(requestUrl.searchParams.get("status")) || undefined,
+      }),
+    });
+    return;
+  }
+
+  const adminOrderMatch = pathname.match(/^\/api\/admin\/orders\/([^/]+)$/);
+  if (req.method === "GET" && adminOrderMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const order = getPackageById(adminOrderMatch[1]);
+    sendJson(res, order ? 200 : 404, order ? { ok: true, order } : { error: "Siparis bulunamadi." });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/unmatched-orders") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, unmatchedOrders: getUnmatchedOrders(200) });
+    return;
+  }
+
+  const unmatchedMatch = pathname.match(/^\/api\/admin\/unmatched-orders\/([^/]+)\/match$/);
+  if (req.method === "POST" && unmatchedMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const result = matchUnmatchedOrder(unmatchedMatch[1], trimmed(body.restaurantId || body.restaurant_id), {
+        saveExternalId: body.saveExternalId !== false,
+      });
+      rebalancePackages();
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "unmatched_order_matched",
+        packageId: result.packageId,
+        restaurantId: result.restaurant.id,
+        details: { unmatchedOrderId: unmatchedMatch[1], saveExternalId: body.saveExternalId !== false },
+      });
+      broadcastLiveEvent({
+        type: "order:new",
+        restaurantId: result.restaurant.id,
+        message: "Eslestirilemeyen siparis restorana baglandi.",
+        orderId: result.packageId,
+      });
+      sendJson(res, 200, { ok: true, result, ...decorateState() });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/webhook-logs") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    sendJson(res, 200, {
+      ok: true,
+      webhookLogs: getWebhookLogs(200, { restaurantId: trimmed(requestUrl.searchParams.get("restaurantId")) || undefined }),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/webhooks/test-order") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const order = normalizeWebhookOrderPayload(Object.keys(body || {}).length ? body : sampleWebhookPayload());
+    const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
+    if (!restaurant) {
+      const unmatchedId = upsertUnmatchedOrder(order);
+      sendJson(res, 202, { ok: true, matched: false, unmatchedOrderId: unmatchedId, ...decorateState() });
+      return;
+    }
+    const result = upsertWebhookPackage(order, restaurant);
+    resolveUnmatchedOrderForMatchedPackage(order, restaurant.id, result.packageId);
+    rebalancePackages();
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "admin_test_webhook_order_created",
+      packageId: result.packageId,
+      restaurantId: restaurant.id,
+      details: { externalOrderId: order.externalOrderId, duplicate: result.duplicate },
+    });
+    broadcastLiveEvent({
+      type: "order:new",
+      restaurantId: restaurant.id,
+      message: "Admin test webhook siparisi olusturuldu.",
+      orderId: result.packageId,
+      platform: order.platform,
+    });
+    sendJson(res, 200, { ok: true, matched: true, duplicate: result.duplicate, package: getPackageById(result.packageId), ...decorateState() });
     return;
   }
 
@@ -6892,6 +8001,59 @@ async function handleApi(req, res, pathname) {
       includeRestaurantSecrets: true,
       req,
     }));
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/restaurant/orders") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, orders: getPackages({ restaurantId: session.restaurant_id }) });
+    return;
+  }
+
+  const restaurantOrderMatch = pathname.match(/^\/api\/restaurant\/orders\/([^/]+)$/);
+  if (req.method === "GET" && restaurantOrderMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const order = getPackageById(restaurantOrderMatch[1]);
+    if (!order || order.restaurantId !== session.restaurant_id) {
+      sendJson(res, 404, { error: "Siparis bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, order });
+    return;
+  }
+
+  const restaurantOrderStatusMatch = pathname.match(/^\/api\/restaurant\/orders\/([^/]+)\/status$/);
+  if (req.method === "PUT" && restaurantOrderStatusMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const target = db.prepare("SELECT * FROM packages WHERE id = ? AND restaurant_id = ?").get(restaurantOrderStatusMatch[1], session.restaurant_id);
+    if (!target) {
+      sendJson(res, 404, { error: "Siparis bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const nextStatus = normalizeStatus(body.status);
+    updatePackageLifecycle(target.id, { status: nextStatus }, mapPackageRow(target));
+    updatePlatformOrderStatusByPackage(getPackageById(target.id), nextStatus);
+    broadcastLiveEvent({
+      type: "order:status",
+      restaurantId: session.restaurant_id,
+      message: "Siparis durumu guncellendi.",
+      orderId: target.id,
+      status: nextStatus,
+    });
+    sendJson(res, 200, decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, req }));
     return;
   }
 

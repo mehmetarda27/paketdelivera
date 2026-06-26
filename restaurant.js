@@ -800,7 +800,7 @@ function getCurrentPlatformAccount(data) {
 }
 
 function currentWebhookUrl() {
-  return `${window.location.origin}/api/platform/order`;
+  return `${window.location.origin}/api/webhooks/orders`;
 }
 
 function getLastWebhookLog(data, account) {

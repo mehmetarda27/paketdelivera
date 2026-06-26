@@ -109,6 +109,10 @@
               <i data-lucide="webhook" class="link-icon"></i>
               Webhook Logları
             </div>
+            <div class="tree-link" data-section="adminWorkspace_system_unmatched">
+              <i data-lucide="link-2" class="link-icon"></i>
+              Eşleşmeyen Siparişler
+            </div>
             <div class="tree-link" data-section="adminWorkspace_system_integration_ids">
               <i data-lucide="fingerprint" class="link-icon"></i>
               Entegrasyon ID'leri
@@ -335,6 +339,26 @@
               Entegre Platformlar
               <div class="chip-grid" id="platformChecks"></div>
             </label>
+            <label>
+              Trendyol Restoran ID
+              <input name="trendyolRestaurantId" type="text" placeholder="Trendyol store/supplier ID">
+            </label>
+            <label>
+              Yemeksepeti Restoran ID
+              <input name="yemeksepetiRestaurantId" type="text" placeholder="6377deac15d5d59aee02bf51">
+            </label>
+            <label>
+              Getir Restoran ID
+              <input name="getirRestaurantId" type="text" placeholder="Getir restaurant/store ID">
+            </label>
+            <label>
+              Migros Yemek Restoran ID
+              <input name="migrosRestaurantId" type="text" placeholder="Migros restaurant/store ID">
+            </label>
+            <label class="full-width">
+              Diğer Platform ID'leri
+              <textarea name="externalRestaurantIds" rows="3" placeholder='[{"platform":"ys","restaurantId":"6377deac15d5d59aee02bf51"}]'></textarea>
+            </label>
             <button class="primary-btn full-width" type="submit">Restoran Ekle</button>
           </form>
         </article>
@@ -548,6 +572,18 @@
           </div>
         </div>
         <div id="webhookLogList" class="stack-list"></div>
+      </section>
+        </div>
+
+        <div id="adminWorkspace_system_unmatched" class="content-section">
+          <section class="glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow accent-teal">Eşleşmeyen Siparişler</p>
+            <h3>Platform restoran ID'si bağlanmayan siparişler</h3>
+          </div>
+        </div>
+        <div id="unmatchedOrderList" class="stack-list"></div>
       </section>
         </div>
         

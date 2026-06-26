@@ -64,6 +64,7 @@ const adminRefs = {
   awaitingPackageList: document.getElementById("awaitingPackageList"),
   activeCourierOpsList: document.getElementById("activeCourierOpsList"),
   webhookLogList: document.getElementById("webhookLogList"),
+  unmatchedOrderList: document.getElementById("unmatchedOrderList"),
   platformHealthSummary: document.getElementById("platformHealthSummary"),
   platformHealthList: document.getElementById("platformHealthList"),
   restaurantIntegrationIdList: document.getElementById("restaurantIntegrationIdList"),
@@ -213,6 +214,7 @@ function initializeAdminWorkspaceCards() {
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(1)", "admin-shift-plan"],
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(2)", "admin-cash"],
     ["#adminWorkspace > section:nth-of-type(10)", "admin-webhooks"],
+    ["#adminWorkspace_system_unmatched", "admin-unmatched-orders"],
     ["#adminWorkspace > section:nth-of-type(11)", "admin-platform-health"],
     ["#adminWorkspace > section:nth-of-type(12)", "admin-audit"],
     ["#adminWorkspace > section:nth-of-type(13)", "admin-day-close"],
@@ -485,6 +487,15 @@ function integrationIdentityCard(item, type) {
   const platformText = type === "restaurant" && Array.isArray(item.platforms) && item.platforms.length
     ? item.platforms.join(", ")
     : "";
+  const platformIds = type === "restaurant"
+    ? [
+        item.trendyolRestaurantId ? `Trendyol: ${item.trendyolRestaurantId}` : "",
+        item.yemeksepetiRestaurantId ? `Yemeksepeti: ${item.yemeksepetiRestaurantId}` : "",
+        item.getirRestaurantId ? `Getir: ${item.getirRestaurantId}` : "",
+        item.migrosRestaurantId ? `Migros: ${item.migrosRestaurantId}` : "",
+        ...(Array.isArray(item.externalRestaurantIds) ? item.externalRestaurantIds.map((entry) => `${entry.platform || "Diger"}: ${entry.restaurantId}`) : []),
+      ].filter(Boolean)
+    : [];
   return `
     <article class="stack-card">
       <div class="stack-top">
@@ -492,9 +503,13 @@ function integrationIdentityCard(item, type) {
           <strong>${htmlSafe(primary)}</strong>
           <p>${htmlSafe(secondary)}</p>
           ${platformText ? `<p>${htmlSafe(platformText)}</p>` : ""}
+          ${platformIds.length ? `<p>${htmlSafe(platformIds.join(" | "))}</p>` : ""}
           <p><code>${htmlSafe(item.id)}</code></p>
         </div>
-        <button class="ghost-btn" type="button" data-copy-integration-id="${htmlSafe(item.id)}">ID Kopyala</button>
+        <div class="stack-actions">
+          ${type === "restaurant" ? `<button class="ghost-btn" type="button" data-edit-restaurant-platform-ids="${htmlSafe(item.id)}">ID Duzenle</button>` : ""}
+          <button class="ghost-btn" type="button" data-copy-integration-id="${htmlSafe(item.id)}">ID Kopyala</button>
+        </div>
       </div>
     </article>
   `;
@@ -502,7 +517,7 @@ function integrationIdentityCard(item, type) {
 
 function renderIntegrationIdentities(restaurants, couriers) {
   if (adminRefs.restaurantIntegrationIdList) {
-    const signature = listRenderSignature(restaurants || [], ["id", "name", "username", "zone", "platforms"]);
+    const signature = listRenderSignature(restaurants || [], ["id", "name", "username", "zone", "platforms", "trendyolRestaurantId", "yemeksepetiRestaurantId", "getirRestaurantId", "migrosRestaurantId", "externalRestaurantIds"]);
     if (adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature !== signature) {
       adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature = signature;
       adminRefs.restaurantIntegrationIdList.innerHTML = restaurants?.length
@@ -999,7 +1014,7 @@ function renderActiveCourierOps(couriers) {
 }
 
 function renderWebhookLogs(logs) {
-  const signature = listRenderSignature((logs || []).slice(0, 10), ["id", "sourcePlatform", "externalOrderNo", "restaurantId", "signatureValid", "responseStatus", "retryCount", "deadLetteredAt", "lastError", "createdAt"]);
+  const signature = listRenderSignature((logs || []).slice(0, 20), ["id", "platform", "externalRestaurantId", "externalOrderId", "restaurantId", "isMatched", "status", "httpStatus", "errorMessage", "createdAt"]);
   if (adminRefs.webhookLogList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1011,22 +1026,66 @@ function renderWebhookLogs(logs) {
     return;
   }
 
-  logs.slice(0, 10).forEach((log) => {
+  logs.slice(0, 20).forEach((log) => {
     const card = document.createElement("article");
     card.className = "stack-card";
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${log.sourcePlatform || "Platform yok"} - ${log.externalOrderNo || "Siparis no yok"}</strong>
-          <p>Restoran: ${log.restaurantId || "-"}</p>
-          <p>Imza: ${log.signatureValid ? "Gecerli" : "Hatali"} - HTTP ${log.responseStatus}${log.retryCount ? ` - Retry ${log.retryCount}` : ""}</p>
-          ${log.lastError ? `<p>Son hata: ${log.lastError}${log.deadLetteredAt ? " - DLQ" : ""}</p>` : ""}
+          <strong>${htmlSafe(log.platform || log.sourcePlatform || "Platform yok")} - ${htmlSafe(log.externalOrderId || log.externalOrderNo || "Siparis no yok")}</strong>
+          <p>Restoran: ${htmlSafe(log.restaurantId || "-")} - External ID: ${htmlSafe(log.externalRestaurantId || "-")}</p>
+          <p>Durum: ${log.isMatched === null ? "Belirsiz" : log.isMatched ? "Eslesti" : "Eslesmedi"} - HTTP ${log.httpStatus || log.responseStatus}${log.retryCount ? ` - Retry ${log.retryCount}` : ""}</p>
+          ${log.errorMessage ? `<p>Son hata: ${htmlSafe(log.errorMessage)}${log.deadLetteredAt ? " - DLQ" : ""}</p>` : ""}
+          ${log.rawPayload ? `<details><summary>Ham JSON</summary><pre class="code-block">${htmlSafe(JSON.stringify(log.rawPayload, null, 2))}</pre></details>` : ""}
         </div>
         <span class="soft-badge">${formatDate(log.createdAt)}</span>
       </div>
     `;
     adminRefs.webhookLogList.appendChild(card);
   });
+}
+
+function renderUnmatchedOrders(unmatchedOrders, restaurants) {
+  if (!adminRefs.unmatchedOrderList) {
+    return;
+  }
+  const signature = listRenderSignature(unmatchedOrders || [], ["id", "externalOrderId", "externalRestaurantId", "platform", "isResolved", "updatedAt"]);
+  if (adminRefs.unmatchedOrderList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.unmatchedOrderList.__deliveraRenderSignature = signature;
+  if (!unmatchedOrders || unmatchedOrders.length === 0) {
+    adminRefs.unmatchedOrderList.innerHTML = '<div class="empty-state">Eslestirilmeyen siparis yok.</div>';
+    return;
+  }
+  const restaurantOptions = (restaurants || []).map((restaurant) => `<option value="${htmlSafe(restaurant.id)}">${htmlSafe(restaurant.name)}</option>`).join("");
+  adminRefs.unmatchedOrderList.innerHTML = unmatchedOrders.map((order) => `
+    <article class="stack-card">
+      <div class="stack-top">
+        <div>
+          <strong>${htmlSafe(order.platform || "-")} - ${htmlSafe(order.externalOrderId || order.confirmationId || "Siparis no yok")}</strong>
+          <p>Restoran ID: ${htmlSafe(order.externalRestaurantId || "-")} - Payload restoran: ${htmlSafe(order.restaurantNameFromPayload || "-")}</p>
+          <p>Musteri: ${htmlSafe(order.customerName || "-")} - ${htmlSafe(order.customerPhone || "-")} - ${formatCurrency(order.totalPrice || 0)}</p>
+          <p>Durum: ${order.isResolved ? "Cozuldu" : "Bekliyor"} - ${formatDate(order.createdAt)}</p>
+          <details><summary>Ham JSON</summary><pre class="code-block">${htmlSafe(JSON.stringify(order.rawPayload || {}, null, 2))}</pre></details>
+        </div>
+        <span class="soft-badge">${order.isResolved ? "Cozuldu" : "Bekliyor"}</span>
+      </div>
+      ${order.isResolved ? "" : `
+        <div class="form-grid" style="margin-top: 12px;">
+          <label>
+            Restoran
+            <select data-unmatched-restaurant="${htmlSafe(order.id)}">${restaurantOptions}</select>
+          </label>
+          <label class="inline-check">
+            <input type="checkbox" data-unmatched-save-id="${htmlSafe(order.id)}" checked>
+            Bu ID'yi restorana kaydet
+          </label>
+          <button class="primary-btn" type="button" data-match-unmatched="${htmlSafe(order.id)}">Restorana Bağla</button>
+        </div>
+      `}
+    </article>
+  `).join("");
 }
 
 function renderAuditLogs(logs) {
@@ -1451,6 +1510,7 @@ function hydrateAdmin(data) {
   renderAwaitingPackages(data.packages);
   renderActiveCourierOps(data.couriers);
   renderWebhookLogs(data.webhookLogs);
+  renderUnmatchedOrders(data.unmatchedOrders || [], data.restaurants || []);
   renderPlatformHealth(data);
   renderAuditLogs(data.auditLogs || []);
   renderCourierDailyReports(data.courierDailyReports || []);
@@ -1604,6 +1664,11 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
     latitude: formData.get("latitude"),
     longitude: formData.get("longitude"),
     platforms: formData.getAll("platforms"),
+    trendyolRestaurantId: formData.get("trendyolRestaurantId"),
+    yemeksepetiRestaurantId: formData.get("yemeksepetiRestaurantId"),
+    getirRestaurantId: formData.get("getirRestaurantId"),
+    migrosRestaurantId: formData.get("migrosRestaurantId"),
+    externalRestaurantIds: formData.get("externalRestaurantIds"),
   };
   const data = await api("/api/admin/restaurants", {
     method: "POST",
@@ -1621,6 +1686,62 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  const editRestaurantPlatformIdsButton = event.target.closest("[data-edit-restaurant-platform-ids]");
+  if (editRestaurantPlatformIdsButton) {
+    const restaurantId = editRestaurantPlatformIdsButton.dataset.editRestaurantPlatformIds;
+    const restaurant = (adminState.data?.restaurants || []).find((item) => item.id === restaurantId);
+    if (!restaurant) {
+      showToast("Restoran bulunamadi.", true);
+      return;
+    }
+    const externalDefault = JSON.stringify(restaurant.externalRestaurantIds || []);
+    const payload = {
+      trendyolRestaurantId: (prompt("Trendyol Restoran ID", restaurant.trendyolRestaurantId || "") ?? restaurant.trendyolRestaurantId) || "",
+      yemeksepetiRestaurantId: (prompt("Yemeksepeti Restoran ID", restaurant.yemeksepetiRestaurantId || "") ?? restaurant.yemeksepetiRestaurantId) || "",
+      getirRestaurantId: (prompt("Getir Restoran ID", restaurant.getirRestaurantId || "") ?? restaurant.getirRestaurantId) || "",
+      migrosRestaurantId: (prompt("Migros Yemek Restoran ID", restaurant.migrosRestaurantId || "") ?? restaurant.migrosRestaurantId) || "",
+      externalRestaurantIds: prompt("Diger Platform ID'leri JSON", externalDefault) ?? externalDefault,
+    };
+    try {
+      const data = await api(`/api/admin/restaurants/${encodeURIComponent(restaurantId)}`, {
+        method: "PUT",
+        headers: adminHeaders(),
+        body: JSON.stringify(payload),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data);
+      showToast("Restoran platform ID'leri guncellendi.");
+    } catch (error) {
+      showToast(error.message || "Platform ID'leri guncellenemedi.", true);
+    }
+    return;
+  }
+
+  const matchButton = event.target.closest("[data-match-unmatched]");
+  if (matchButton) {
+    const unmatchedId = matchButton.dataset.matchUnmatched;
+    const restaurantSelect = document.querySelector(`[data-unmatched-restaurant="${CSS.escape(unmatchedId)}"]`);
+    const saveIdInput = document.querySelector(`[data-unmatched-save-id="${CSS.escape(unmatchedId)}"]`);
+    const restaurantId = restaurantSelect?.value || "";
+    if (!restaurantId) {
+      showToast("Once restoran secmelisin.", true);
+      return;
+    }
+    try {
+      const data = await api(`/api/admin/unmatched-orders/${encodeURIComponent(unmatchedId)}/match`, {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ restaurantId, saveExternalId: saveIdInput?.checked !== false }),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data);
+      showToast("Siparis restorana baglandi.");
+    } catch (error) {
+      showToast(error.message || "Siparis baglanamadi.", true);
+    }
+    return;
+  }
+
   const copyButton = event.target.closest("[data-copy-integration-id]");
   if (!copyButton) {
     return;

@@ -236,11 +236,45 @@ Kurye:
 - `PATCH /api/courier/packages/:id/status`
 
 Entegrasyon:
+- `POST /api/webhooks/orders`
+- `GET /api/webhooks/health`
+- `GET /api/admin/unmatched-orders`
+- `POST /api/admin/unmatched-orders/:id/match`
+- `GET /api/admin/webhook-logs`
+- `POST /api/admin/webhooks/test-order`
+- `GET /api/restaurant/orders`
+- `GET /api/restaurant/orders/:id`
+- `PUT /api/restaurant/orders/:id/status`
 - `POST /api/integrations/orders`
 - `POST /api/platforms/trendyol-go/webhook`
 - `POST /api/platforms/getiryemek/webhook`
 - `POST /api/platforms/yemeksepeti/webhook`
 - `POST /api/platforms/migros-yemek/webhook`
+
+## API Firma Webhook Entegrasyonu
+
+Webhook URL:
+`POST /api/webhooks/orders`
+
+Gerekli header:
+`x-webhook-secret`
+
+Content-Type:
+`application/json`
+
+Test komutu:
+`npm run test:webhook`
+
+`.env` ornegi:
+
+```env
+WEBHOOK_SECRET=
+WEBHOOK_ENABLED=true
+WEBHOOK_LOG_ENABLED=true
+WEBHOOK_ALLOWED_IPS=
+```
+
+Restoran ekleme ekraninda Trendyol, Yemeksepeti, Getir, Migros ve ek external platform ID alanlari vardir. Gelen webhook payload'indaki `restaurantId`, `restaurant.id`, `provider.restaurantId`, `branchId` veya `storeId` degeri bu alanlarla eslestirilir. Eslesmeyen siparisler admin panelindeki "Eslestirilmeyen Siparisler" alanina duser ve manuel restorana baglanabilir.
 
 ## Guvenlik ve Operasyon
 
