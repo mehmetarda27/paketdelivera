@@ -194,6 +194,15 @@ async function api(path, options = {}) {
     error.status = result.response.status;
     error.code = result.data.code || "";
     error.requestId = result.data.requestId || result.response.headers.get("x-request-id") || "";
+    if (typeof console !== "undefined" && typeof console.error === "function") {
+      console.error("API request failed", {
+        path: requestPath,
+        status: error.status,
+        code: error.code,
+        requestId: error.requestId,
+        message: error.message,
+      });
+    }
     throw error;
   }
 

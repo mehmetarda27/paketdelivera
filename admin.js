@@ -468,7 +468,7 @@ function renderCourierManagement(couriers) {
         showToast("Kurye basariyla silindi.");
         hydrateAdmin(data);
       } catch (err) {
-        showToast(err.message || "Kurye silinirken bir hata olustu.", true);
+        showToast(err.message || "Kurye silinirken bir hata olustu.", "error");
       }
     });
 
@@ -1586,7 +1586,7 @@ adminRefs.courierForm.addEventListener("submit", async (event) => {
     const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
     showToast(`${payload.name} isimli kurye kaydedildi. ID: ${createdCourier?.id || "olusturuldu"}`);
   } catch (err) {
-    showToast(err.message || "Kurye eklenirken bir hata olustu.", true);
+    showToast(err.message || "Kurye eklenirken bir hata olustu.", "error");
   }
 });
 
@@ -1615,7 +1615,7 @@ if (adminRefs.courierAddForm) {
       const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
       showToast(`${payload.name} isimli kurye eklendi. ID: ${createdCourier?.id || "olusturuldu"}`);
     } catch (err) {
-      showToast(err.message || "Kurye eklenirken bir hata olustu.", true);
+      showToast(err.message || "Kurye eklenirken bir hata olustu.", "error");
     }
   });
 }
@@ -1642,7 +1642,7 @@ if (adminRefs.courierEditForm) {
       showToast("Kurye bilgileri basariyla guncellendi.");
       hydrateAdmin(data);
     } catch (err) {
-      showToast(err.message || "Kurye guncellenirken bir hata olustu.", true);
+      showToast(err.message || "Kurye guncellenirken bir hata olustu.", "error");
     }
   });
 }
@@ -1670,19 +1670,23 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
     migrosRestaurantId: formData.get("migrosRestaurantId"),
     externalRestaurantIds: formData.get("externalRestaurantIds"),
   };
-  const data = await api("/api/admin/restaurants", {
-    method: "POST",
-    headers: adminHeaders(),
-    body: JSON.stringify(payload),
-    retryWithRefresh: refreshAdminAccess,
-  });
-  adminRefs.restaurantForm.reset();
-  renderPlatformChecks();
-  hydrateAdmin(data);
-  const createdRestaurant = data.createdRestaurant || (data.restaurants || []).find((restaurant) => (
-    restaurant.name === payload.name && (!payload.portalUsername || restaurant.username === payload.portalUsername)
-  )) || data.restaurants?.[0];
-  showToast(`${payload.name} restorani kaydedildi. ID: ${createdRestaurant?.id || "olusturuldu"}`);
+  try {
+    const data = await api("/api/admin/restaurants", {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify(payload),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    adminRefs.restaurantForm.reset();
+    renderPlatformChecks();
+    hydrateAdmin(data);
+    const createdRestaurant = data.createdRestaurant || (data.restaurants || []).find((restaurant) => (
+      restaurant.name === payload.name && (!payload.portalUsername || restaurant.username === payload.portalUsername)
+    )) || data.restaurants?.[0];
+    showToast(`${payload.name} restorani kaydedildi. ID: ${createdRestaurant?.id || "olusturuldu"}`);
+  } catch (error) {
+    showToast(error.message || "Restoran eklenirken bir hata olustu.", "error");
+  }
 });
 
 document.addEventListener("click", async (event) => {
@@ -1691,7 +1695,7 @@ document.addEventListener("click", async (event) => {
     const restaurantId = editRestaurantPlatformIdsButton.dataset.editRestaurantPlatformIds;
     const restaurant = (adminState.data?.restaurants || []).find((item) => item.id === restaurantId);
     if (!restaurant) {
-      showToast("Restoran bulunamadi.", true);
+      showToast("Restoran bulunamadi.", "error");
       return;
     }
     const externalDefault = JSON.stringify(restaurant.externalRestaurantIds || []);
@@ -1712,7 +1716,7 @@ document.addEventListener("click", async (event) => {
       hydrateAdmin(data);
       showToast("Restoran platform ID'leri guncellendi.");
     } catch (error) {
-      showToast(error.message || "Platform ID'leri guncellenemedi.", true);
+      showToast(error.message || "Platform ID'leri guncellenemedi.", "error");
     }
     return;
   }
@@ -1724,7 +1728,7 @@ document.addEventListener("click", async (event) => {
     const saveIdInput = document.querySelector(`[data-unmatched-save-id="${CSS.escape(unmatchedId)}"]`);
     const restaurantId = restaurantSelect?.value || "";
     if (!restaurantId) {
-      showToast("Once restoran secmelisin.", true);
+      showToast("Once restoran secmelisin.", "error");
       return;
     }
     try {
@@ -1737,7 +1741,7 @@ document.addEventListener("click", async (event) => {
       hydrateAdmin(data);
       showToast("Siparis restorana baglandi.");
     } catch (error) {
-      showToast(error.message || "Siparis baglanamadi.", true);
+      showToast(error.message || "Siparis baglanamadi.", "error");
     }
     return;
   }
@@ -1750,7 +1754,7 @@ document.addEventListener("click", async (event) => {
     await copyTextToClipboard(copyButton.dataset.copyIntegrationId);
     showToast(`ID kopyalandi: ${copyButton.dataset.copyIntegrationId}`);
   } catch (error) {
-    showToast("ID kopyalanamadi.", true);
+    showToast("ID kopyalanamadi.", "error");
   }
 });
 

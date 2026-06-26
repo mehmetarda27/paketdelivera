@@ -1505,7 +1505,7 @@ if (courierRefs.profileForm) {
         courierState.data.courier.username = payload.username;
       }
     } catch (err) {
-      showToast(err.message || "Guncellenirken hata olustu", true);
+      showToast(err.message || "Guncellenirken hata olustu", "error");
     }
   });
 }

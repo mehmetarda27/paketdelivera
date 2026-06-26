@@ -2658,6 +2658,41 @@ function writeAuditLog(entry) {
   );
 }
 
+const PERSISTENCE_LOG_TABLES = new Set(["restaurants", "couriers", "packages", "platform_orders"]);
+
+function logPersistenceEvent(eventName, details = {}) {
+  const error = details.error || null;
+  const payload = {
+    table_name: details.tableName || details.table_name || "",
+    inserted_id: details.insertedId || details.inserted_id || null,
+    request_id: details.requestId || details.request_id || null,
+    error_message: error ? error.message : (details.errorMessage || details.error_message || null),
+  };
+
+  if (error || payload.error_message) {
+    logger.error(eventName, { ...payload, error });
+    return;
+  }
+
+  logger.info(eventName, payload);
+}
+
+function assertPersistedRecord(tableName, insertedId, eventName, requestId = null) {
+  if (!PERSISTENCE_LOG_TABLES.has(tableName)) {
+    throw new Error(`Unsupported persistence table: ${tableName}`);
+  }
+
+  const row = db.prepare(`SELECT id FROM ${tableName} WHERE id = ?`).get(insertedId);
+  if (!row) {
+    const error = new Error(`${tableName} insert verification failed for id ${insertedId}`);
+    logPersistenceEvent(eventName, { tableName, insertedId, requestId, error });
+    throw error;
+  }
+
+  logPersistenceEvent(eventName, { tableName, insertedId, requestId });
+  return row;
+}
+
 function shouldPersistNotification(event) {
   return Boolean(event?.message) && !["courier-location"].includes(event.type || "");
 }
@@ -2872,7 +2907,7 @@ function normalizePlatformOrderStatus(status) {
   return PLATFORM_ORDER_STATUSES.has(normalized) ? normalized : "pending_approval";
 }
 
-function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approval") {
+function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approval", options = {}) {
   const platform = normalizePlatformInput(order.platform) || order.platform;
   const platformOrderId = trimmed(order.orderId || order.platformOrderId || order.externalOrderNo);
   if (!platform || !platformOrderId || !restaurantId) {
@@ -5174,6 +5209,16 @@ function rebalancePackages() {
   }
 }
 
+function scheduleRebalancePackages() {
+  setImmediate(() => {
+    try {
+      rebalancePackages();
+    } catch (error) {
+      logger.warn("Scheduled rebalance failed", { error });
+    }
+  });
+}
+
 function retryAwaitingAssignmentPackages() {
   rebalancePackages();
 }
@@ -5592,6 +5637,7 @@ function upsertWebhookPackage(order, restaurant) {
   pkg.assignmentStatus = draft.assignmentStatus;
   pkg.assignmentReason = draft.assignmentReason;
   createPackageRecord(pkg, "Platform Siparisi");
+  assertPersistedRecord("packages", pkg.id, "package_created", null);
   updatePackageApiMetadata(pkg.id, order);
   replaceOrderItems(pkg.id, order.products);
   upsertPlatformOrderRecord({
@@ -5662,6 +5708,7 @@ function upsertUnmatchedOrder(order) {
     stamp,
     stamp
   );
+  assertPersistedRecord("platform_orders", id, "platform_order_created", options.requestId || null);
   return id;
 }
 
@@ -6678,7 +6725,7 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
   };
 }
 
-function upsertPlatformPackage(platform, restaurant, payload) {
+function upsertPlatformPackage(platform, restaurant, payload, options = {}) {
   return withImmediateTransaction(() => {
     const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
     upsertPlatformOrderRecord({
@@ -6690,13 +6737,16 @@ function upsertPlatformPackage(platform, restaurant, payload) {
       totalPrice: payload.orderAmount,
       note: payload.customerNote || payload.note,
       rawPayload: payload.rawPayload || payload,
-    }, restaurant.id, payload.status === CANCELED_STATUS ? "cancelled" : "pending_approval");
+    }, restaurant.id, payload.status === CANCELED_STATUS ? "cancelled" : "pending_approval", {
+      requestId: options.requestId || null,
+    });
 
     if (!existing) {
       const pkg = validateIntegrationDraft(payload, restaurant);
       createPackageRecord(pkg, "Platform Siparisi");
+      assertPersistedRecord("packages", pkg.id, "package_created", options.requestId || null);
       if (normalizeStatus(pkg.status) !== PENDING_APPROVAL_STATUS) {
-        rebalancePackages();
+        scheduleRebalancePackages();
       }
       writeAuditLog({
         actorRole: "integration",
@@ -6743,7 +6793,7 @@ function upsertPlatformPackage(platform, restaurant, payload) {
         paymentMethod: existing.payment_method,
       });
       if (incomingStatus !== PENDING_APPROVAL_STATUS && incomingStatus !== REJECTED_STATUS) {
-        rebalancePackages();
+        scheduleRebalancePackages();
       }
       writeAuditLog({
         actorRole: "integration",
@@ -6819,7 +6869,7 @@ function createSimplePlatformPayload(order, restaurant) {
   };
 }
 
-function handleSimplePlatformOrder(order, isManual = false) {
+function handleSimplePlatformOrder(order, isManual = false, options = {}) {
   const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
   if (!match) {
     return { ok: false, error: "Restaurant not found", statusCode: 404 };
@@ -6842,8 +6892,12 @@ function handleSimplePlatformOrder(order, isManual = false) {
     payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
   }
   
-  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, isManual ? "accepted" : "pending_approval");
-  const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload);
+  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, isManual ? "accepted" : "pending_approval", {
+    requestId: options.requestId || null,
+  });
+  const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload, {
+    requestId: options.requestId || null,
+  });
   logger.info("Package created from platform order", {
     platform: match.account.platform,
     restaurantId: match.restaurant.id,
@@ -8546,7 +8600,7 @@ async function handleApi(req, res, pathname) {
       paymentMethod: "Online Odeme",
       customerNote: "Restoran panel test siparisi",
       items: [{ id: "test-1", name: "Test Burger", quantity: 1, price: 250 }],
-    });
+    }, false, { requestId: req.requestId });
     if (!result.ok) {
       sendJson(res, result.statusCode || 404, { ok: false, error: result.error });
       return;
@@ -8707,17 +8761,17 @@ async function handleApi(req, res, pathname) {
     });
     let account = findPlatformRestaurant(platform, externalStoreId);
     if (!account) {
-      upsertPlatformOrderRecord(order, restaurant.id, "accepted");
+      upsertPlatformOrderRecord(order, restaurant.id, "accepted", { requestId: req.requestId });
       const payload = createSimplePlatformPayload(order, restaurant);
       payload.status = AWAITING_ASSIGNMENT_STATUS;
       payload.assignmentStatus = "unassigned";
       payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
       
-      const created = upsertPlatformPackage(platform, restaurant, payload);
+      const created = upsertPlatformPackage(platform, restaurant, payload, { requestId: req.requestId });
       sendJson(res, 201, { ok: true, package: created, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
       return;
     }
-    const result = handleSimplePlatformOrder(order, true);
+    const result = handleSimplePlatformOrder(order, true, { requestId: req.requestId });
     sendJson(res, 201, { ok: true, package: result.package, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
     return;
   }
@@ -8786,6 +8840,7 @@ async function handleApi(req, res, pathname) {
     }
 
     createPackageRecord(pkg, pkg.packageType);
+    assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
 
     rebalancePackages();
     writeAuditLog({
@@ -8805,11 +8860,14 @@ async function handleApi(req, res, pathname) {
       restaurantId: session.restaurant_id,
       message: "Manuel paket operasyon havuzuna alindi.",
     });
-    sendJson(res, 201, decorateState({
+    sendJson(res, 201, {
+      ...decorateState({
       restaurantId: session.restaurant_id,
       includeRestaurantSecrets: true,
       req,
-    }));
+      }),
+      createdPackage: getPackageById(pkg.id),
+    });
     return;
   }
 
@@ -8900,6 +8958,7 @@ async function handleApi(req, res, pathname) {
     }
 
     createPackageRecord(pkg, pkg.packageType);
+    assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
     rebalancePackages();
 
     writeAuditLog({
@@ -9078,6 +9137,8 @@ async function handleApi(req, res, pathname) {
 
     const { json: body } = await readRequestBody(req);
     const { restaurant } = createRestaurantRecord(body);
+    assertPersistedRecord("restaurants", restaurant.id, "restaurant_created", req.requestId);
+    const createdRestaurant = getRestaurants({ restaurantId: restaurant.id })[0];
 
     writeAuditLog({
       actorRole: "admin",
@@ -9097,6 +9158,7 @@ async function handleApi(req, res, pathname) {
 
     sendJson(res, 201, {
       ...decorateState(),
+      createdRestaurant: sanitizeRestaurant(createdRestaurant || restaurant, true),
       auditLogs: getAuditLogs(20),
     });
     return;
@@ -9130,11 +9192,12 @@ async function handleApi(req, res, pathname) {
     }
 
     const passwordInfo = hashPassword(password);
+    const courierId = uid("cr");
     db.prepare(`
       INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      uid("cr"),
+      courierId,
       name,
       zone,
       latitude,
@@ -9146,6 +9209,7 @@ async function handleApi(req, res, pathname) {
       passwordInfo.salt,
       nowIso()
     );
+    assertPersistedRecord("couriers", courierId, "courier_created", req.requestId);
 
     rebalancePackages();
     writeAuditLog({
@@ -9163,6 +9227,7 @@ async function handleApi(req, res, pathname) {
     });
     sendJson(res, 201, {
       ...decorateState(),
+      createdCourier: sanitizeCourier(getCourierById(courierId)),
       auditLogs: getAuditLogs(20),
     });
     return;
@@ -9282,6 +9347,17 @@ async function handleApi(req, res, pathname) {
     }
 
     createPackageRecord(pkg, "Platform Siparisi");
+    assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
+    upsertPlatformOrderRecord({
+      platform: feederDraft.sourcePlatform,
+      orderId: feederDraft.externalOrderId || feederDraft.externalOrderNo,
+      customerName: feederDraft.recipient,
+      phone: feederDraft.phone,
+      address: feederDraft.address || feederDraft.deliveryAddress,
+      totalPrice: feederDraft.orderAmount,
+      customerNote: feederDraft.customerNote || feederDraft.note,
+      rawPayload: body,
+    }, restaurant.id, "pending_approval", { requestId: req.requestId });
     rebalancePackages();
     const created = decorateState().packages.find((item) => item.id === pkg.id);
 
@@ -9466,7 +9542,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const result = handleSimplePlatformOrder(order);
+    const result = handleSimplePlatformOrder(order, false, { requestId: req.requestId });
     db.prepare(`
       UPDATE platform_accounts
       SET last_webhook_at = ?,
@@ -10103,7 +10179,7 @@ async function handleApi(req, res, pathname) {
       paymentMethod: "Online Odeme",
       customerNote: "Admin test platform siparisi",
       items: [{ id: "admin-test-1", name: "Test Menu", quantity: 1, price: 250 }],
-    });
+    }, false, { requestId: req.requestId });
     if (!result.ok) {
       sendJson(res, result.statusCode || 404, { ok: false, error: result.error });
       return;
