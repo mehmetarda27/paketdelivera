@@ -1691,9 +1691,12 @@ restaurantRefs.manualPlatformOrderForm?.addEventListener("submit", async (event)
         note: formData.get("note"),
       }),
     });
+    if (!response.package?.id || !response.platformOrder?.id) {
+      throw new Error("API platform siparisinin veritabanina yazildigini dogrulayan cevap dondurmedi.");
+    }
     restaurantRefs.manualPlatformOrderForm.reset();
     hydrateRestaurant(response.state || response);
-    showToast("Manuel platform siparisi sisteme dustu.");
+    showToast(`Manuel platform siparisi kaydedildi. ID: ${response.platformOrder.id}`);
   } catch (error) {
     showToast(error.message || "Manuel platform siparisi kaydedilemedi.", "error");
   }
@@ -1817,6 +1820,9 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(payload),
     });
 
+    if (!data.createdPackage?.id) {
+      throw new Error("API paketin veritabanina yazildigini dogrulayan createdPackage cevabi dondurmedi.");
+    }
     restaurantRefs.packageForm.reset();
     if (restaurantRefs.packageImagePreview) {
       restaurantRefs.packageImagePreview.style.display = "none";

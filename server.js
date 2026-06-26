@@ -2883,7 +2883,11 @@ function getPlatformOrders(filter = {}) {
     ? db.prepare("SELECT * FROM platform_orders WHERE restaurant_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(filter.restaurantId, limit, offset)
     : db.prepare("SELECT * FROM platform_orders ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?").all(limit, offset);
 
-  return rows.map((row) => ({
+  return rows.map(mapPlatformOrder);
+}
+
+function mapPlatformOrder(row) {
+  return {
     id: row.id,
     platform: row.platform,
     platformOrderId: row.platform_order_id,
@@ -2897,7 +2901,7 @@ function getPlatformOrders(filter = {}) {
     rawPayload: parseJson(row.raw_payload, {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  }));
+  };
 }
 
 function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
@@ -2905,6 +2909,11 @@ function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAG
     ? countTable("platform_orders", "restaurant_id = ?", [filter.restaurantId])
     : countTable("platform_orders");
   return pageMeta(total, pagination);
+}
+
+function getPlatformOrderById(id) {
+  const row = db.prepare("SELECT * FROM platform_orders WHERE id = ?").get(id);
+  return row ? mapPlatformOrder(row) : null;
 }
 
 function restaurantsPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
@@ -2973,6 +2982,7 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
     stamp,
     stamp
   );
+  assertPersistedRecord("platform_orders", id, "platform_order_created", options.requestId || null);
   return id;
 }
 
@@ -5722,7 +5732,6 @@ function upsertUnmatchedOrder(order) {
     stamp,
     stamp
   );
-  assertPersistedRecord("platform_orders", id, "platform_order_created", options.requestId || null);
   return id;
 }
 
@@ -6906,7 +6915,7 @@ function handleSimplePlatformOrder(order, isManual = false, options = {}) {
     payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
   }
   
-  upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, isManual ? "accepted" : "pending_approval", {
+  const platformOrderId = upsertPlatformOrderRecord({ ...order, platform: match.account.platform }, match.restaurant.id, isManual ? "accepted" : "pending_approval", {
     requestId: options.requestId || null,
   });
   const created = upsertPlatformPackage(match.account.platform, match.restaurant, payload, {
@@ -6931,6 +6940,7 @@ function handleSimplePlatformOrder(order, isManual = false, options = {}) {
     restaurant: match.restaurant,
     account: match.account,
     package: created,
+    platformOrder: getPlatformOrderById(platformOrderId),
   };
 }
 
@@ -8775,18 +8785,28 @@ async function handleApi(req, res, pathname) {
     });
     let account = findPlatformRestaurant(platform, externalStoreId);
     if (!account) {
-      upsertPlatformOrderRecord(order, restaurant.id, "accepted", { requestId: req.requestId });
+      const platformOrderId = upsertPlatformOrderRecord(order, restaurant.id, "accepted", { requestId: req.requestId });
       const payload = createSimplePlatformPayload(order, restaurant);
       payload.status = AWAITING_ASSIGNMENT_STATUS;
       payload.assignmentStatus = "unassigned";
       payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
       
       const created = upsertPlatformPackage(platform, restaurant, payload, { requestId: req.requestId });
-      sendJson(res, 201, { ok: true, package: created, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
+      sendJson(res, 201, {
+        ok: true,
+        package: created,
+        platformOrder: getPlatformOrderById(platformOrderId),
+        state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
+      });
       return;
     }
     const result = handleSimplePlatformOrder(order, true, { requestId: req.requestId });
-    sendJson(res, 201, { ok: true, package: result.package, state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }) });
+    sendJson(res, 201, {
+      ok: true,
+      package: result.package,
+      platformOrder: result.platformOrder || null,
+      state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, includePlatformSecrets: true, req }),
+    });
     return;
   }
 
@@ -9239,36 +9259,39 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const passwordInfo = hashPassword(password);
-    const courierId = uid("cr");
-    db.prepare(`
-      INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      courierId,
-      name,
-      zone,
-      latitude,
-      longitude,
-      available ? 1 : 0,
-      available ? COURIER_ONLINE_STATUS : COURIER_OFFLINE_STATUS,
-      username,
-      passwordInfo.hash,
-      passwordInfo.salt,
-      nowIso()
-    );
-    assertPersistedRecord("couriers", courierId, "courier_created", req.requestId);
+    const courierId = dbFacade.transaction(() => {
+      const passwordInfo = hashPassword(password);
+      const id = uid("cr");
+      db.prepare(`
+        INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        name,
+        zone,
+        latitude,
+        longitude,
+        available ? 1 : 0,
+        available ? COURIER_ONLINE_STATUS : COURIER_OFFLINE_STATUS,
+        username,
+        passwordInfo.hash,
+        passwordInfo.salt,
+        nowIso()
+      );
+      assertPersistedRecord("couriers", id, "courier_created", req.requestId);
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "courier_created",
+        details: {
+          username,
+          zone,
+        },
+      });
+      return id;
+    });
 
     rebalancePackages();
-    writeAuditLog({
-      actorRole: "admin",
-      actorId: adminActorId(adminSession),
-      action: "courier_created",
-      details: {
-        username,
-        zone,
-      },
-    });
     broadcastLiveEvent({
       type: "courier-created",
       message: `${name} isimli kurye eklendi.`,

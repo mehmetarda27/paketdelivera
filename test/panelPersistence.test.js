@@ -188,7 +188,9 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       }),
     });
     assert.ok(platformOrderState.package?.id);
+    assert.ok(platformOrderState.platformOrder?.id);
     assert.ok(readRow(dbFile, "SELECT id FROM packages WHERE id = ?", platformOrderState.package.id));
+    assert.ok(readRow(dbFile, "SELECT id FROM platform_orders WHERE id = ?", platformOrderState.platformOrder.id));
     assert.ok(
       readRow(dbFile, "SELECT id FROM platform_orders WHERE platform_order_id = ?", platformOrderId)
     );
@@ -214,6 +216,18 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       headers: restaurantHeaders,
     });
     assert.ok(reloadedRestaurantState.packages.some((pkg) => pkg.id === packageState.createdPackage.id));
+
+    const counts = readRow(dbFile, `
+      SELECT
+        (SELECT COUNT(*) FROM restaurants) AS restaurants,
+        (SELECT COUNT(*) FROM couriers) AS couriers,
+        (SELECT COUNT(*) FROM packages) AS packages,
+        (SELECT COUNT(*) FROM platform_orders) AS platform_orders
+    `);
+    assert.ok(counts.restaurants > 0);
+    assert.ok(counts.couriers > 0);
+    assert.ok(counts.packages > 0);
+    assert.ok(counts.platform_orders > 0);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
