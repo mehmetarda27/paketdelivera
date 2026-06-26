@@ -1680,10 +1680,11 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
     adminRefs.restaurantForm.reset();
     renderPlatformChecks();
     hydrateAdmin(data);
-    const createdRestaurant = data.createdRestaurant || (data.restaurants || []).find((restaurant) => (
-      restaurant.name === payload.name && (!payload.portalUsername || restaurant.username === payload.portalUsername)
-    )) || data.restaurants?.[0];
-    showToast(`${payload.name} restorani kaydedildi. ID: ${createdRestaurant?.id || "olusturuldu"}`);
+    const createdRestaurant = data.createdRestaurant;
+    if (!createdRestaurant?.id) {
+      throw new Error("API restoranin veritabanina yazildigini dogrulayan createdRestaurant cevabi dondurmedi.");
+    }
+    showToast(`${payload.name} restorani kaydedildi. ID: ${createdRestaurant.id}`);
   } catch (error) {
     showToast(error.message || "Restoran eklenirken bir hata olustu.", "error");
   }

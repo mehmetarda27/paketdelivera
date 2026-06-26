@@ -2677,6 +2677,16 @@ function logPersistenceEvent(eventName, details = {}) {
   logger.info(eventName, payload);
 }
 
+function maskRestaurantCreateBody(body = {}) {
+  const masked = { ...body };
+  for (const key of ["password", "portalPassword"]) {
+    if (masked[key]) {
+      masked[key] = "***";
+    }
+  }
+  return masked;
+}
+
 function assertPersistedRecord(tableName, insertedId, eventName, requestId = null) {
   if (!PERSISTENCE_LOG_TABLES.has(tableName)) {
     throw new Error(`Unsupported persistence table: ${tableName}`);
@@ -9136,20 +9146,54 @@ async function handleApi(req, res, pathname) {
     }
 
     const { json: body } = await readRequestBody(req);
-    const { restaurant } = createRestaurantRecord(body);
-    assertPersistedRecord("restaurants", restaurant.id, "restaurant_created", req.requestId);
-    const createdRestaurant = getRestaurants({ restaurantId: restaurant.id })[0];
-
-    writeAuditLog({
-      actorRole: "admin",
-      actorId: adminActorId(adminSession),
-      action: "restaurant_created",
-      restaurantId: restaurant.id,
-      details: {
-        name: restaurant.name,
-        username: restaurant.username,
-      },
+    logger.info("restaurant_create_request_received", {
+      requestId: req.requestId,
+      route: pathname,
+      method: req.method,
+      body: maskRestaurantCreateBody(body),
     });
+
+    let restaurant;
+    let createdRestaurant;
+    try {
+      ({ restaurant, createdRestaurant } = dbFacade.transaction(() => {
+        const created = createRestaurantRecord(body);
+        assertPersistedRecord("restaurants", created.restaurant.id, "restaurant_created", req.requestId);
+        const persistedRestaurant = getRestaurants({ restaurantId: created.restaurant.id })[0];
+        if (!persistedRestaurant?.id) {
+          throw new Error(`restaurants insert verification SELECT returned empty for id ${created.restaurant.id}`);
+        }
+        writeAuditLog({
+          actorRole: "admin",
+          actorId: adminActorId(adminSession),
+          action: "restaurant_created",
+          restaurantId: created.restaurant.id,
+          details: {
+            name: created.restaurant.name,
+            username: created.restaurant.username,
+          },
+        });
+        return {
+          restaurant: created.restaurant,
+          createdRestaurant: persistedRestaurant,
+        };
+      }));
+      logger.info("restaurant_create_transaction_committed", {
+        requestId: req.requestId,
+        restaurantId: restaurant.id,
+        username: restaurant.username,
+        selectedRestaurantId: createdRestaurant.id,
+      });
+    } catch (error) {
+      logger.error("restaurant_create_failed", {
+        requestId: req.requestId,
+        route: pathname,
+        body: maskRestaurantCreateBody(body),
+        error,
+      });
+      throw error;
+    }
+
     broadcastLiveEvent({
       type: "restaurant-created",
       restaurantId: restaurant.id,
@@ -9158,7 +9202,7 @@ async function handleApi(req, res, pathname) {
 
     sendJson(res, 201, {
       ...decorateState(),
-      createdRestaurant: sanitizeRestaurant(createdRestaurant || restaurant, true),
+      createdRestaurant: sanitizeRestaurant(createdRestaurant, true),
       auditLogs: getAuditLogs(20),
     });
     return;

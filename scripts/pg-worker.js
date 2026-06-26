@@ -1,6 +1,7 @@
 const { parentPort, workerData } = require("worker_threads");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
+const logger = require("../services/logger");
 
 const { sab } = workerData;
 const sabInts = new Int32Array(sab);
@@ -210,6 +211,28 @@ function normalizeParams(params = []) {
   });
 }
 
+function isRestaurantWriteOrTransaction(sql) {
+  const normalized = String(sql || "").replace(/\s+/g, " ").trim().toUpperCase();
+  return normalized === "BEGIN" ||
+    normalized === "COMMIT" ||
+    normalized === "ROLLBACK" ||
+    normalized.includes("INSERT INTO RESTAURANTS") ||
+    normalized.includes("SELECT ID FROM RESTAURANTS") ||
+    normalized.includes("SELECT * FROM RESTAURANTS WHERE ID");
+}
+
+function compactSql(sql) {
+  return String(sql || "").replace(/\s+/g, " ").trim();
+}
+
+function summarizeParams(params = []) {
+  return params.map((param) => {
+    if (param === null || param === undefined) return param;
+    const text = String(param);
+    return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  });
+}
+
 async function queryPostgres(sql, params = []) {
   const pool = await getPgPool();
   const pgSql = translateSql(sql);
@@ -219,12 +242,14 @@ async function queryPostgres(sql, params = []) {
 
   const normalizedParams = normalizeParams(params || []);
   const upperSql = pgSql.toUpperCase();
+  const shouldLogQuery = isRestaurantWriteOrTransaction(pgSql);
 
   if (upperSql === "BEGIN" || upperSql === "START TRANSACTION") {
     if (!pgTxClient) {
       pgTxClient = await pool.connect();
     }
     const res = await pgTxClient.query("BEGIN");
+    logger.info("postgres_transaction_begin", { sql: "BEGIN", rowCount: res.rowCount });
     return { rows: res.rows, rowCount: res.rowCount };
   }
 
@@ -234,6 +259,7 @@ async function queryPostgres(sql, params = []) {
     }
     try {
       const res = await pgTxClient.query("COMMIT");
+      logger.info("postgres_transaction_commit", { sql: "COMMIT", rowCount: res.rowCount });
       return { rows: res.rows, rowCount: res.rowCount };
     } finally {
       pgTxClient.release();
@@ -247,6 +273,7 @@ async function queryPostgres(sql, params = []) {
     }
     try {
       const res = await pgTxClient.query("ROLLBACK");
+      logger.warn("postgres_transaction_rollback", { sql: "ROLLBACK", rowCount: res.rowCount });
       return { rows: res.rows, rowCount: res.rowCount };
     } finally {
       pgTxClient.release();
@@ -255,7 +282,33 @@ async function queryPostgres(sql, params = []) {
   }
 
   const client = pgTxClient || pool;
-  const res = await client.query(pgSql, normalizedParams);
+  if (shouldLogQuery) {
+    logger.info("postgres_query_start", {
+      sql: compactSql(pgSql),
+      params: summarizeParams(normalizedParams),
+      inTransaction: Boolean(pgTxClient),
+    });
+  }
+  let res;
+  try {
+    res = await client.query(pgSql, normalizedParams);
+  } catch (error) {
+    logger.error("postgres_query_failed", {
+      sql: compactSql(pgSql),
+      params: summarizeParams(normalizedParams),
+      inTransaction: Boolean(pgTxClient),
+      error,
+    });
+    throw error;
+  }
+  if (shouldLogQuery) {
+    logger.info("postgres_query_result", {
+      sql: compactSql(pgSql),
+      rowCount: res.rowCount,
+      rows: res.rows.slice(0, 3),
+      inTransaction: Boolean(pgTxClient),
+    });
+  }
   return {
     rows: res.rows,
     rowCount: res.rowCount,
