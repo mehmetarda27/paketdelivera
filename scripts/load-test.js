@@ -2,10 +2,10 @@ const { spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { DatabaseSync } = require("node:sqlite");
 const {
   DB_FILE,
   GENERATED_TEMP_LOAD_DB,
+  USE_POSTGRES,
   RESTAURANT_PASSWORD,
   COURIER_PASSWORD,
   ensureSchema,
@@ -141,7 +141,8 @@ function summarize(name, results, wallTimeMs, concurrency) {
 }
 
 function dbSnapshot() {
-  const db = new DatabaseSync(DB_FILE);
+  const dbFacade = require("../db");
+  const db = dbFacade.getDb({ filename: DB_FILE });
   try {
     const counts = {
       restaurants: db.prepare("SELECT COUNT(*) AS count FROM restaurants").get().count,
@@ -175,15 +176,16 @@ function dbSnapshot() {
       packageIds,
       restaurants,
       couriers,
-      dbSizeBytes: fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0,
+      dbSizeBytes: USE_POSTGRES ? Number(db.prepare("SELECT pg_database_size(current_database()) AS size").get()?.size || 0) : (fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0),
     };
   } finally {
-    db.close();
+    dbFacade.close();
   }
 }
 
 function createLoadSessions(snapshot) {
-  const db = new DatabaseSync(DB_FILE);
+  const dbFacade = require("../db");
+  const db = dbFacade.getDb({ filename: DB_FILE });
   const stamp = new Date().toISOString();
   const prefix = `load_session_${crypto.randomBytes(6).toString("hex")}`;
   try {
@@ -192,16 +194,16 @@ function createLoadSessions(snapshot) {
       throw new Error("Load test admin oturumu icin admin kaydi bulunamadi.");
     }
     const adminToken = `${prefix}_admin`;
-    db.prepare("INSERT OR REPLACE INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)").run(adminToken, admin.id, stamp);
+    db.prepare("INSERT OR IGNORE INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)").run(adminToken, admin.id, stamp);
 
-    const restaurantInsert = db.prepare("INSERT OR REPLACE INTO restaurant_sessions (token, restaurant_id, created_at) VALUES (?, ?, ?)");
+    const restaurantInsert = db.prepare("INSERT OR IGNORE INTO restaurant_sessions (token, restaurant_id, created_at) VALUES (?, ?, ?)");
     const restaurantTokens = snapshot.restaurants.slice(0, 100).map((restaurant, index) => {
       const token = `${prefix}_restaurant_${index}`;
       restaurantInsert.run(token, restaurant.id, stamp);
       return { ...restaurant, token };
     });
 
-    const courierInsert = db.prepare("INSERT OR REPLACE INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)");
+    const courierInsert = db.prepare("INSERT OR IGNORE INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)");
     const courierTokens = snapshot.couriers.slice(0, 100).map((courier, index) => {
       const token = `${prefix}_courier_${index}`;
       courierInsert.run(token, courier.id, stamp);
@@ -214,7 +216,7 @@ function createLoadSessions(snapshot) {
       courierTokens,
     };
   } finally {
-    db.close();
+    dbFacade.close();
   }
 }
 
@@ -257,9 +259,9 @@ async function main() {
   await ensureSchema();
   let snapshot = dbSnapshot();
   if (
-    snapshot.counts.restaurants < Number(process.env.LOAD_RESTAURANTS || 100) ||
-    snapshot.counts.couriers < Number(process.env.LOAD_COURIERS || 1000) ||
-    snapshot.counts.packages < Number(process.env.LOAD_PACKAGES || 100000)
+    snapshot.counts.restaurants < Number(process.env.LOAD_RESTAURANTS || 50) ||
+    snapshot.counts.couriers < Number(process.env.LOAD_COURIERS || 100) ||
+    snapshot.counts.packages < Number(process.env.LOAD_PACKAGES || 300)
   ) {
     seedLoadData();
     snapshot = dbSnapshot();
@@ -270,9 +272,11 @@ async function main() {
     env: {
       ...process.env,
       PORT: String(PORT),
-      DATABASE_PATH: DB_FILE,
-      DB_PATH: DB_FILE,
-      DELIVERA_DB_FILE: DB_FILE,
+      ...(USE_POSTGRES ? {} : {
+        DATABASE_PATH: DB_FILE,
+        DB_PATH: DB_FILE,
+        DELIVERA_DB_FILE: DB_FILE,
+      }),
       DELIVERA_PLATFORM_POLLING_ENABLED: "0",
       TRUST_PROXY: "true",
     },

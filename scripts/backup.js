@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, spawnSync } = require("child_process");
 
 try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
@@ -66,16 +66,21 @@ function main() {
       throw new Error("DATABASE_URL or POSTGRES_URL is not set for PostgreSQL backup.");
     }
     
-    target = path.join(BACKUP_DIR, `delivera-${stamp()}.sql`);
+    target = path.join(BACKUP_DIR, `delivera-postgresql-${stamp()}.dump`);
     console.log(`Running pg_dump to create backup...`);
-    
-    // Run pg_dump command
-    // Use quotes around dbname to handle special characters in connection string
-    const cmd = `pg_dump --dbname="${pgUrl}" -f "${target}"`;
-    try {
-      execSync(cmd, { stdio: "inherit" });
-    } catch (err) {
-      throw new Error(`pg_dump failed: ${err.message}`);
+
+    const result = spawnSync("pg_dump", [
+      "--format=custom",
+      "--no-owner",
+      "--no-privileges",
+      `--file=${target}`,
+      pgUrl,
+    ], { stdio: "inherit" });
+    if (result.error) {
+      throw new Error(`pg_dump calistirilamadi: ${result.error.message}. Render Shell veya local ortamda PostgreSQL client araclari kurulu olmali.`);
+    }
+    if (result.status !== 0) {
+      throw new Error(`pg_dump failed with exit code ${result.status}.`);
     }
     
   } else {

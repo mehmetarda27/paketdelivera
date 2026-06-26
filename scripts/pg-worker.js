@@ -11,7 +11,22 @@ const redisUrl = process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL || "";
 
 let pgPool = null;
 let pgPoolPromise = null;
+let pgTxClient = null;
 let redisClient = null;
+
+function pgSslConfig() {
+  const value = String(process.env.DATABASE_SSL || process.env.PGSSLMODE || "").toLowerCase();
+  if (["0", "false", "disable", "disabled", "off", "no"].includes(value)) {
+    return false;
+  }
+  if (["1", "true", "require", "required", "on", "yes"].includes(value)) {
+    return { rejectUnauthorized: false };
+  }
+  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
+}
 
 async function getPgPool() {
   if (pgPoolPromise) return pgPoolPromise;
@@ -22,9 +37,10 @@ async function getPgPool() {
     }
     const pool = new Pool({
       connectionString: pgUrl,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      ssl: pgSslConfig(),
+      max: Math.max(1, Number(process.env.PGPOOL_MAX || process.env.DATABASE_POOL_MAX || 5)),
+      idleTimeoutMillis: Math.max(1000, Number(process.env.PGPOOL_IDLE_TIMEOUT_MS || 30000)),
+      connectionTimeoutMillis: Math.max(1000, Number(process.env.PGPOOL_CONNECTION_TIMEOUT_MS || 10000)),
     });
 
     // Run initial schema setups (like datetime functions)
@@ -158,38 +174,108 @@ function sqliteToPgSql(sql) {
   return result;
 }
 
+function translateSql(sql) {
+  let pgSql = String(sql || "");
+
+  // SQLite-only pragmas are harmless locally but invalid on PostgreSQL.
+  pgSql = pgSql
+    .replace(/^\s*PRAGMA\s+[^;]+;\s*/gim, "")
+    .replace(/\bPRAGMA\s+[^;]+;?/gi, "");
+
+  // INSERT OR IGNORE INTO ... VALUES ... -> PostgreSQL conflict-tolerant insert.
+  pgSql = pgSql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*([\s\S]*?)(;|$)/gi, "INSERT INTO $1 ($2) VALUES $3 ON CONFLICT DO NOTHING$4");
+  pgSql = pgSql.replace(/\bINSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*([\s\S]*?)(;|$)/gi, "INSERT INTO $1 ($2) VALUES $3 ON CONFLICT DO NOTHING$4");
+
+  // Schema compatibility.
+  pgSql = pgSql.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/gi, "SERIAL PRIMARY KEY");
+  pgSql = pgSql.replace(/\bAUTOINCREMENT\b/gi, "");
+
+  // Transaction and date/time helpers used by existing SQLite-flavored queries.
+  pgSql = pgSql
+    .replace(/\bBEGIN\s+IMMEDIATE\b/gi, "BEGIN")
+    .replace(/\bdatetime\(current_timestamp\)/gi, "NOW()")
+    .replace(/\bdatetime\('now'\)/gi, "NOW()")
+    .replace(/\bcurrent_timestamp\b/gi, "NOW()")
+    .replace(/\bdate\('now'\s*,\s*'-6 months'\)/gi, "(CURRENT_DATE - INTERVAL '6 months')");
+
+  return sqliteToPgSql(pgSql).trim();
+}
+
+function normalizeParams(params = []) {
+  return params.map((param) => {
+    if (typeof param === "boolean") {
+      return param ? 1 : 0;
+    }
+    return param;
+  });
+}
+
+async function queryPostgres(sql, params = []) {
+  const pool = await getPgPool();
+  const pgSql = translateSql(sql);
+  if (!pgSql) {
+    return { rows: [], rowCount: 0 };
+  }
+
+  const normalizedParams = normalizeParams(params || []);
+  const upperSql = pgSql.toUpperCase();
+
+  if (upperSql === "BEGIN" || upperSql === "START TRANSACTION") {
+    if (!pgTxClient) {
+      pgTxClient = await pool.connect();
+    }
+    const res = await pgTxClient.query("BEGIN");
+    return { rows: res.rows, rowCount: res.rowCount };
+  }
+
+  if (upperSql === "COMMIT") {
+    if (!pgTxClient) {
+      return { rows: [], rowCount: 0 };
+    }
+    try {
+      const res = await pgTxClient.query("COMMIT");
+      return { rows: res.rows, rowCount: res.rowCount };
+    } finally {
+      pgTxClient.release();
+      pgTxClient = null;
+    }
+  }
+
+  if (upperSql === "ROLLBACK") {
+    if (!pgTxClient) {
+      return { rows: [], rowCount: 0 };
+    }
+    try {
+      const res = await pgTxClient.query("ROLLBACK");
+      return { rows: res.rows, rowCount: res.rowCount };
+    } finally {
+      pgTxClient.release();
+      pgTxClient = null;
+    }
+  }
+
+  const client = pgTxClient || pool;
+  const res = await client.query(pgSql, normalizedParams);
+  return {
+    rows: res.rows,
+    rowCount: res.rowCount,
+  };
+}
+
 async function handleRequest(req) {
   const { type, sql, params, cmd, key, val, ttl } = req;
 
   if (type === "db") {
+    return queryPostgres(sql, params);
+  }
+
+  if (type === "pgPoolStatus") {
     const pool = await getPgPool();
-    
-    // SQLite Compatibility Translation
-    let pgSql = sql;
-    
-    // 1. Convert INSERT OR IGNORE INTO ... VALUES ... (;|\Z)
-    pgSql = pgSql.replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*([\s\S]*?)(;|\Z)/gi, "INSERT INTO $1 ($2) VALUES $3 ON CONFLICT DO NOTHING$4");
-    
-    // 2. Convert autoincrement schema elements
-    pgSql = pgSql.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/gi, "SERIAL PRIMARY KEY");
-    pgSql = pgSql.replace(/\bAUTOINCREMENT\b/gi, "");
-    
-    // 3. Convert BEGIN IMMEDIATE to BEGIN
-    pgSql = pgSql.replace(/\bBEGIN\s+IMMEDIATE\b/gi, "BEGIN");
-    
-    // 4. Map SQLite system functions or constants
-    pgSql = pgSql
-      .replace(/\bdatetime\(current_timestamp\)/gi, "NOW()")
-      .replace(/\bdatetime\('now'\)/gi, "NOW()")
-      .replace(/\bcurrent_timestamp\b/gi, "NOW()");
-
-    // 5. Convert placeholders (?) to Postgres style ($1, $2)
-    pgSql = sqliteToPgSql(pgSql);
-
-    const res = await pool.query(pgSql, params || []);
     return {
-      rows: res.rows,
-      rowCount: res.rowCount,
+      max: pool.options.max,
+      totalCount: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
     };
   }
 

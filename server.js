@@ -20,7 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const uploadsDir = path.resolve(__dirname, "uploads");
+const uploadsDir = path.resolve(process.env.DELIVERA_UPLOAD_DIR || path.join(__dirname, "uploads"));
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
 }
@@ -249,13 +249,21 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const migrationSummary = runMigrations();
 logger.info("Database migrations checked", {
-  database: DB_FILE,
+  database: migrationSummary.database,
+  adapter: migrationSummary.adapter,
   applied: migrationSummary.applied?.length || 0,
   skipped: migrationSummary.skipped?.length || 0,
+  appliedMigrations: migrationSummary.applied || [],
+  skippedMigrations: migrationSummary.skipped || [],
 });
 
 const db = getDb({ filename: DB_FILE });
-const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger });
+const poolStatus = dbFacade.poolStatus();
+logger.info("Database pool status", {
+  database: migrationSummary.database,
+  pool: poolStatus,
+});
+const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger, db, dbClient: dbFacade.clientName() });
 const queueService = createQueueService({ redisUrl: REDIS_URL, logger });
 const sessionRevocationService = createSessionRevocationService({ redisUrl: REDIS_URL, logger });
 const liveStreams = new Map();
@@ -2850,6 +2858,15 @@ function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAG
   return pageMeta(total, pagination);
 }
 
+function restaurantsPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
+  const total = filter.restaurantId ? countTable("restaurants", "id = ?", [filter.restaurantId]) : countTable("restaurants");
+  return pageMeta(total, pagination);
+}
+
+function couriersPagination(pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
+  return pageMeta(countTable("couriers"), pagination);
+}
+
 function normalizePlatformOrderStatus(status) {
   const normalized = trimmed(status) || "pending_approval";
   return PLATFORM_ORDER_STATUSES.has(normalized) ? normalized : "pending_approval";
@@ -3211,6 +3228,13 @@ function pageMeta(total, pagination) {
 }
 
 function databaseSizeBytes() {
+  if (dbFacade.clientName() === "postgres") {
+    try {
+      return Number(db.prepare("SELECT pg_database_size(current_database()) AS size").get()?.size || 0);
+    } catch {
+      return 0;
+    }
+  }
   try {
     return fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0;
   } catch {
@@ -3286,9 +3310,22 @@ function systemStatusPayload() {
     database: {
       ok: dbOk,
       mode: dbFacade.clientName(),
-      file: DB_FILE,
+      file: dbFacade.clientName() === "postgres" ? null : DB_FILE,
       sizeBytes: databaseSizeBytes(),
       postgresUrlConfigured: Boolean(trimmed(process.env.DATABASE_URL || process.env.POSTGRES_URL)),
+      pool: dbFacade.poolStatus(),
+    },
+    migrations: {
+      database: migrationSummary.database,
+      applied: migrationSummary.applied || [],
+      skipped: migrationSummary.skipped || [],
+      totalKnown: migrationSummary.totalKnown,
+      checkedAt: migrationSummary.finishedAt,
+    },
+    uploads: {
+      path: uploadsDir,
+      persistentStorageRecommended: IS_PRODUCTION,
+      note: IS_PRODUCTION ? "Render deploy/restart icin DELIVERA_UPLOAD_DIR kalici disk veya harici storage uzerinde olmali." : "",
     },
     totals: {
       restaurants: tableCountSafe("restaurants"),
@@ -3454,9 +3491,12 @@ function getZones() {
 }
 
 function getRestaurants(filter = {}) {
+  const pagination = filter.pagination || null;
+  const limitSql = pagination ? " LIMIT ? OFFSET ?" : "";
+  const limitParams = pagination ? [clampLimit(pagination.limit), parsePositiveInteger(pagination.offset)] : [];
   const rows = filter.restaurantId
-    ? db.prepare("SELECT * FROM restaurants WHERE id = ? ORDER BY datetime(created_at) DESC").all(filter.restaurantId)
-    : db.prepare("SELECT * FROM restaurants ORDER BY datetime(created_at) DESC").all();
+    ? db.prepare(`SELECT * FROM restaurants WHERE id = ? ORDER BY datetime(created_at) DESC${limitSql}`).all(filter.restaurantId, ...limitParams)
+    : db.prepare(`SELECT * FROM restaurants ORDER BY datetime(created_at) DESC${limitSql}`).all(...limitParams);
 
   return rows.map((row) => ({
     id: row.id,
@@ -3479,8 +3519,11 @@ function getRestaurants(filter = {}) {
   }));
 }
 
-function getCouriers() {
-  return db.prepare("SELECT * FROM couriers ORDER BY datetime(created_at) DESC").all().map((row) => ({
+function getCouriers(filter = {}) {
+  const pagination = filter.pagination || null;
+  const limitSql = pagination ? " LIMIT ? OFFSET ?" : "";
+  const limitParams = pagination ? [clampLimit(pagination.limit), parsePositiveInteger(pagination.offset)] : [];
+  return db.prepare(`SELECT * FROM couriers ORDER BY datetime(created_at) DESC${limitSql}`).all(...limitParams).map((row) => ({
     id: row.id,
     name: row.name,
     zone: row.zone,
@@ -4214,7 +4257,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
 function currentState(filter = {}) {
   return {
     zones: getZones(),
-    restaurants: getRestaurants(filter),
+    restaurants: getRestaurants({ restaurantId: filter.restaurantId }),
     couriers: getCouriers(),
     packages: getPackages(filter),
     platformAccounts: getPlatformAccounts(filter),
@@ -7269,10 +7312,15 @@ function getRestaurantSession(req) {
   return getSessionByToken("restaurant_sessions", "token", getBearerToken(req), RESTAURANT_SESSION_MAX_AGE_MS);
 }
 
-const defaultAdminUsername = trimmed(process.env.DELIVERA_ADMIN_USERNAME || "admin").toLowerCase();
-const defaultAdminPassword = process.env.DELIVERA_ADMIN_PASSWORD || `Adm${crypto.randomBytes(6).toString("hex")}!`;
 const existingAdmin = db.prepare("SELECT id FROM admins LIMIT 1").get();
 if (!existingAdmin) {
+  const configuredAdminUsername = trimmed(process.env.DELIVERA_ADMIN_USERNAME || "admin").toLowerCase();
+  const configuredAdminPassword = process.env.DELIVERA_ADMIN_PASSWORD || "";
+  if (IS_PRODUCTION && !configuredAdminPassword) {
+    throw new Error("DELIVERA_ADMIN_PASSWORD is required to create the first admin in production.");
+  }
+  const defaultAdminUsername = configuredAdminUsername;
+  const defaultAdminPassword = configuredAdminPassword || `Adm${crypto.randomBytes(6).toString("hex")}!`;
   const passwordInfo = hashPassword(defaultAdminPassword);
   db.prepare("INSERT INTO admins (id, username, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)").run(
     uid("adm"),
@@ -7558,7 +7606,12 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
       return;
     }
-    sendJson(res, 200, { ok: true, restaurants: getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant, true)) });
+    const pagination = paginationFromRequest(req, { limit: DEFAULT_PAGE_LIMIT, offset: 0 });
+    sendJson(res, 200, {
+      ok: true,
+      restaurants: getRestaurants({ pagination }).map((restaurant) => sanitizeRestaurant(restaurant, true)),
+      pagination: restaurantsPagination({}, pagination),
+    });
     return;
   }
 
@@ -7598,13 +7651,17 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    const pagination = paginationFromRequest(req, { limit: DEFAULT_PAGE_LIMIT, offset: 0 });
+    const filter = {
+      restaurantId: trimmed(requestUrl.searchParams.get("restaurantId")) || undefined,
+      platform: trimmed(requestUrl.searchParams.get("platform")) || undefined,
+      status: trimmed(requestUrl.searchParams.get("status")) || undefined,
+      pagination,
+    };
     sendJson(res, 200, {
       ok: true,
-      orders: getPackages({
-        restaurantId: trimmed(requestUrl.searchParams.get("restaurantId")) || undefined,
-        platform: trimmed(requestUrl.searchParams.get("platform")) || undefined,
-        status: trimmed(requestUrl.searchParams.get("status")) || undefined,
-      }),
+      orders: getPackages(filter),
+      pagination: packagePagination(filter, pagination),
     });
     return;
   }
@@ -8010,7 +8067,13 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
       return;
     }
-    sendJson(res, 200, { ok: true, orders: getPackages({ restaurantId: session.restaurant_id }) });
+    const pagination = paginationFromRequest(req, { limit: DEFAULT_PAGE_LIMIT, offset: 0 });
+    const filter = { restaurantId: session.restaurant_id, pagination };
+    sendJson(res, 200, {
+      ok: true,
+      orders: getPackages(filter),
+      pagination: packagePagination(filter, pagination),
+    });
     return;
   }
 
@@ -10243,12 +10306,14 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Kurye bulunamadi." });
       return;
     }
-    db.prepare("DELETE FROM courier_sessions WHERE courier_id = ?").run(targetId);
-    db.prepare("UPDATE packages SET assigned_courier_id = NULL, status = 'awaiting_assignment' WHERE assigned_courier_id = ? AND status != 'delivered'").run(targetId);
-    db.prepare("DELETE FROM courier_shifts WHERE courier_id = ?").run(targetId);
-    db.prepare("DELETE FROM courier_shift_plans WHERE courier_id = ?").run(targetId);
-    db.prepare("DELETE FROM cash_reconciliations WHERE courier_id = ?").run(targetId);
-    db.prepare("DELETE FROM couriers WHERE id = ?").run(targetId);
+    dbFacade.transaction((txDb) => {
+      txDb.prepare("DELETE FROM courier_sessions WHERE courier_id = ?").run(targetId);
+      txDb.prepare("UPDATE packages SET assigned_courier_id = NULL, status = 'awaiting_assignment' WHERE assigned_courier_id = ? AND status != 'delivered'").run(targetId);
+      txDb.prepare("DELETE FROM courier_shifts WHERE courier_id = ?").run(targetId);
+      txDb.prepare("DELETE FROM courier_shift_plans WHERE courier_id = ?").run(targetId);
+      txDb.prepare("DELETE FROM cash_reconciliations WHERE courier_id = ?").run(targetId);
+      txDb.prepare("DELETE FROM couriers WHERE id = ?").run(targetId);
+    });
     rebalancePackages();
     writeAuditLog({
       actorRole: "admin",

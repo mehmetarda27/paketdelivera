@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const { DatabaseSync } = require("node:sqlite");
 const { Worker } = require("worker_threads");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -13,7 +12,23 @@ let pgSab = null;
 let pgSabInts = null;
 let pgSabBuffer = null;
 
+function databaseUrl() {
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+}
+
+function isProduction() {
+  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+}
+
+function hasPostgresUrl() {
+  return Boolean(databaseUrl());
+}
+
 function resolveDbFile() {
+  if (clientName() === "postgres") {
+    return "postgresql";
+  }
+
   const configured = process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE;
   if (!configured) {
     return path.join(ROOT, "delivera.sqlite");
@@ -28,7 +43,16 @@ function resolveDbFile() {
 }
 
 function clientName() {
-  return String(process.env.DATABASE_CLIENT || process.env.DB_CLIENT || process.env.DB_ADAPTER || process.env.DATABASE_ADAPTER || "sqlite").toLowerCase();
+  if (hasPostgresUrl()) {
+    return "postgres";
+  }
+
+  if (isProduction()) {
+    throw new Error("DATABASE_URL is required when NODE_ENV=production. SQLite is disabled in production.");
+  }
+
+  const configured = String(process.env.DATABASE_CLIENT || process.env.DB_CLIENT || process.env.DB_ADAPTER || process.env.DATABASE_ADAPTER || "sqlite").toLowerCase();
+  return configured === "postgresql" ? "postgres" : configured;
 }
 
 function adapterName() {
@@ -38,7 +62,7 @@ function adapterName() {
 function getWorker() {
   if (pgWorker) return pgWorker;
 
-  const hasPostgres = clientName() === "postgres" || clientName() === "postgresql";
+  const hasPostgres = clientName() === "postgres";
   const hasRedis = Boolean(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL);
   
   if (!hasPostgres && !hasRedis) {
@@ -102,7 +126,7 @@ function sendWorkerRequest(req) {
   worker.postMessage("run");
   
   // Wait for worker response with timeout
-  const WAIT_TIMEOUT_MS = 10000;
+  const WAIT_TIMEOUT_MS = Number(process.env.DELIVERA_DB_WORKER_TIMEOUT_MS || 30000);
   const startTime = Date.now();
   
   while (true) {
@@ -187,6 +211,7 @@ function createSqliteAdapter() {
   return {
     name: "sqlite",
     getDb(options = {}) {
+      const { DatabaseSync } = require("node:sqlite");
       const filename = path.resolve(options.filename || resolveDbFile());
       if (connection && connectionFile === filename) {
         return connection;
@@ -258,7 +283,7 @@ function createPostgresAdapter() {
           const tableName = match[1].toLowerCase();
           const res = sendWorkerRequest({
             type: "db",
-            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?`,
+            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?`,
             params: [tableName]
           });
           return res.rows;
@@ -297,7 +322,7 @@ function createPostgresAdapter() {
           const tableName = match[1].toLowerCase();
           const res = sendWorkerRequest({
             type: "db",
-            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?`,
+            sql: `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?`,
             params: [tableName]
           });
           return res.rows;
@@ -329,7 +354,7 @@ function createAdapter() {
   if (client === "sqlite") {
     return createSqliteAdapter();
   }
-  if (client === "postgres" || client === "postgresql") {
+  if (client === "postgres") {
     return createPostgresAdapter();
   }
   throw new Error(`DATABASE_CLIENT '${client}' desteklenmiyor. Gecerli degerler: sqlite, postgres.`);
@@ -364,6 +389,29 @@ function transaction(callback) {
   return adapter().transaction(callback);
 }
 
+function poolStatus() {
+  if (clientName() !== "postgres") {
+    return {
+      adapter: "sqlite",
+      enabled: false,
+    };
+  }
+
+  try {
+    return {
+      adapter: "postgres",
+      enabled: true,
+      ...sendWorkerRequest({ type: "pgPoolStatus" }),
+    };
+  } catch (error) {
+    return {
+      adapter: "postgres",
+      enabled: true,
+      error: error.message,
+    };
+  }
+}
+
 function close() {
   if (connection) {
     connection.close();
@@ -387,6 +435,7 @@ module.exports = {
   close,
   get,
   getDb,
+  poolStatus,
   resolveDbFile,
   run,
   transaction,

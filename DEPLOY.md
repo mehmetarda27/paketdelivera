@@ -18,11 +18,31 @@ Projeyi sunucuya kopyala, sonra `.env.example` dosyasini `.env` olarak duzenle.
 
 Onemli alanlar:
 
+- `NODE_ENV=production`
+- `DATABASE_URL=Render Internal Database URL`
 - `PUBLIC_BASE_URL=https://app.deliveraexpress.com`
+- `PORT=3000` veya Render'in verdigi `PORT`
 - `TRUST_PROXY=true`
 - `FORCE_HTTPS=true`
 - `DELIVERA_ADMIN_USERNAME`
 - `DELIVERA_ADMIN_PASSWORD`
+- `PGPOOL_MAX=5`
+- `DELIVERA_UPLOAD_DIR=/var/data/uploads` veya harici storage path'i
+
+Production'da SQLite kullanilmaz. `NODE_ENV=production` iken `DATABASE_URL` yoksa uygulama baslamaz.
+
+## 2.1 Render PostgreSQL Kurulumu
+
+1. Render Dashboard'da PostgreSQL database olustur.
+2. Web Service > Environment alanina `DATABASE_URL` olarak Render'in Internal Database URL degerini ekle.
+3. `NODE_ENV=production`, `DELIVERA_ADMIN_USERNAME`, `DELIVERA_ADMIN_PASSWORD`, `PUBLIC_BASE_URL`, `PORT` degerlerini ekle.
+4. Render Start Command `npm start` kalabilir.
+5. Deploy sonrasi loglarda su alanlari kontrol edilir:
+   - `database: "postgresql"`
+   - `Database pool status`
+   - `Database migrations checked`
+6. Shell veya one-off job ile `npm run db:migrate` calistir; ikinci calismada `applied: []` gorulmeli.
+7. `/health` yanitinda `database.mode: "postgres"`, pool bilgisi, migration ozeti ve uptime gorulmeli.
 
 ## 3. PM2 Ile Calistirma
 
@@ -87,12 +107,13 @@ Canli musteriden once asagidaki maddeler tek tek dogrulanmali:
 - `npm run db:migrate` iki kez calisiyor; ikinci calismada `applied: []` donuyor.
 - `node smoke-test.js` temp SQLite ile basarili oluyor.
 - `node scripts/load-test.js` canli DB'ye yazmadan temp SQLite ile calisiyor.
-- `npm run db:backup` sonrasi backup dosyasi farkli bir lokasyona kopyalaniyor.
+- `npm run db:backup` sonrasi PostgreSQL backup dosyasi farkli bir lokasyona kopyalaniyor.
 - Restore islemi staging veya test kopyasinda prova edildi; canli DB uzerine otomatik yazmiyor.
 - PM2/systemd restart sonrasi `/health` ve `/metrics` tekrar ayaga kalkiyor.
 - Nginx log rotate ve uygulama `logs/` rotasyonu ayarli.
 - Admin/restoran/kurye loginleri ve platform webhook secret kontrolleri elle dogrulandi.
-- Acil rollback icin son calisan paket, son SQLite backup ve deploy komutu kayitli.
+- Acil rollback icin son calisan paket, son PostgreSQL backup ve deploy komutu kayitli.
+- Upload kullaniliyorsa `DELIVERA_UPLOAD_DIR` Render persistent disk veya harici object storage uzerinde.
 
 ## 6.2 Ilk Restoran / Kurye Kurulum Akisi
 
@@ -108,14 +129,14 @@ Canli musteriden once asagidaki maddeler tek tek dogrulanmali:
 
 - Gun basinda `/health` ve `/metrics` cevaplari kontrol edilir.
 - Admin panelinde aktif kurye, atama bekleyen ve teslimattaki siparis sayilari incelenir.
-- `npm run db:backup` ile gunluk SQLite backup alinir ve uygulama disi lokasyona kopyalanir.
+- `npm run db:backup` ile gunluk PostgreSQL backup alinir ve uygulama disi lokasyona kopyalanir.
 - Webhook loglarinda 401/403/5xx artisi var mi kontrol edilir.
 - Atama bekleyen paketler ve busy/offline kurye oranlari izlenir.
 - Gun sonunda kurye kapanis, nakit mutabakat ve teslim edilemeyen paketler kontrol edilir.
 
 ## 6.4 Ilk Hafta Canli Izleme
 
-- Her gun p95 response time, 5xx sayisi ve SQLite dosya buyume hizi kaydedilir.
+- Her gun p95 response time, 5xx sayisi ve PostgreSQL database boyutu kaydedilir.
 - Ilk 100 gercek sipariste duplicate/idempotency ve restoran izolasyonu elle spot-check edilir.
 - Kurye tek aktif paket kuralinin ihlal edilmedigi admin raporundan kontrol edilir.
 - Platform callback retry/DLQ planinda kalan isler icin hata listesi tutulur.
@@ -129,20 +150,21 @@ Canliya almadan once ve her migration oncesi:
 npm run db:backup
 ```
 
-Restore varsayilan olarak mevcut database'in ustune yazmaz:
+PostgreSQL backup `pg_dump --format=custom` ile `backups/delivera-postgresql-*.dump` olarak uretilir. Restore islemi mutlaka staging kopyasinda prova edilir:
 
 ```bash
-DELIVERA_RESTORE_OVERWRITE=1 npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite
+pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$DATABASE_URL" backups/delivera-postgresql-YYYY-MM-DD.dump
 ```
 
-Staging restore provasi:
+SQLite restore scriptleri local development ve eski backup dosyalari icin korunur; production ana kaynak PostgreSQL'dir.
+
+PostgreSQL staging restore provasi:
 
 1. Canli DB'den `npm run db:backup` ile backup al.
 2. Backup dosyasini uygulama sunucusu disinda bir lokasyona kopyala: object storage, farkli disk veya yedek sunucu.
-3. Staging ortaminda bos bir SQLite hedefi ayarla: `DATABASE_PATH=/var/staging/delivera-restore.sqlite`.
-4. Once overwrite korumasini dogrula: `npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite` komutu mevcut DB varsa hata vermeli.
-5. Sonra sadece staging icin `DELIVERA_RESTORE_OVERWRITE=1 npm run db:restore -- backups/delivera-YYYY-MM-DD.sqlite` calistir.
-6. `npm run db:migrate`, `/health`, `/metrics` ve admin login smoke kontrolunu yap.
+3. Staging PostgreSQL database olustur ve `DATABASE_URL` degerini staging DB'ye cevir.
+4. `pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$DATABASE_URL" <backup>` calistir.
+5. `npm run db:migrate`, `/health`, `/metrics` ve admin login smoke kontrolunu yap.
 
 Cron onerisi:
 
@@ -160,7 +182,8 @@ Backup dosyalari ayni disk uzerinde tek kopya olarak birakilmamali; gunluk kopya
 - Production verisi silmez.
 - Eksik tablo/kolon/index ekler.
 - Ayni migration ikinci kez uygulanmaz.
-- Runtime bugun SQLite kalir; PostgreSQL adapter sonraki kontrollu refactor adimidir.
+- Destructive SQL `DELIVERA_ALLOW_DESTRUCTIVE_MIGRATION=1` olmadan calismaz.
+- PostgreSQL migration oncesi backup alinmasi log uyarisi olarak hatirlatilir.
 
 ## 9. Metrics
 
@@ -183,7 +206,7 @@ Canli izleme icin onerilen minimum alarm seti:
 - `/metrics` icinde `delivera_up 0` gorulurse critical.
 - 5 dakika pencerede `delivera_errors_total` artis hizi beklenenin ustundeyse warning.
 - P95 response time 2 saniyeyi 10 dakika asarsa warning.
-- SQLite dosya boyutu beklenmedik sekilde hizli buyurse warning.
+- PostgreSQL database boyutu veya pool waiting count beklenmedik sekilde artarsa warning.
 - `queueService` DLQ veya init error uretirse warning.
 - Disk doluluk yuzdesi 80 ustu warning, 90 ustu critical.
 
@@ -201,16 +224,16 @@ Worker ayri process olarak izlenmeli. `webhook.callback.retry` maksimum 5 deneme
 
 ## 10. Load Smoke
 
-`node scripts/load-test.js` varsayilan olarak production DB'ye yazmaz; temp SQLite dosyasi olusturur ve test sonunda temizler. Hafif smoke varsayilani:
+`npm run load:seed` ve `npm run load:test` `DATABASE_URL` varsa PostgreSQL uzerinde `load_` prefix'li idempotent test verisiyle calisir; mevcut gercek veriyi silmez. Production'da bilincli calistirmak icin `DELIVERA_ALLOW_PRODUCTION_LOAD_SEED=1` gerekir. Hafif smoke varsayilani:
 
-- 100 restoran
-- 120 kurye
+- 50 restoran
+- 100 kurye
 - 300 paket
 - concurrency 5 ve 10
 
 ## 11. Docker Compose Hazirligi
 
-`docker-compose.yml` app, Redis ve Postgres servislerini birlikte tanimlar. Runtime bugun SQLite uzerinde kalir; Postgres ve Redis servisleri adapter refactor sonrasi kullanima alinacak sekilde hazirdir.
+`docker-compose.yml` app, Redis ve Postgres servislerini birlikte tanimlar. `DATABASE_URL` verildiginde app PostgreSQL kullanir; `DATABASE_PATH` sadece local fallback icindir.
 
 ```bash
 docker compose up -d --build
@@ -223,6 +246,11 @@ docker compose logs -f app
 - Diger platformlar icin opsiyonel verify URL env degiskeni girilebilir.
 - Verify endpoint verilmemisse hesap `pending` kalir, ilk basarili webhook geldigi anda `verified` olur.
 
-## 13. Postgres Notu
+## 13. Veri Kaybi Yasamamak Icin
 
-Bu turda runtime'i bozmayalim diye uygulama cekirdegi SQLite uzerinde birakildi. Bunun ustune deployment, refresh token, parola reset ve reverse proxy/HTTPS paketi yerlestirildi. Postgres'e tam gecis, tek dosyadaki senkron SQL katmani async adapter'a tasinacagi icin ayri ve kontrollu bir refactor gerektirir.
+- Production ana kaynak Render PostgreSQL'dir; SQLite production'da kullanilmaz.
+- Her migration ve deploy oncesi `npm run db:backup` calistir.
+- Backup dosyasini Render disinda sakla ve staging restore provasi yap.
+- `schema_migrations` tablosunu silme; migrationlar applied/skipped olarak izlenir.
+- `DELIVERA_UPLOAD_DIR` Render persistent disk veya object storage uzerinde olmali. Ephemeral `/app/uploads` deploy/restart sonrasi kaybolabilir.
+- `DELIVERA_ADMIN_PASSWORD`, platform secretlari ve `DATABASE_URL` sadece Render Environment/secret manager'da saklanmali.

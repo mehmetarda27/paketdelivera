@@ -3,27 +3,27 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { DatabaseSync } = require("node:sqlite");
 
 try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 } catch {}
 
 const ROOT = path.resolve(__dirname, "..");
-const GENERATED_TEMP_LOAD_DB = !process.env.DELIVERA_LOAD_DB_FILE;
+const USE_POSTGRES = Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+const GENERATED_TEMP_LOAD_DB = !USE_POSTGRES && !process.env.DELIVERA_LOAD_DB_FILE;
 const DB_FILE = path.resolve(process.env.DELIVERA_LOAD_DB_FILE || path.join(os.tmpdir(), `delivera-load-${process.pid}-${Date.now()}.sqlite`));
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
 const PORT = Number(process.env.DELIVERA_LOAD_SEED_PORT || 3321);
-const RESTAURANT_COUNT = Number(process.env.LOAD_RESTAURANTS || 100);
-const COURIER_COUNT = Number(process.env.LOAD_COURIERS || 120);
+const RESTAURANT_COUNT = Number(process.env.LOAD_RESTAURANTS || 50);
+const COURIER_COUNT = Number(process.env.LOAD_COURIERS || 100);
 const PACKAGE_COUNT = Number(process.env.LOAD_PACKAGES || 300);
 const RESTAURANT_PASSWORD = process.env.LOAD_RESTAURANT_PASSWORD || "LoadRest123!";
 const COURIER_PASSWORD = process.env.LOAD_COURIER_PASSWORD || "LoadCourier123!";
 const ZONES = ["Akdeniz", "Yenisehir", "Mezitli", "Toroslar", "Tarsus", "Erdemli"];
 const PLATFORMS = ["Yemeksepeti", "Trendyol Yemek", "Getir Yemek", "Migros Yemek", "POS"];
 
-if (NODE_ENV === "production" && !GENERATED_TEMP_LOAD_DB && process.env.DELIVERA_ALLOW_PRODUCTION_LOAD_SEED !== "1") {
-  throw new Error("Production ortaminda load seed sadece temp SQLite ile calisir. DELIVERA_LOAD_DB_FILE kullanmak icin acik onay gerekir.");
+if (NODE_ENV === "production" && process.env.DELIVERA_ALLOW_PRODUCTION_LOAD_SEED !== "1") {
+  throw new Error("Production ortaminda load seed icin DELIVERA_ALLOW_PRODUCTION_LOAD_SEED=1 gerekir. Script veri silmez, sadece load_ prefix'li test verisi ekler.");
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
@@ -59,6 +59,12 @@ function waitForServer(baseUrl, timeoutMs = 15000) {
 }
 
 async function ensureSchema() {
+  if (USE_POSTGRES) {
+    const { runMigrations } = require("./migrate");
+    runMigrations();
+    return;
+  }
+
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const server = spawn(process.execPath, ["server.js"], {
     cwd: ROOT,
@@ -76,20 +82,49 @@ async function ensureSchema() {
   try {
     await waitForServer(`http://127.0.0.1:${PORT}`);
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 }
 
+function stopChild(child) {
+  return new Promise((resolve) => {
+    if (!child || child.killed) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+      resolve();
+    }, 3000);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      clearTimeout(timeout);
+      resolve();
+    }
+  });
+}
+
 function seedLoadData() {
-  const db = new DatabaseSync(DB_FILE);
+  const dbFacade = require("../db");
+  const db = dbFacade.getDb({ filename: DB_FILE });
   const restaurantPassword = hashPassword(RESTAURANT_PASSWORD, "load_restaurant_salt");
   const courierPassword = hashPassword(COURIER_PASSWORD, "load_courier_salt");
   const startedAt = Date.now();
 
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA synchronous = NORMAL");
-  db.exec("BEGIN IMMEDIATE");
   try {
+    if (!USE_POSTGRES) {
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA synchronous = NORMAL");
+    }
+    db.exec("BEGIN IMMEDIATE");
+
     const restaurantInsert = db.prepare(`
       INSERT OR IGNORE INTO restaurants (
         id, name, zone, x, y, username, password_hash, password_salt, platforms_json, api_key, webhook_secret, created_at
@@ -265,7 +300,7 @@ function seedLoadData() {
     db.exec("ROLLBACK");
     throw error;
   } finally {
-    db.close();
+    dbFacade.close();
   }
 
   return {
@@ -295,6 +330,7 @@ if (require.main === module) {
 module.exports = {
   DB_FILE,
   GENERATED_TEMP_LOAD_DB,
+  USE_POSTGRES,
   RESTAURANT_PASSWORD,
   COURIER_PASSWORD,
   ensureSchema,

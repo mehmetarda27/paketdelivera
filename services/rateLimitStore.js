@@ -113,14 +113,65 @@ class RedisRateLimitStore {
   }
 }
 
-function createRateLimitStore({ redisUrl, logger } = {}) {
+class DatabaseRateLimitStore {
+  constructor(db, logger) {
+    this.name = "database";
+    this.db = db;
+    this.logger = logger;
+    this.memoryFallback = new MemoryRateLimitStore();
+  }
+
+  async increment(key, rule, now = Date.now()) {
+    const startedAt = new Date(now).toISOString();
+    const expiresAt = new Date(now + rule.windowMs).toISOString();
+    try {
+      const row = this.db.prepare(`
+        INSERT INTO rate_limit_buckets (key, count, started_at, expires_at)
+        VALUES (?, 1, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          count = CASE WHEN rate_limit_buckets.expires_at <= ? THEN 1 ELSE rate_limit_buckets.count + 1 END,
+          started_at = CASE WHEN rate_limit_buckets.expires_at <= ? THEN ? ELSE rate_limit_buckets.started_at END,
+          expires_at = CASE WHEN rate_limit_buckets.expires_at <= ? THEN ? ELSE rate_limit_buckets.expires_at END
+        RETURNING count, started_at, expires_at
+      `).get(key, startedAt, expiresAt, startedAt, startedAt, startedAt, startedAt, expiresAt);
+
+      const count = Number(row?.count || 0);
+      if (count > rule.limit) {
+        const retryAfterMs = Math.max(1000, new Date(row.expires_at).getTime() - now);
+        return {
+          limited: true,
+          retryAfter: Math.max(1, Math.ceil(retryAfterMs / 1000)),
+        };
+      }
+      return { limited: false, retryAfter: null };
+    } catch (error) {
+      this.logger?.warn?.("Database rate-limit store failed; using memory fallback", { error: error.message });
+      return this.memoryFallback.increment(key, rule, now);
+    }
+  }
+
+  health() {
+    return {
+      mode: "database",
+      ready: true,
+      fallback: false,
+      memoryFallbackBuckets: this.memoryFallback.buckets.size,
+    };
+  }
+}
+
+function createRateLimitStore({ redisUrl, logger, db, dbClient } = {}) {
   if (redisUrl) {
     return new RedisRateLimitStore(redisUrl, logger);
+  }
+  if (db && dbClient === "postgres") {
+    return new DatabaseRateLimitStore(db, logger);
   }
   return new MemoryRateLimitStore();
 }
 
 module.exports = {
+  DatabaseRateLimitStore,
   createRateLimitStore,
   MemoryRateLimitStore,
   RedisRateLimitStore,

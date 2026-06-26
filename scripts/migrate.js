@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { getDb, close, adapterName, resolveDbFile } = require("../db");
+const { getDb, close, adapterName, resolveDbFile, transaction } = require("../db");
 
 try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
@@ -8,6 +8,7 @@ try {
 
 const ROOT = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(ROOT, "migrations");
+const DESTRUCTIVE_SQL_PATTERN = /\b(DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE\s+TABLE|DELETE\s+FROM\s+\w+\s*(;|$)|ALTER\s+TABLE\s+\w+\s+DROP\s+COLUMN)\b/i;
 
 function ensureMigrationTable(db) {
   db.exec(`
@@ -32,6 +33,15 @@ function migrationFiles() {
     .filter((file) => /^\d+_.+\.js$/.test(file))
     .sort((left, right) => left.localeCompare(right))
     .map((file) => path.join(MIGRATIONS_DIR, file));
+}
+
+function assertSafeMigration(fileName, content) {
+  if (process.env.DELIVERA_ALLOW_DESTRUCTIVE_MIGRATION === "1") {
+    return;
+  }
+  if (DESTRUCTIVE_SQL_PATTERN.test(content)) {
+    throw new Error(`${fileName} destructive SQL iceriyor. Canli veri guvenligi icin DELIVERA_ALLOW_DESTRUCTIVE_MIGRATION=1 olmadan calistirilmaz.`);
+  }
 }
 
 function columnExists(db, tableName, columnName) {
@@ -67,6 +77,7 @@ function runMigrations() {
     const fileName = path.basename(filePath);
     const id = fileName.replace(/\.js$/, "");
     const content = fs.readFileSync(filePath, "utf8");
+    assertSafeMigration(fileName, content);
     const fileChecksum = checksum(content);
     const existing = db.prepare("SELECT * FROM schema_migrations WHERE id = ?").get(id);
 
@@ -80,19 +91,20 @@ function runMigrations() {
       throw new Error(`${fileName} migration dosyasi up({ db, helpers }) export etmeli.`);
     }
 
-    db.exec("BEGIN IMMEDIATE");
     try {
-      migration.up({ db, helpers, adapter: adapterName() });
-      db.prepare(`
-        INSERT INTO schema_migrations (id, name, checksum, applied_at)
-        VALUES (?, ?, ?, ?)
-      `).run(id, migration.name || id, fileChecksum, new Date().toISOString());
-      db.exec("COMMIT");
+      if (adapterName() === "postgres" && process.env.DELIVERA_SKIP_MIGRATION_BACKUP_WARNING !== "1") {
+        console.warn(`Migration uygulanmadan once PostgreSQL backup alinmis olmalidir: ${id}`);
+      }
+      transaction((txDb) => {
+        const migrationDb = txDb || db;
+        migration.up({ db: migrationDb, helpers, adapter: adapterName() });
+        migrationDb.prepare(`
+          INSERT INTO schema_migrations (id, name, checksum, applied_at)
+          VALUES (?, ?, ?, ?)
+        `).run(id, migration.name || id, fileChecksum, new Date().toISOString());
+      });
       applied.push({ id, name: migration.name || id });
     } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {}
       throw error;
     }
   });
@@ -100,7 +112,7 @@ function runMigrations() {
   return {
     ok: true,
     adapter: adapterName(),
-    database: resolveDbFile(),
+    database: adapterName() === "postgres" ? "postgresql" : resolveDbFile(),
     migrationsDir: MIGRATIONS_DIR,
     applied,
     skipped,

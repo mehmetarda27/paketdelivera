@@ -6,7 +6,7 @@ Bu plan mevcut calisan SQLite runtime'i ve `.env` dosyalarini bozmadan productio
 
 Durum: baslatildi.
 
-- PostgreSQL: `docker-compose.yml` icinde servis ve `deploy/postgres/init` altyapisi hazir. Runtime henuz SQLite uzerinde kalir.
+- PostgreSQL: Production runtime artik `DATABASE_URL` varsa PostgreSQL kullanir. SQLite yalnizca local development fallback'tir.
 - DB facade: `db/index.js` merkezi SQLite baglantisini ve `getDb/run/get/all/transaction/close` yardimcilarini saglar. PostgreSQL adapter sonraki refactor icin planli kalir.
 - Migration runner: `npm run db:migrate` versiyonlu `migrations/` dosyalarini `schema_migrations` tablosuna kaydederek bir kez uygular.
 - Pagination: admin/restoran/kurye bootstrap paket listeleri `limit`, `cursor`, `nextCursor`, `hasMore`, `total` metadata'si ile sinirlanir. Varsayilan limit 100, maksimum 200.
@@ -54,7 +54,7 @@ Sıradaki güvenli refactorlar:
 
 ## PostgreSQL Gecis Hazirligi
 
-Runtime varsayilan olarak `DATABASE_CLIENT=sqlite` kalir. `db/index.js` artik `DATABASE_CLIENT=sqlite|postgres` secimini tanir; SQLite adapter aktif kullanilir, PostgreSQL adapter ise dependency ve guard seviyesinde hazirdir. `DATABASE_CLIENT=postgres` bugun canli runtime'a alinmaz, cunku server tarafinda cok sayida senkron `node:sqlite` sorgusu kontrollu async adapter refactor'u bekler.
+Bu bolum eski gecis planindan kalmistir. Guncel production davranisi: `DATABASE_URL` varsa PostgreSQL otomatik secilir; `NODE_ENV=production` ortaminda `DATABASE_URL` yoksa uygulama baslamaz. `DB_PATH` ve SQLite sadece local development fallback'tir.
 
 Gecis adimlari:
 
@@ -64,7 +64,7 @@ Gecis adimlari:
 4. Import'u staging Postgres uzerinde yap; `platform_orders` unique key, session tablolar, `webhook_logs` retry kolonlari ve audit loglar sayimla dogrulanir.
 5. Shadow validation: uygulama SQLite'tan okumaya devam ederken staging araclari ayni kritik okumalari Postgres kopyasinda calistirir. Sayimlar, son 100 paket, platform order duplicate davranisi, aktif session sayilari ve admin performance payload'i karsilastirilir.
 6. Cutover sadece bakim penceresinde yapilir: yeni backup, son delta export/import, `DATABASE_CLIENT=postgres` icin ayri branch, smoke test, load smoke, elle admin/restoran/kurye kontrolu.
-7. Rollback: uygulama config'i `DATABASE_CLIENT=sqlite` degerine dondurulur, son bilinen iyi SQLite backup restore edilmeden once mevcut dosya kopyalanir. PostgreSQL'e yazilan cutover verileri reconciliation raporuna alinmadan silinmez.
+7. Rollback: son iyi deploy image/commit'e donulur ve PostgreSQL backup staging'de restore edilerek dogrulanir. Production verisi silinmeden once reconciliation raporu alinmalidir.
 
 SQLite export:
 
@@ -86,7 +86,7 @@ Shadow read:
 
 Rollback:
 
-- Uygulama `DATABASE_CLIENT=sqlite` ile yeniden baslatilir.
+- Uygulama son iyi deploy config'iyle yeniden baslatilir; production ana kaynak PostgreSQL kalir.
 - Son iyi SQLite backup korunur; restore otomatik overwrite olmadan prova edilir.
 - Cutover sirasinda olusan yeni siparisler icin manuel reconciliation listesi hazirlanir.
 
@@ -140,7 +140,7 @@ Platform log ekran planı:
 Kurulum:
 
 - `.env` dosyasi secret manager veya hosting protected variables ile uretilir; repo icine gercek secret yazilmaz.
-- `NODE_ENV=production`, `PUBLIC_BASE_URL`, `TRUST_PROXY`, `FORCE_HTTPS`, `DELIVERA_CORS_ORIGINS`, `DATABASE_CLIENT=sqlite`, `DATABASE_PATH`, `DELIVERA_BACKUP_DIR`, `LOG_LEVEL` kontrol edilir.
+- `NODE_ENV=production`, `DATABASE_URL`, `PUBLIC_BASE_URL`, `TRUST_PROXY`, `FORCE_HTTPS`, `DELIVERA_CORS_ORIGINS`, `DELIVERA_BACKUP_DIR`, `DELIVERA_UPLOAD_DIR`, `LOG_LEVEL` kontrol edilir.
 - Domain DNS, HTTPS sertifikasi ve reverse proxy tamamlanir.
 - `npm install`, `npm run build`, iki kez `npm run db:migrate`, `node smoke-test.js`, `node scripts/load-test.js` staging veya temp DB ile gecer.
 - Canli DB oncesi `node scripts/backup-sqlite.js` calisir ve backup uygulama disi lokasyona kopyalanir.
