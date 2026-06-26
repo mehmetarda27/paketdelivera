@@ -101,7 +101,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     const adminHeaders = { Authorization: `Bearer ${adminLogin.token}` };
 
-    const restaurantState = await request(baseUrl, "/api/admin/restaurants", {
+    const restaurantState = await request(baseUrl, "/restaurants", {
       method: "POST",
       headers: adminHeaders,
       body: JSON.stringify({
@@ -117,7 +117,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.ok(restaurantState.createdRestaurant?.id);
     assert.ok(readRow(dbFile, "SELECT id FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id));
 
-    const courierState = await request(baseUrl, "/api/admin/couriers", {
+    const courierState = await request(baseUrl, "/couriers", {
       method: "POST",
       headers: adminHeaders,
       body: JSON.stringify({
@@ -173,7 +173,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     const restaurantHeaders = { Authorization: `Bearer ${restaurantLogin.token}` };
 
     const platformOrderId = `PLATFORM-${Date.now()}`;
-    const platformOrderState = await request(baseUrl, "/api/restaurant/platform-orders/manual", {
+    const platformOrderState = await request(baseUrl, "/platform-orders", {
       method: "POST",
       headers: restaurantHeaders,
       body: JSON.stringify({
@@ -195,7 +195,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       readRow(dbFile, "SELECT id FROM platform_orders WHERE platform_order_id = ?", platformOrderId)
     );
 
-    const packageState = await request(baseUrl, "/api/restaurant/packages", {
+    const packageState = await request(baseUrl, "/packages", {
       method: "POST",
       headers: restaurantHeaders,
       body: JSON.stringify({

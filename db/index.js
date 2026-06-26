@@ -17,7 +17,9 @@ function databaseUrl() {
 }
 
 function isProduction() {
-  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  return String(process.env.NODE_ENV || "").toLowerCase() === "production" ||
+    String(process.env.RENDER || "").toLowerCase() === "true" ||
+    ["1", "true", "yes"].includes(String(process.env.DELIVERA_REQUIRE_POSTGRES || "").toLowerCase());
 }
 
 function hasPostgresUrl() {

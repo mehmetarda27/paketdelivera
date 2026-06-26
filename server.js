@@ -2677,6 +2677,77 @@ function logPersistenceEvent(eventName, details = {}) {
   logger.info(eventName, payload);
 }
 
+function compactLogSql(sql) {
+  return String(sql || "").replace(/\s+/g, " ").trim();
+}
+
+function affectedRowCount(result = {}) {
+  return result.rowCount ?? result.changes ?? 0;
+}
+
+function traceCreateEndpoint(eventName, req, pathname, extra = {}) {
+  logger.info(eventName, {
+    requestId: req.requestId,
+    method: req.method,
+    path: pathname,
+    dbClient: dbFacade.clientName(),
+    ...extra,
+  });
+}
+
+function runInsertWithTrace({ sql, params = [], tableName, insertedId, requestId }) {
+  logger.info("BEFORE_INSERT", {
+    requestId,
+    tableName,
+    insertedId,
+    sql: compactLogSql(sql),
+  });
+  const result = db.prepare(sql).run(...params);
+  logger.info("AFTER_INSERT", {
+    requestId,
+    tableName,
+    insertedId,
+    sql: compactLogSql(sql),
+    rowCount: affectedRowCount(result),
+  });
+  return result;
+}
+
+function logAfterCommit(tableName, insertedId, requestId) {
+  logger.info("AFTER_COMMIT", {
+    requestId,
+    tableName,
+    insertedId,
+  });
+}
+
+function selectInsertedRowOrThrow(tableName, insertedId, requestId) {
+  const sql = `SELECT * FROM ${tableName} WHERE id = ?`;
+  const row = db.prepare(sql).get(insertedId);
+  logger.info("AFTER_SELECT", {
+    requestId,
+    tableName,
+    insertedId,
+    sql,
+    rowCount: row ? 1 : 0,
+  });
+  if (!row) {
+    const error = new Error(`${tableName} insert committed but verification SELECT returned empty for id ${insertedId}`);
+    logPersistenceEvent(`${tableName}_select_after_commit_failed`, { tableName, insertedId, requestId, error });
+    throw error;
+  }
+  return row;
+}
+
+function logInsertSkipped(tableName, reason, req, extra = {}) {
+  logger.warn("INSERT_SKIPPED", {
+    requestId: req?.requestId || null,
+    tableName,
+    reason,
+    ...extra,
+  });
+}
+
 function maskRestaurantCreateBody(body = {}) {
   const masked = { ...body };
   for (const key of ["password", "portalPassword"]) {
@@ -2934,6 +3005,14 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   const platform = normalizePlatformInput(order.platform) || order.platform;
   const platformOrderId = trimmed(order.orderId || order.platformOrderId || order.externalOrderNo);
   if (!platform || !platformOrderId || !restaurantId) {
+    logger.warn("INSERT_SKIPPED", {
+      requestId: options.requestId || null,
+      tableName: "platform_orders",
+      reason: "missing_platform_order_identity",
+      platform,
+      platformOrderId,
+      restaurantId,
+    });
     return null;
   }
 
@@ -2963,11 +3042,12 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   }
 
   const id = uid("po");
-  db.prepare(`
+  const insertSql = `
     INSERT INTO platform_orders (
       id, platform, platform_order_id, restaurant_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `;
+  const insertParams = [
     id,
     platform,
     platformOrderId,
@@ -2980,8 +3060,15 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
     normalizePlatformOrderStatus(status),
     json(order.rawPayload || order),
     stamp,
-    stamp
-  );
+    stamp,
+  ];
+  runInsertWithTrace({
+    sql: insertSql,
+    params: insertParams,
+    tableName: "platform_orders",
+    insertedId: id,
+    requestId: options.requestId || null,
+  });
   assertPersistedRecord("platform_orders", id, "platform_order_created", options.requestId || null);
   return id;
 }
@@ -5619,6 +5706,15 @@ function upsertWebhookPackage(order, restaurant) {
   `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "");
 
   if (existing) {
+    logger.warn("INSERT_SKIPPED", {
+      requestId: options.requestId || null,
+      tableName: "platform_orders",
+      reason: "existing_platform_order_updated_instead",
+      existingId: existing.id,
+      platform,
+      platformOrderId,
+      restaurantId,
+    });
     db.prepare(`
       UPDATE packages
       SET source_platform = ?, external_order_no = ?, recipient = ?, phone = ?, address = ?, delivery_address = ?,
@@ -5660,7 +5756,7 @@ function upsertWebhookPackage(order, restaurant) {
   pkg.status = draft.status;
   pkg.assignmentStatus = draft.assignmentStatus;
   pkg.assignmentReason = draft.assignmentReason;
-  createPackageRecord(pkg, "Platform Siparisi");
+  createPackageRecord(pkg, "Platform Siparisi", { requestId: null });
   assertPersistedRecord("packages", pkg.id, "package_created", null);
   updatePackageApiMetadata(pkg.id, order);
   replaceOrderItems(pkg.id, order.products);
@@ -6324,7 +6420,7 @@ function markPlatformAccountVerifiedFromWebhook(accountId, platform) {
   });
 }
 
-function createRestaurantRecord(body) {
+function createRestaurantRecord(body, trace = {}) {
   const restaurant = {
     id: uid("rst"),
     ...validateRestaurantDraft(body),
@@ -6336,17 +6432,24 @@ function createRestaurantRecord(body) {
   const restaurantPasswordInfo = hashPassword(restaurantPassword);
 
   if (db.prepare("SELECT id FROM restaurants WHERE username = ?").get(restaurant.username)) {
+    logger.warn("INSERT_SKIPPED", {
+      requestId: trace.requestId || null,
+      tableName: "restaurants",
+      reason: "username_already_exists",
+      username: restaurant.username,
+    });
     throw validationError("Bu restoran kullanici adi zaten kullaniliyor.");
   }
   assertUniqueRestaurantPlatformIds(restaurant);
 
-  db.prepare(`
+  const insertSql = `
     INSERT INTO restaurants (
       id, name, zone, x, y, username, password_hash, password_salt, platforms_json, api_key, webhook_secret,
       trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, external_restaurant_ids,
       created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `;
+  const insertParams = [
     restaurant.id,
     restaurant.name,
     restaurant.zone,
@@ -6363,8 +6466,15 @@ function createRestaurantRecord(body) {
     restaurant.getirRestaurantId || null,
     restaurant.migrosRestaurantId || null,
     json(restaurant.externalRestaurantIds || []),
-    new Date().toISOString()
-  );
+    new Date().toISOString(),
+  ];
+  runInsertWithTrace({
+    sql: insertSql,
+    params: insertParams,
+    tableName: "restaurants",
+    insertedId: restaurant.id,
+    requestId: trace.requestId || null,
+  });
 
   return {
     restaurant,
@@ -6372,15 +6482,16 @@ function createRestaurantRecord(body) {
   };
 }
 
-function createPackageRecord(pkg, packageType = "Platform Siparisi") {
-  db.prepare(`
+function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {}) {
+  const insertSql = `
     INSERT INTO packages (
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, external_order_no, external_order_id,
       recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, assignment_tried_courier_ids_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `;
+  const insertParams = [
     pkg.id,
     ensureUniqueTrackingNo(pkg.trackingNo),
     pkg.restaurantId,
@@ -6423,8 +6534,15 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi") {
     pkg.lastAssignmentError || null,
     json(normalizeIdList(pkg.assignmentTriedCourierIds || [])),
     pkg.createdAt,
-    pkg.updatedAt || pkg.createdAt
-  );
+    pkg.updatedAt || pkg.createdAt,
+  ];
+  runInsertWithTrace({
+    sql: insertSql,
+    params: insertParams,
+    tableName: "packages",
+    insertedId: pkg.id,
+    requestId: trace.requestId || null,
+  });
 }
 
 function findDuplicatePackage(restaurantId, source, externalOrderId) {
@@ -6766,7 +6884,7 @@ function upsertPlatformPackage(platform, restaurant, payload, options = {}) {
 
     if (!existing) {
       const pkg = validateIntegrationDraft(payload, restaurant);
-      createPackageRecord(pkg, "Platform Siparisi");
+      createPackageRecord(pkg, "Platform Siparisi", { requestId: options.requestId || null });
       assertPersistedRecord("packages", pkg.id, "package_created", options.requestId || null);
       if (normalizeStatus(pkg.status) !== PENDING_APPROVAL_STATUS) {
         scheduleRebalancePackages();
@@ -7416,6 +7534,29 @@ if (!existingAdmin) {
 }
 
 async function handleApi(req, res, pathname) {
+  const originalPathname = pathname;
+  if (req.method === "POST") {
+    const createAliases = {
+      "/restaurants": "/api/admin/restaurants",
+      "/api/restaurants": "/api/admin/restaurants",
+      "/couriers": "/api/admin/couriers",
+      "/api/couriers": "/api/admin/couriers",
+      "/packages": "/api/restaurant/packages",
+      "/api/packages": "/api/restaurant/packages",
+      "/platform-orders": "/api/restaurant/platform-orders/manual",
+      "/api/platform-orders": "/api/restaurant/platform-orders/manual",
+    };
+    if (createAliases[pathname]) {
+      pathname = createAliases[pathname];
+      logger.info("CREATE_ENDPOINT_ALIAS_APPLIED", {
+        requestId: req.requestId,
+        method: req.method,
+        originalPath: originalPathname,
+        routedPath: pathname,
+      });
+    }
+  }
+
   const generalRetry = await applyRateLimit(req, "general", RATE_LIMITS.general);
   if (generalRetry !== null) {
     sendRateLimited(res, generalRetry);
@@ -8756,14 +8897,17 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/platform-orders/manual") {
+    traceCreateEndpoint("ENTER_PLATFORM_ORDER_ENDPOINT", req, pathname, { originalPath: originalPathname });
     const session = getRestaurantSession(req);
     if (!session) {
+      logInsertSkipped("platform_orders", "missing_restaurant_session", req);
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
       return;
     }
     const { json: body } = await readRequestBody(req);
     const restaurant = getRestaurants({ restaurantId: session.restaurant_id })[0];
     if (!restaurant) {
+      logInsertSkipped("platform_orders", "restaurant_not_found", req, { restaurantId: session.restaurant_id });
       sendJson(res, 404, { error: "Restoran bulunamadi." });
       return;
     }
@@ -8792,6 +8936,12 @@ async function handleApi(req, res, pathname) {
       payload.assignmentReason = "Manuel platform siparisi onaylanarak havuza alindi.";
       
       const created = upsertPlatformPackage(platform, restaurant, payload, { requestId: req.requestId });
+      logAfterCommit("platform_orders", platformOrderId, req.requestId);
+      selectInsertedRowOrThrow("platform_orders", platformOrderId, req.requestId);
+      if (created?.id) {
+        logAfterCommit("packages", created.id, req.requestId);
+        selectInsertedRowOrThrow("packages", created.id, req.requestId);
+      }
       sendJson(res, 201, {
         ok: true,
         package: created,
@@ -8801,6 +8951,14 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const result = handleSimplePlatformOrder(order, true, { requestId: req.requestId });
+    if (result.platformOrder?.id) {
+      logAfterCommit("platform_orders", result.platformOrder.id, req.requestId);
+      selectInsertedRowOrThrow("platform_orders", result.platformOrder.id, req.requestId);
+    }
+    if (result.package?.id) {
+      logAfterCommit("packages", result.package.id, req.requestId);
+      selectInsertedRowOrThrow("packages", result.package.id, req.requestId);
+    }
     sendJson(res, 201, {
       ok: true,
       package: result.package,
@@ -8811,14 +8969,17 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/packages") {
+    traceCreateEndpoint("ENTER_PACKAGE_ENDPOINT", req, pathname, { originalPath: originalPathname });
     const session = getRestaurantSession(req);
     if (!session) {
+      logInsertSkipped("packages", "missing_restaurant_session", req);
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
       return;
     }
 
     const retryAfter = await applyRateLimit(req, "integrations", RATE_LIMITS.integrations);
     if (retryAfter !== null) {
+      logInsertSkipped("packages", "rate_limited", req, { retryAfter });
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Paket olusturma limiti asildi." });
       return;
@@ -8826,6 +8987,7 @@ async function handleApi(req, res, pathname) {
 
     const restaurantRow = db.prepare("SELECT * FROM restaurants WHERE id = ?").get(session.restaurant_id);
     if (!restaurantRow) {
+      logInsertSkipped("packages", "restaurant_not_found", req, { restaurantId: session.restaurant_id });
       sendJson(res, 404, { error: "Restoran bulunamadi." });
       return;
     }
@@ -8849,11 +9011,16 @@ async function handleApi(req, res, pathname) {
     const errors = validatePackageDraft(draft);
 
     if (errors.length > 0) {
+      logInsertSkipped("packages", "validation_failed", req, { errors });
       sendJson(res, 400, { error: errors.join(" ") });
       return;
     }
 
     if (draft.restaurantId !== session.restaurant_id) {
+      logInsertSkipped("packages", "restaurant_id_session_mismatch", req, {
+        draftRestaurantId: draft.restaurantId,
+        sessionRestaurantId: session.restaurant_id,
+      });
       sendJson(res, 403, { error: "restaurant_id oturumdaki restoran ile eslesmiyor." });
       return;
     }
@@ -8873,22 +9040,25 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    createPackageRecord(pkg, pkg.packageType);
-    assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
-
-    rebalancePackages();
-    writeAuditLog({
-      actorRole: "restaurant",
-      actorId: session.restaurant_id,
-      action: "package_created_manual",
-      packageId: pkg.id,
-      restaurantId: session.restaurant_id,
-      details: {
-        externalOrderNo: pkg.externalOrderNo,
-        packageType: pkg.packageType,
-        orderAmount: pkg.orderAmount,
-      },
+    dbFacade.transaction(() => {
+      createPackageRecord(pkg, pkg.packageType, { requestId: req.requestId });
+      assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
+      writeAuditLog({
+        actorRole: "restaurant",
+        actorId: session.restaurant_id,
+        action: "package_created_manual",
+        packageId: pkg.id,
+        restaurantId: session.restaurant_id,
+        details: {
+          externalOrderNo: pkg.externalOrderNo,
+          packageType: pkg.packageType,
+          orderAmount: pkg.orderAmount,
+        },
+      });
     });
+    logAfterCommit("packages", pkg.id, req.requestId);
+    selectInsertedRowOrThrow("packages", pkg.id, req.requestId);
+    rebalancePackages();
     broadcastLiveEvent({
       type: "package-created",
       restaurantId: session.restaurant_id,
@@ -8991,7 +9161,7 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    createPackageRecord(pkg, pkg.packageType);
+    createPackageRecord(pkg, pkg.packageType, { requestId: req.requestId });
     assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
     rebalancePackages();
 
@@ -9156,14 +9326,17 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/admin/restaurants") {
+    traceCreateEndpoint("ENTER_RESTAURANT_ENDPOINT", req, pathname, { originalPath: originalPathname });
     const adminSession = getAdminSession(req);
     if (!adminSession) {
+      logInsertSkipped("restaurants", "missing_admin_session", req);
       sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
       return;
     }
 
     const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
+      logInsertSkipped("restaurants", "rate_limited", req, { retryAfter });
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Restoran olusturma limiti asildi." });
       return;
@@ -9180,13 +9353,9 @@ async function handleApi(req, res, pathname) {
     let restaurant;
     let createdRestaurant;
     try {
-      ({ restaurant, createdRestaurant } = dbFacade.transaction(() => {
-        const created = createRestaurantRecord(body);
+      ({ restaurant } = dbFacade.transaction(() => {
+        const created = createRestaurantRecord(body, { requestId: req.requestId });
         assertPersistedRecord("restaurants", created.restaurant.id, "restaurant_created", req.requestId);
-        const persistedRestaurant = getRestaurants({ restaurantId: created.restaurant.id })[0];
-        if (!persistedRestaurant?.id) {
-          throw new Error(`restaurants insert verification SELECT returned empty for id ${created.restaurant.id}`);
-        }
         writeAuditLog({
           actorRole: "admin",
           actorId: adminActorId(adminSession),
@@ -9199,9 +9368,14 @@ async function handleApi(req, res, pathname) {
         });
         return {
           restaurant: created.restaurant,
-          createdRestaurant: persistedRestaurant,
         };
       }));
+      logAfterCommit("restaurants", restaurant.id, req.requestId);
+      selectInsertedRowOrThrow("restaurants", restaurant.id, req.requestId);
+      createdRestaurant = getRestaurants({ restaurantId: restaurant.id })[0];
+      if (!createdRestaurant?.id) {
+        throw new Error(`restaurants insert committed but getRestaurants returned empty for id ${restaurant.id}`);
+      }
       logger.info("restaurant_create_transaction_committed", {
         requestId: req.requestId,
         restaurantId: restaurant.id,
@@ -9238,14 +9412,17 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/admin/couriers") {
+    traceCreateEndpoint("ENTER_COURIER_ENDPOINT", req, pathname, { originalPath: originalPathname });
     const adminSession = getAdminSession(req);
     if (!adminSession) {
+      logInsertSkipped("couriers", "missing_admin_session", req);
       sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
       return;
     }
 
     const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
     if (retryAfter !== null) {
+      logInsertSkipped("couriers", "rate_limited", req, { retryAfter });
       res.setHeader("Retry-After", String(retryAfter));
       sendJson(res, 429, { error: "Kurye olusturma limiti asildi." });
       return;
@@ -9255,6 +9432,7 @@ async function handleApi(req, res, pathname) {
     const { username, password, name, zone, latitude, longitude, available } = validateCourierDraft(body);
 
     if (db.prepare("SELECT id FROM couriers WHERE username = ?").get(username)) {
+      logInsertSkipped("couriers", "username_already_exists", req, { username });
       sendJson(res, 400, { error: "Bu kullanici adi zaten kullaniliyor." });
       return;
     }
@@ -9262,10 +9440,11 @@ async function handleApi(req, res, pathname) {
     const courierId = dbFacade.transaction(() => {
       const passwordInfo = hashPassword(password);
       const id = uid("cr");
-      db.prepare(`
+      const insertSql = `
         INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `;
+      const insertParams = [
         id,
         name,
         zone,
@@ -9276,8 +9455,15 @@ async function handleApi(req, res, pathname) {
         username,
         passwordInfo.hash,
         passwordInfo.salt,
-        nowIso()
-      );
+        nowIso(),
+      ];
+      runInsertWithTrace({
+        sql: insertSql,
+        params: insertParams,
+        tableName: "couriers",
+        insertedId: id,
+        requestId: req.requestId,
+      });
       assertPersistedRecord("couriers", id, "courier_created", req.requestId);
       writeAuditLog({
         actorRole: "admin",
@@ -9290,6 +9476,8 @@ async function handleApi(req, res, pathname) {
       });
       return id;
     });
+    logAfterCommit("couriers", courierId, req.requestId);
+    selectInsertedRowOrThrow("couriers", courierId, req.requestId);
 
     rebalancePackages();
     broadcastLiveEvent({
@@ -9417,7 +9605,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    createPackageRecord(pkg, "Platform Siparisi");
+    createPackageRecord(pkg, "Platform Siparisi", { requestId: req.requestId });
     assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
     upsertPlatformOrderRecord({
       platform: feederDraft.sourcePlatform,
@@ -10814,7 +11002,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname.startsWith("/api/")) {
+    const createEndpointPath = ["/restaurants", "/couriers", "/packages", "/platform-orders"].includes(pathname);
+    if (pathname.startsWith("/api/") || (req.method === "POST" && createEndpointPath)) {
       await handleApi(req, res, pathname);
       return;
     }
