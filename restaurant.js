@@ -13,8 +13,8 @@ const RESTAURANT_WORKSPACE_REFRESH_MS = 12_000;
 
 const restaurantState = {
   data: null,
-  token: localStorage.getItem(RESTAURANT_TOKEN_KEY) || "",
-  refreshToken: localStorage.getItem(RESTAURANT_REFRESH_TOKEN_KEY) || "",
+  token: "",
+  refreshToken: "",
   selectedRestaurantId: "",
   historyRange: "7d",
   historyVisibleCount: 50,
@@ -97,18 +97,13 @@ function safeSetText(element, value) {
 function persistRestaurantAccessInfo(payload = {}) {
   const restaurantId = String(payload.restaurantId || payload.id || "").trim();
   const apiKey = String(payload.apiKey || "").trim();
-
-  if (restaurantId) {
-    localStorage.setItem(RESTAURANT_ID_KEY, restaurantId);
-  }
-  if (apiKey) {
-    localStorage.setItem(RESTAURANT_API_KEY_KEY, apiKey);
-  }
+  restaurantState.storedRestaurantId = restaurantId;
+  restaurantState.storedApiKey = apiKey;
 }
 
 function clearRestaurantAccessInfo() {
-  localStorage.removeItem(RESTAURANT_ID_KEY);
-  localStorage.removeItem(RESTAURANT_API_KEY_KEY);
+  restaurantState.storedRestaurantId = "";
+  restaurantState.storedApiKey = "";
 }
 
 function applyRestaurantAccessFromQuery() {
@@ -121,8 +116,8 @@ function applyRestaurantAccessFromQuery() {
 }
 
 async function tryRestaurantSessionFromStoredAccess() {
-  const restaurantId = localStorage.getItem(RESTAURANT_ID_KEY) || "";
-  const apiKey = localStorage.getItem(RESTAURANT_API_KEY_KEY) || "";
+  const restaurantId = restaurantState.storedRestaurantId || "";
+  const apiKey = restaurantState.storedApiKey || "";
   if (!restaurantId || !apiKey || restaurantState.token) {
     return false;
   }
@@ -145,10 +140,6 @@ async function tryRestaurantSessionFromStoredAccess() {
 function persistRestaurantAuth(auth) {
   restaurantState.token = auth.token;
   restaurantState.refreshToken = auth.refreshToken;
-  localStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
-  localStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
-  sessionStorage.setItem(RESTAURANT_TOKEN_KEY, auth.token);
-  sessionStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, auth.refreshToken);
   const currentRestaurant = auth?.state?.restaurants?.[0];
   if (currentRestaurant) {
     persistRestaurantAccessInfo({
@@ -166,10 +157,6 @@ function clearRestaurantAuth() {
   stopRestaurantWorkspacePolling();
   restaurantState.liveStream?.close?.();
   restaurantState.liveStream = null;
-  localStorage.removeItem(RESTAURANT_TOKEN_KEY);
-  localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
-  sessionStorage.removeItem(RESTAURANT_TOKEN_KEY);
-  sessionStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
   clearRestaurantAccessInfo();
 }
 

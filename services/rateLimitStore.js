@@ -118,7 +118,6 @@ class DatabaseRateLimitStore {
     this.name = "database";
     this.db = db;
     this.logger = logger;
-    this.memoryFallback = new MemoryRateLimitStore();
   }
 
   async increment(key, rule, now = Date.now()) {
@@ -145,8 +144,8 @@ class DatabaseRateLimitStore {
       }
       return { limited: false, retryAfter: null };
     } catch (error) {
-      this.logger?.warn?.("Database rate-limit store failed; using memory fallback", { error: error.message });
-      return this.memoryFallback.increment(key, rule, now);
+      this.logger?.error?.("Database rate-limit store failed", { error });
+      throw error;
     }
   }
 
@@ -155,17 +154,16 @@ class DatabaseRateLimitStore {
       mode: "database",
       ready: true,
       fallback: false,
-      memoryFallbackBuckets: this.memoryFallback.buckets.size,
     };
   }
 }
 
 function createRateLimitStore({ redisUrl, logger, db, dbClient } = {}) {
-  if (redisUrl) {
-    return new RedisRateLimitStore(redisUrl, logger);
-  }
   if (db && dbClient === "postgres") {
     return new DatabaseRateLimitStore(db, logger);
+  }
+  if (redisUrl) {
+    return new RedisRateLimitStore(redisUrl, logger);
   }
   return new MemoryRateLimitStore();
 }

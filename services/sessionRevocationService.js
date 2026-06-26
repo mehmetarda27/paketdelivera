@@ -1,9 +1,11 @@
 const { createClient } = require("redis");
 
 class SessionRevocationService {
-  constructor({ redisUrl, logger } = {}) {
+  constructor({ redisUrl, logger, db, dbClient } = {}) {
     this.redisUrl = redisUrl;
     this.logger = logger;
+    this.db = db;
+    this.dbClient = dbClient;
     this.client = null;
     this.ready = false;
     this.connecting = null;
@@ -54,6 +56,17 @@ class SessionRevocationService {
       return true;
     }
 
+    if (this.db && this.dbClient === "postgres") {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + ttl * 1000).toISOString();
+      this.db.prepare(`
+        INSERT INTO token_revocations (token_hash, expires_at, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(token_hash) DO UPDATE SET expires_at = excluded.expires_at
+      `).run(safeHash, expiresAt, now.toISOString());
+      return true;
+    }
+
     this.memoryRevoked.set(safeHash, Date.now() + ttl * 1000);
     return true;
   }
@@ -67,6 +80,12 @@ class SessionRevocationService {
     const client = await this.ensureClient();
     if (client) {
       return Boolean(await client.exists(`delivera:revoked:${safeHash}`));
+    }
+
+    if (this.db && this.dbClient === "postgres") {
+      const now = new Date().toISOString();
+      this.db.prepare("DELETE FROM token_revocations WHERE expires_at <= ?").run(now);
+      return Boolean(this.db.prepare("SELECT token_hash FROM token_revocations WHERE token_hash = ? AND expires_at > ?").get(safeHash, now));
     }
 
     const expiresAt = this.memoryRevoked.get(safeHash);
@@ -124,11 +143,12 @@ class SessionRevocationService {
   }
 
   health() {
+    const databaseBacked = Boolean(this.db && this.dbClient === "postgres");
     return {
-      mode: this.redisUrl ? "redis" : "memory",
-      ready: this.redisUrl ? this.ready : true,
-      fallback: Boolean(this.redisUrl && !this.ready),
-      revokedMemoryCount: this.memoryRevoked.size,
+      mode: this.redisUrl && this.ready ? "redis" : (databaseBacked ? "database" : "memory"),
+      ready: this.redisUrl ? this.ready || databaseBacked : true,
+      fallback: Boolean(this.redisUrl && !this.ready && !databaseBacked),
+      revokedMemoryCount: databaseBacked ? 0 : this.memoryRevoked.size,
     };
   }
 }

@@ -46,21 +46,6 @@ const COURIER_STATUS_LABELS = {
 let toastHost = null;
 let audioContextRef = null;
 const signalCooldowns = new Map();
-const RESTAURANT_ID_STORAGE_KEY = "deliveraRestaurantId";
-const RESTAURANT_API_KEY_STORAGE_KEY = "deliveraRestaurantApiKey";
-
-function workspaceMemoryKey(suffix) {
-  const bodyClass = document.body?.classList || { contains: () => false };
-  const panelName = bodyClass.contains("theme-admin")
-    ? "admin"
-    : bodyClass.contains("theme-restaurant")
-      ? "restaurant"
-      : bodyClass.contains("theme-courier")
-        ? "courier"
-        : window.location.pathname.replace(/[^a-z0-9]+/gi, "-") || "workspace";
-  return `deliveraWorkspace:${panelName}:${suffix}`;
-}
-
 function setActiveWorkspaceSection(sectionId, options = {}) {
   const target = document.getElementById(sectionId);
   if (!target) {
@@ -83,22 +68,13 @@ function setActiveWorkspaceSection(sectionId, options = {}) {
     section.classList.toggle("active-section", section.id === sectionId);
   });
 
-  if (options.persist !== false) {
-    localStorage.setItem(workspaceMemoryKey("activeSection"), sectionId);
-  }
   return true;
 }
 
 function restoreWorkspaceScroll() {
-  const rawPosition = localStorage.getItem(workspaceMemoryKey("scrollY"));
-  const scrollY = Number(rawPosition);
-  if (Number.isFinite(scrollY) && scrollY >= 0) {
-    window.scrollTo(0, scrollY);
-  }
 }
 
 function rememberWorkspaceScroll() {
-  localStorage.setItem(workspaceMemoryKey("scrollY"), String(Math.max(0, Math.round(window.scrollY || 0))));
 }
 
 function renderIfChanged(target, signature, renderCallback) {
@@ -142,17 +118,6 @@ async function api(path, options = {}) {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     };
-
-    if (requestPath.startsWith("/api/restaurant")) {
-      const restaurantId = localStorage.getItem(RESTAURANT_ID_STORAGE_KEY) || "";
-      const apiKey = localStorage.getItem(RESTAURANT_API_KEY_STORAGE_KEY) || "";
-      if (restaurantId && !mergedHeaders["x-restaurant-id"]) {
-        mergedHeaders["x-restaurant-id"] = restaurantId;
-      }
-      if (apiKey && !mergedHeaders["x-api-key"]) {
-        mergedHeaders["x-api-key"] = apiKey;
-      }
-    }
 
     let response;
     try {
@@ -627,15 +592,10 @@ document.addEventListener("DOMContentLoaded", function() {
     });
   });
 
-  const savedSectionId = localStorage.getItem(workspaceMemoryKey("activeSection"));
-  if (savedSectionId) {
-    setActiveWorkspaceSection(savedSectionId, { persist: false });
-  } else {
-    const activeLink = document.querySelector(".tree-link.active-link[data-section]");
-    const sectionId = activeLink?.getAttribute("data-section");
-    if (sectionId) {
-      setActiveWorkspaceSection(sectionId, { persist: false });
-    }
+  const activeLink = document.querySelector(".tree-link.active-link[data-section]");
+  const sectionId = activeLink?.getAttribute("data-section");
+  if (sectionId) {
+    setActiveWorkspaceSection(sectionId, { persist: false });
   }
 
   let scrollSaveTimer = null;

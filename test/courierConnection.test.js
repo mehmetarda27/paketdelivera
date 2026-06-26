@@ -88,8 +88,7 @@ async function loadCourierPage(available, packages = [], historyPackages = []) {
     },
   });
 
-  dom.window.localStorage.setItem("kuryeTakipCourierToken", "token");
-  dom.window.localStorage.setItem("kuryeTakipCourierRefreshToken", "refresh");
+  dom.window.__deliveraInitialCourierAuth = { token: "token", refreshToken: "refresh" };
   dom.window.eval(sharedJs);
   dom.window.eval(courierJs);
 

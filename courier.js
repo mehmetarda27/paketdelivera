@@ -4,8 +4,8 @@ const LOCATION_PUSH_MS = 2_000;
 const WORKSPACE_POLL_MS = 12_000;
 
 const courierState = {
-  token: localStorage.getItem(STORAGE_TOKEN_KEY) || "",
-  refreshToken: localStorage.getItem(STORAGE_REFRESH_TOKEN_KEY) || "",
+  token: window.__deliveraInitialCourierAuth?.token || "",
+  refreshToken: window.__deliveraInitialCourierAuth?.refreshToken || "",
   data: null,
   watchId: null,
   lastCoords: null,
@@ -21,7 +21,7 @@ const courierState = {
   lastWorkspaceLoadAt: 0,
   connectionBusy: false,
   focusPackage: null,
-  activeProfileSection: localStorage.getItem("deliveraCourierCompactSection") || "",
+  activeProfileSection: "",
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -127,8 +127,6 @@ const courierRefs = {
 function persistCourierAuth(auth) {
   courierState.token = auth.token;
   courierState.refreshToken = auth.refreshToken;
-  localStorage.setItem(STORAGE_TOKEN_KEY, auth.token);
-  localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, auth.refreshToken);
 }
 
 function clearCourierAuth() {
@@ -140,8 +138,6 @@ function clearCourierAuth() {
   courierState.packageActionDrafts = new Map();
   courierState.liveStream?.close?.();
   courierState.liveStream = null;
-  localStorage.removeItem(STORAGE_TOKEN_KEY);
-  localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY);
 }
 
 async function refreshCourierAccess() {
@@ -596,7 +592,6 @@ function initializeCourierProfilePanels() {
       courierState.activeProfileSection = courierState.activeProfileSection === panel.dataset.section
         ? ""
         : panel.dataset.section;
-      localStorage.setItem("deliveraCourierCompactSection", courierState.activeProfileSection);
       syncCourierProfilePanels();
       panels.forEach((item) => {
         const itemHeader = item.querySelector(".panel-head");

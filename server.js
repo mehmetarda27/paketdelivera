@@ -265,7 +265,7 @@ logger.info("Database pool status", {
 });
 const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger, db, dbClient: dbFacade.clientName() });
 const queueService = createQueueService({ redisUrl: REDIS_URL, logger });
-const sessionRevocationService = createSessionRevocationService({ redisUrl: REDIS_URL, logger });
+const sessionRevocationService = createSessionRevocationService({ redisUrl: REDIS_URL, logger, db, dbClient: dbFacade.clientName() });
 const liveStreams = new Map();
 const performanceMetrics = {
   startedAt: Date.now(),
@@ -2779,6 +2779,10 @@ function getAnnouncements(targetRole = null) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+function getAnnouncementById(announcementId) {
+  return getAnnouncements().find((announcement) => announcement.id === announcementId) || null;
 }
 
 function createAnnouncement(targetRole, title, message) {
@@ -10167,7 +10171,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    upsertShiftPlan(courierId, planDate, startTime, endTime, zone);
+    const shiftPlanId = upsertShiftPlan(courierId, planDate, startTime, endTime, zone);
+    const createdShiftPlan = getShiftPlans(planDate).find((plan) => plan.id === shiftPlanId) || null;
+    if (!createdShiftPlan?.id) {
+      throw new Error(`courier_shift_plans insert verification failed for id ${shiftPlanId}`);
+    }
     const courier = getCourierById(courierId);
     writeAuditLog({
       actorRole: "admin",
@@ -10182,6 +10190,7 @@ async function handleApi(req, res, pathname) {
     });
     sendJson(res, 200, {
       ...decorateState(),
+      createdShiftPlan,
       auditLogs: getAuditLogs(20),
     });
     return;
@@ -10273,7 +10282,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    createAnnouncement(targetRole, title, message);
+    const announcementId = createAnnouncement(targetRole, title, message);
+    const createdAnnouncement = getAnnouncementById(announcementId);
+    if (!createdAnnouncement?.id) {
+      throw new Error(`announcements insert verification failed for id ${announcementId}`);
+    }
     writeAuditLog({
       actorRole: "admin",
       actorId: adminActorId(adminSession),
@@ -10286,6 +10299,7 @@ async function handleApi(req, res, pathname) {
     });
     sendJson(res, 200, {
       ...decorateState(),
+      createdAnnouncement,
       auditLogs: getAuditLogs(20),
     });
     return;

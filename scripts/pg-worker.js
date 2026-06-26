@@ -211,14 +211,24 @@ function normalizeParams(params = []) {
   });
 }
 
-function isRestaurantWriteOrTransaction(sql) {
+function dmlOperation(sql) {
+  const normalized = String(sql || "").replace(/\s+/g, " ").trim().toUpperCase();
+  const match = normalized.match(/^(INSERT|UPDATE|DELETE)\s+(?:INTO\s+|FROM\s+)?([A-Z_][A-Z0-9_]*)/);
+  if (!match) {
+    return null;
+  }
+  return {
+    type: match[1].toLowerCase(),
+    table: match[2].toLowerCase(),
+  };
+}
+
+function shouldLogSql(sql) {
   const normalized = String(sql || "").replace(/\s+/g, " ").trim().toUpperCase();
   return normalized === "BEGIN" ||
     normalized === "COMMIT" ||
     normalized === "ROLLBACK" ||
-    normalized.includes("INSERT INTO RESTAURANTS") ||
-    normalized.includes("SELECT ID FROM RESTAURANTS") ||
-    normalized.includes("SELECT * FROM RESTAURANTS WHERE ID");
+    Boolean(dmlOperation(sql));
 }
 
 function compactSql(sql) {
@@ -242,7 +252,8 @@ async function queryPostgres(sql, params = []) {
 
   const normalizedParams = normalizeParams(params || []);
   const upperSql = pgSql.toUpperCase();
-  const shouldLogQuery = isRestaurantWriteOrTransaction(pgSql);
+  const shouldLogQuery = shouldLogSql(pgSql);
+  const operation = dmlOperation(pgSql);
 
   if (upperSql === "BEGIN" || upperSql === "START TRANSACTION") {
     if (!pgTxClient) {
@@ -284,6 +295,8 @@ async function queryPostgres(sql, params = []) {
   const client = pgTxClient || pool;
   if (shouldLogQuery) {
     logger.info("postgres_query_start", {
+      operation: operation?.type || "query",
+      table: operation?.table || null,
       sql: compactSql(pgSql),
       params: summarizeParams(normalizedParams),
       inTransaction: Boolean(pgTxClient),
@@ -294,6 +307,8 @@ async function queryPostgres(sql, params = []) {
     res = await client.query(pgSql, normalizedParams);
   } catch (error) {
     logger.error("postgres_query_failed", {
+      operation: operation?.type || "query",
+      table: operation?.table || null,
       sql: compactSql(pgSql),
       params: summarizeParams(normalizedParams),
       inTransaction: Boolean(pgTxClient),
@@ -303,6 +318,8 @@ async function queryPostgres(sql, params = []) {
   }
   if (shouldLogQuery) {
     logger.info("postgres_query_result", {
+      operation: operation?.type || "query",
+      table: operation?.table || null,
       sql: compactSql(pgSql),
       rowCount: res.rowCount,
       rows: res.rows.slice(0, 3),

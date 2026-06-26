@@ -11,14 +11,14 @@ const ADMIN_REFRESH_MS = 20_000;
 
 const adminState = {
   data: null,
-  token: localStorage.getItem(ADMIN_TOKEN_KEY) || "",
-  refreshToken: localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "",
+  token: "",
+  refreshToken: "",
   selectedRestaurantId: "",
   packageLimit: 100,
   packageCursor: "0",
   liveStream: null,
   workspacePollId: null,
-  activeWorkspaceCard: localStorage.getItem("deliveraAdminActiveCard") || "admin-announcements",
+  activeWorkspaceCard: "admin-announcements",
 };
 
 const adminRefs = {
@@ -117,8 +117,6 @@ async function copyTextToClipboard(value) {
 function persistAdminAuth(auth) {
   adminState.token = auth.token;
   adminState.refreshToken = auth.refreshToken;
-  localStorage.setItem(ADMIN_TOKEN_KEY, auth.token);
-  localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, auth.refreshToken);
 }
 
 function clearAdminAuth() {
@@ -129,8 +127,6 @@ function clearAdminAuth() {
   stopAdminWorkspacePolling();
   adminState.liveStream?.close?.();
   adminState.liveStream = null;
-  localStorage.removeItem(ADMIN_TOKEN_KEY);
-  localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
 }
 
 async function refreshAdminAccess() {
@@ -241,7 +237,6 @@ function initializeAdminWorkspaceCards() {
 
     const activate = () => {
       adminState.activeWorkspaceCard = adminState.activeWorkspaceCard === key ? "" : key;
-      localStorage.setItem("deliveraAdminActiveCard", adminState.activeWorkspaceCard);
       syncAdminWorkspaceCards();
     };
 
@@ -1583,8 +1578,11 @@ adminRefs.courierForm.addEventListener("submit", async (event) => {
     });
     adminRefs.courierForm.reset();
     hydrateAdmin(data);
-    const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
-    showToast(`${payload.name} isimli kurye kaydedildi. ID: ${createdCourier?.id || "olusturuldu"}`);
+    const createdCourier = data.createdCourier;
+    if (!createdCourier?.id) {
+      throw new Error("API kuryenin veritabanina yazildigini dogrulayan createdCourier cevabi dondurmedi.");
+    }
+    showToast(`${payload.name} isimli kurye kaydedildi. ID: ${createdCourier.id}`);
   } catch (err) {
     showToast(err.message || "Kurye eklenirken bir hata olustu.", "error");
   }
@@ -1612,8 +1610,11 @@ if (adminRefs.courierAddForm) {
       });
       adminRefs.courierAddForm.reset();
       hydrateAdmin(data);
-      const createdCourier = data.createdCourier || (data.couriers || []).find((courier) => courier.username === String(payload.username || "").trim().toLowerCase());
-      showToast(`${payload.name} isimli kurye eklendi. ID: ${createdCourier?.id || "olusturuldu"}`);
+      const createdCourier = data.createdCourier;
+      if (!createdCourier?.id) {
+        throw new Error("API kuryenin veritabanina yazildigini dogrulayan createdCourier cevabi dondurmedi.");
+      }
+      showToast(`${payload.name} isimli kurye eklendi. ID: ${createdCourier.id}`);
     } catch (err) {
       showToast(err.message || "Kurye eklenirken bir hata olustu.", "error");
     }
@@ -1762,37 +1763,51 @@ document.addEventListener("click", async (event) => {
 adminRefs.shiftPlanForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(adminRefs.shiftPlanForm);
-  const data = await api("/api/admin/shift-plans", {
-    method: "POST",
-    headers: adminHeaders(),
-    body: JSON.stringify({
-      courierId: formData.get("courierId"),
-      planDate: formData.get("planDate"),
-      startTime: formData.get("startTime"),
-      endTime: formData.get("endTime"),
-    }),
-    retryWithRefresh: refreshAdminAccess,
-  });
-  hydrateAdmin(data);
-  showToast("Vardiya plani kaydedildi.");
+  try {
+    const data = await api("/api/admin/shift-plans", {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({
+        courierId: formData.get("courierId"),
+        planDate: formData.get("planDate"),
+        startTime: formData.get("startTime"),
+        endTime: formData.get("endTime"),
+      }),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    hydrateAdmin(data);
+    if (!data.createdShiftPlan?.id) {
+      throw new Error("API vardiya planinin veritabanina yazildigini dogrulayan createdShiftPlan cevabi dondurmedi.");
+    }
+    showToast("Vardiya plani kaydedildi.");
+  } catch (error) {
+    showToast(error.message || "Vardiya plani kaydedilemedi.", "error");
+  }
 });
 
 adminRefs.announcementForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(adminRefs.announcementForm);
-  const data = await api("/api/admin/announcements", {
-    method: "POST",
-    headers: adminHeaders(),
-    body: JSON.stringify({
-      targetRole: "courier",
-      title: formData.get("title"),
-      message: formData.get("message"),
-    }),
-    retryWithRefresh: refreshAdminAccess,
-  });
-  adminRefs.announcementForm.reset();
-  hydrateAdmin(data);
-  showToast("Kurye duyurusu yayinlandi.");
+  try {
+    const data = await api("/api/admin/announcements", {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify({
+        targetRole: "courier",
+        title: formData.get("title"),
+        message: formData.get("message"),
+      }),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    adminRefs.announcementForm.reset();
+    hydrateAdmin(data);
+    if (!data.createdAnnouncement?.id) {
+      throw new Error("API duyurunun veritabanina yazildigini dogrulayan createdAnnouncement cevabi dondurmedi.");
+    }
+    showToast("Kurye duyurusu yayinlandi.");
+  } catch (error) {
+    showToast(error.message || "Kurye duyurusu yayinlanamadi.", "error");
+  }
 });
 
 adminRefs.clearAnnouncementsButton?.addEventListener("click", async () => {
