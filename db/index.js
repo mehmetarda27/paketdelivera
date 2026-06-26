@@ -152,7 +152,7 @@ function sendWorkerRequest(req) {
     throw new Error(`Invalid response length: ${resLength}`);
   }
   
-  const resBytes = Buffer.from(pgSab.buffer, pgSab.byteOffset + 8, resLength);
+  const resBytes = Buffer.from(pgSab, 8, resLength);
   
   let resStr;
   try {
