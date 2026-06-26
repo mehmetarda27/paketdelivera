@@ -751,10 +751,10 @@ function renderPackages(packages) {
     let selectedPaymentStatus = currentDraft.paymentStatus || pkg.paymentStatus || "";
     let selectedFailureReason = currentDraft.failureReason || "";
 
-    node.querySelector(".tracking-no").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.trackingNo)} - ${escapeCourierHtml(pkg.externalOrderNo)}`;
+    node.querySelector(".tracking-no").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.trackingNo)} - ${escapeCourierHtml(pkg.platformOrderId || pkg.externalOrderNo)}`;
     node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
-    node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : pkg.sourcePlatform)}`;
-    node.querySelector(".restaurant-name").innerHTML = `${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)}`;
+    node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : (pkg.platform || pkg.sourcePlatform || "-"))} - Restoran Platform ID: ${escapeCourierHtml(pkg.platformRestaurantId || "-")}`;
+    node.querySelector(".restaurant-name").innerHTML = `${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)} - ${escapeCourierHtml(pkg.restaurantId || "-")}`;
     node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)}`;
     node.querySelector(".eta-value").textContent = pkg.eta;
     node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;

@@ -791,10 +791,10 @@ function buildPackageCard(pkg) {
   if (!pkg.assignedCourierId && ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status)) {
     wrapper.classList.add("priority-alert-card");
   }
-  node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)}`;
+  node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)} - Paket ID: ${htmlSafe(pkg.id)}`;
   node.querySelector(".recipient-name").innerHTML = `${SVG_PHONE} ${pkg.recipient} - ${pkg.phone}`;
-  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform}`;
-  node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${pkg.restaurantName}`;
+  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform || pkg.platform || "-"} - Platform Restoran ID: ${htmlSafe(pkg.platformRestaurantId || "-")} - Platform Siparis ID: ${htmlSafe(pkg.platformOrderId || pkg.externalOrderNo || "-")}`;
+  node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${pkg.restaurantName} - Sistem ID: ${htmlSafe(pkg.restaurantId || "-")}`;
   node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}`;
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;

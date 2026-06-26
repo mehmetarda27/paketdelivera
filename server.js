@@ -217,12 +217,14 @@ const LEGACY_STATUS_MAP = {
   "Iptal Edildi": CANCELED_STATUS,
   pending_approval: PENDING_APPROVAL_STATUS,
   waiting: AWAITING_ASSIGNMENT_STATUS,
+  waiting_assignment: AWAITING_ASSIGNMENT_STATUS,
   pending: PENDING_STATUS,
   preparing: PREPARING_STATUS,
   awaiting_assignment: AWAITING_ASSIGNMENT_STATUS,
   assigned: ASSIGNED_STATUS,
   accepted_by_courier: ACCEPTED_BY_COURIER_STATUS,
   picked_up: ON_ROUTE_STATUS,
+  on_the_way: ON_ROUTE_STATUS,
   on_route: ON_ROUTE_STATUS,
   delivered: DELIVERED_STATUS,
   failed: FAILED_STATUS,
@@ -506,7 +508,9 @@ db.exec(`
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL,
     platform_order_id TEXT NOT NULL,
+    platform_restaurant_id TEXT,
     restaurant_id TEXT NOT NULL,
+    package_id TEXT,
     customer_name TEXT NOT NULL,
     phone TEXT NOT NULL,
     address TEXT NOT NULL,
@@ -517,7 +521,8 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(platform, platform_order_id, restaurant_id),
-    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id),
+    FOREIGN KEY (package_id) REFERENCES packages(id)
   );
 
   CREATE TABLE IF NOT EXISTS order_items (
@@ -852,6 +857,16 @@ if (!restaurantColumns.includes("password_salt")) {
 ].forEach(([columnName, definition]) => {
   if (!restaurantColumns.includes(columnName)) {
     db.exec(`ALTER TABLE restaurants ADD COLUMN ${columnName} ${definition}`);
+  }
+});
+
+const platformOrderColumns = db.prepare("PRAGMA table_info(platform_orders)").all().map((row) => row.name);
+[
+  ["platform_restaurant_id", "TEXT"],
+  ["package_id", "TEXT"],
+].forEach(([columnName, definition]) => {
+  if (!platformOrderColumns.includes(columnName)) {
+    db.exec(`ALTER TABLE platform_orders ADD COLUMN ${columnName} ${definition}`);
   }
 });
 
@@ -2962,7 +2977,9 @@ function mapPlatformOrder(row) {
     id: row.id,
     platform: row.platform,
     platformOrderId: row.platform_order_id,
+    platformRestaurantId: row.platform_restaurant_id || "",
     restaurantId: row.restaurant_id,
+    packageId: row.package_id || "",
     customerName: row.customer_name,
     phone: row.phone,
     address: row.address,
@@ -2975,6 +2992,21 @@ function mapPlatformOrder(row) {
   };
 }
 
+function getPlatformOrderForPackageRow(row) {
+  if (!row) {
+    return null;
+  }
+  const platformOrder = db.prepare(`
+    SELECT *
+    FROM platform_orders
+    WHERE package_id = ?
+       OR (restaurant_id = ? AND platform_order_id = ?)
+    ORDER BY datetime(updated_at) DESC
+    LIMIT 1
+  `).get(row.id, row.restaurant_id, row.external_order_id || row.external_order_no || "");
+  return platformOrder ? mapPlatformOrder(platformOrder) : null;
+}
+
 function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
   const total = filter.restaurantId
     ? countTable("platform_orders", "restaurant_id = ?", [filter.restaurantId])
@@ -2985,6 +3017,21 @@ function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAG
 function getPlatformOrderById(id) {
   const row = db.prepare("SELECT * FROM platform_orders WHERE id = ?").get(id);
   return row ? mapPlatformOrder(row) : null;
+}
+
+function updatePlatformOrderPackageId(platformOrderId, packageId, requestId = null) {
+  if (!platformOrderId || !packageId) {
+    return;
+  }
+  const sql = "UPDATE platform_orders SET package_id = ?, updated_at = ? WHERE id = ?";
+  const result = db.prepare(sql).run(packageId, nowIso(), platformOrderId);
+  logger.info("platform_order_package_linked", {
+    requestId,
+    platform_order_id: platformOrderId,
+    package_id: packageId,
+    sql,
+    rowCount: affectedRowCount(result),
+  });
 }
 
 function restaurantsPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
@@ -3004,6 +3051,8 @@ function normalizePlatformOrderStatus(status) {
 function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approval", options = {}) {
   const platform = normalizePlatformInput(order.platform) || order.platform;
   const platformOrderId = trimmed(order.orderId || order.platformOrderId || order.externalOrderNo);
+  const platformRestaurantId = trimmed(order.platformRestaurantId || order.platform_restaurant_id || order.externalStoreId || order.externalRestaurantId || options.platformRestaurantId);
+  const packageId = trimmed(order.packageId || order.package_id || options.packageId);
   if (!platform || !platformOrderId || !restaurantId) {
     logger.warn("INSERT_SKIPPED", {
       requestId: options.requestId || null,
@@ -3011,6 +3060,7 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
       reason: "missing_platform_order_identity",
       platform,
       platformOrderId,
+      platformRestaurantId,
       restaurantId,
     });
     return null;
@@ -3025,9 +3075,13 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   if (existing) {
     db.prepare(`
       UPDATE platform_orders
-      SET customer_name = ?, phone = ?, address = ?, total_price = ?, note = ?, status = ?, raw_payload = ?, updated_at = ?
+      SET platform_restaurant_id = COALESCE(NULLIF(?, ''), platform_restaurant_id),
+          package_id = COALESCE(NULLIF(?, ''), package_id),
+          customer_name = ?, phone = ?, address = ?, total_price = ?, note = ?, status = ?, raw_payload = ?, updated_at = ?
       WHERE id = ?
     `).run(
+      platformRestaurantId,
+      packageId,
       trimmed(order.customerName) || "Musteri",
       trimmed(order.phone) || "Gizli Numara",
       trimmed(order.address || order.customerAddress) || "Adres yok",
@@ -3044,14 +3098,16 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   const id = uid("po");
   const insertSql = `
     INSERT INTO platform_orders (
-      id, platform, platform_order_id, restaurant_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, platform, platform_order_id, platform_restaurant_id, restaurant_id, package_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
     platform,
     platformOrderId,
+    platformRestaurantId || null,
     restaurantId,
+    packageId || null,
     trimmed(order.customerName) || "Musteri",
     trimmed(order.phone) || "Gizli Numara",
     trimmed(order.address || order.customerAddress) || "Adres yok",
@@ -3746,17 +3802,23 @@ function getPackages(filter = {}) {
     ? db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...params, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
     : db.prepare(sql).all(...params);
 
-  return rows.map((row) => ({
+  return rows.map((row) => {
+    const platformOrder = getPlatformOrderForPackageRow(row);
+    return {
     id: row.id,
     trackingNo: row.tracking_no,
     restaurantId: row.restaurant_id,
     source: normalizeOrderSource(row.source, row.source_platform),
+    platform: row.source_platform || row.source,
     deliveryAddress: row.delivery_address || row.address,
     packageType: row.package_type || "Standart Paket",
     sourcePlatform: row.source_platform,
     platformSlug: row.platform_slug || "",
     externalOrderNo: row.external_order_no,
     externalOrderId: row.external_order_id || row.external_order_no,
+    platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
+    platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    platformOrderDbId: platformOrder?.id || "",
     confirmationId: row.confirmation_id || "",
     externalRestaurantId: row.external_restaurant_id || "",
     restaurantNameFromPayload: row.restaurant_name_from_payload || "",
@@ -3818,7 +3880,8 @@ function getPackages(filter = {}) {
     assignmentTriedCourierIds: normalizeIdList(parseJson(row.assignment_tried_courier_ids_json, [])),
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
-  }));
+    };
+  });
 }
 
 function packagePagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
@@ -3879,16 +3942,21 @@ function assignmentStateForPackage(pkg) {
 }
 
 function mapPackageRow(row, restaurantMap = new Map()) {
+  const platformOrder = getPlatformOrderForPackageRow(row);
   return {
     id: row.id,
     trackingNo: row.tracking_no,
     restaurantId: row.restaurant_id,
     source: normalizeOrderSource(row.source, row.source_platform),
+    platform: row.source_platform || row.source,
     deliveryAddress: row.delivery_address || row.address,
     packageType: row.package_type || "Standart Paket",
     sourcePlatform: row.source_platform,
     externalOrderNo: row.external_order_no,
     externalOrderId: row.external_order_id || row.external_order_no,
+    platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
+    platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    platformOrderDbId: platformOrder?.id || "",
     recipient: row.recipient,
     phone: row.phone,
     address: row.address,
@@ -5578,6 +5646,250 @@ function restaurantMatchesExternalId(restaurant, externalRestaurantId, platform 
 
 function findRestaurantByExternalRestaurantId(externalRestaurantId, platform = "") {
   return getRestaurants().find((restaurant) => restaurantMatchesExternalId(restaurant, externalRestaurantId, platform)) || null;
+}
+
+function externalApiAuthorized(req) {
+  const expected = trimmed(process.env.DELIVERA_INTEGRATION_KEY);
+  const bearer = getBearerToken(req);
+  const headerKey = trimmed(req.headers["x-integration-key"] || req.headers["x-api-key"]);
+  return Boolean(expected) && (bearer === expected || headerKey === expected);
+}
+
+function requireExternalApiKey(req, res) {
+  if (externalApiAuthorized(req)) {
+    return true;
+  }
+  sendJson(res, 401, { error: "External API key required." });
+  return false;
+}
+
+function platformApiKey(platform) {
+  const normalized = normalizePlatformInput(platform) || trimmed(platform);
+  const slug = platformSlug(normalized || platform);
+  if (slug.includes("trendyol")) return "trendyol";
+  if (slug.includes("getir")) return "getir";
+  if (slug.includes("yemek")) return "yemeksepeti";
+  if (slug.includes("migros")) return "migros";
+  if (slug.includes("pos")) return "pos";
+  return slug || "external_api";
+}
+
+function externalStatusFromInternal(status) {
+  const normalized = normalizeStatus(status);
+  if ([PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS].includes(normalized)) return "waiting_assignment";
+  if (normalized === ASSIGNED_STATUS) return "assigned";
+  if (normalized === ACCEPTED_BY_COURIER_STATUS) return "picked_up";
+  if (normalized === ON_ROUTE_STATUS) return "on_the_way";
+  if (normalized === DELIVERED_STATUS) return "delivered";
+  if (normalized === CANCELED_STATUS || normalized === REJECTED_STATUS) return "cancelled";
+  if (normalized === FAILED_STATUS) return "failed";
+  return "waiting_assignment";
+}
+
+function internalStatusFromExternal(status) {
+  const incoming = trimmed(status).toLowerCase();
+  const map = {
+    waiting_assignment: AWAITING_ASSIGNMENT_STATUS,
+    assigned: ASSIGNED_STATUS,
+    picked_up: ACCEPTED_BY_COURIER_STATUS,
+    on_the_way: ON_ROUTE_STATUS,
+    delivered: DELIVERED_STATUS,
+    cancelled: CANCELED_STATUS,
+    canceled: CANCELED_STATUS,
+    failed: FAILED_STATUS,
+  };
+  return map[incoming] || normalizeStatus(incoming);
+}
+
+function externalRestaurantPayload(restaurant) {
+  return {
+    id: restaurant.id,
+    name: restaurant.name,
+    trendyolRestaurantId: restaurant.trendyolRestaurantId || "",
+    getirRestaurantId: restaurant.getirRestaurantId || "",
+    yemeksepetiRestaurantId: restaurant.yemeksepetiRestaurantId || "",
+    migrosRestaurantId: restaurant.migrosRestaurantId || "",
+    otherPlatformIds: restaurant.externalRestaurantIds || [],
+  };
+}
+
+function externalPackagePayload(pkg) {
+  return {
+    id: pkg.id,
+    trackingNo: pkg.trackingNo,
+    restaurantId: pkg.restaurantId,
+    restaurantName: pkg.restaurantName || "",
+    platform: platformApiKey(pkg.platform || pkg.sourcePlatform || pkg.source),
+    platformRestaurantId: pkg.platformRestaurantId || "",
+    platformOrderId: pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo || "",
+    status: externalStatusFromInternal(pkg.status),
+    courierId: pkg.assignedCourierId || null,
+    deliveryAddress: pkg.deliveryAddress || pkg.address || "",
+    createdAt: pkg.createdAt,
+    rawPayload: pkg.rawPayload || null,
+  };
+}
+
+function normalizeExternalPlatformOrderBody(body = {}) {
+  const platform = normalizePlatformInput(body.platform) || trimmed(body.platform);
+  const platformRestaurantId = trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalRestaurantId ?? body.external_restaurant_id);
+  const platformOrderId = trimmed(body.platformOrderId ?? body.platform_order_id ?? body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
+  const deliveryAddress = trimmed(body.deliveryAddress ?? body.delivery_address ?? body.address);
+  const customerName = trimmed(body.customerName ?? body.customer_name ?? body.recipient);
+  const customerPhone = trimmed(body.customerPhone ?? body.customer_phone ?? body.phone);
+  const totalAmount = normalizeMoney(body.totalAmount ?? body.total_amount ?? body.totalPrice ?? body.total_price ?? body.orderAmount ?? body.order_amount);
+  if (!platform || !platformRestaurantId || !platformOrderId || !deliveryAddress || !customerName || !customerPhone || totalAmount <= 0) {
+    throw validationError("platform, platformRestaurantId, platformOrderId, customerName, customerPhone, deliveryAddress ve totalAmount zorunludur.");
+  }
+  return {
+    platform,
+    platformKey: platformApiKey(platform),
+    platformRestaurantId,
+    platformOrderId,
+    customerName,
+    customerPhone,
+    deliveryAddress,
+    items: normalizeIncomingOrderItems(body.items),
+    totalAmount,
+    customerNote: trimmed(body.customerNote ?? body.customer_note ?? body.note),
+    paymentMethod: trimmed(body.paymentMethod ?? body.payment_method) || "Platform Odeme",
+    rawPayload: body.rawPayload ?? body.raw_payload ?? body,
+  };
+}
+
+function createOrGetExternalPlatformOrder(body, req) {
+  const order = normalizeExternalPlatformOrderBody(body);
+  logger.info("external_platform_order_received", {
+    request_id: req.requestId,
+    platform: order.platformKey,
+    platform_restaurant_id: order.platformRestaurantId,
+    platform_order_id: order.platformOrderId,
+  });
+  const restaurant = findRestaurantByExternalRestaurantId(order.platformRestaurantId, order.platform);
+  if (!restaurant) {
+    const error = validationError("Platform restoran ID ile eslesen restoran bulunamadi.");
+    logger.warn("platform_restaurant_match_failed", {
+      request_id: req.requestId,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      platform_order_id: order.platformOrderId,
+    });
+    throw error;
+  }
+  logger.info("platform_restaurant_matched", {
+    request_id: req.requestId,
+    internal_restaurant_id: restaurant.id,
+    platform: order.platformKey,
+    platform_restaurant_id: order.platformRestaurantId,
+    platform_order_id: order.platformOrderId,
+  });
+
+  let platformOrderId;
+  let packageId;
+  let duplicate = false;
+  dbFacade.transaction(() => {
+    platformOrderId = upsertPlatformOrderRecord({
+      platform: order.platform,
+      platformRestaurantId: order.platformRestaurantId,
+      platformOrderId: order.platformOrderId,
+      orderId: order.platformOrderId,
+      customerName: order.customerName,
+      phone: order.customerPhone,
+      address: order.deliveryAddress,
+      totalPrice: order.totalAmount,
+      customerNote: order.customerNote,
+      rawPayload: order.rawPayload,
+    }, restaurant.id, "approved", { requestId: req.requestId, platformRestaurantId: order.platformRestaurantId });
+
+    const existingOrder = db.prepare("SELECT * FROM platform_orders WHERE id = ?").get(platformOrderId);
+    if (existingOrder?.package_id) {
+      const existingPackage = db.prepare("SELECT id FROM packages WHERE id = ?").get(existingOrder.package_id);
+      if (existingPackage) {
+        packageId = existingPackage.id;
+        duplicate = true;
+        return;
+      }
+    }
+
+    const duplicatePackage = findDuplicatePackage(restaurant.id, order.platformKey, order.platformOrderId) ||
+      db.prepare("SELECT * FROM packages WHERE restaurant_id = ? AND external_order_id = ?").get(restaurant.id, order.platformOrderId);
+    if (duplicatePackage) {
+      packageId = duplicatePackage.id;
+      updatePlatformOrderPackageId(platformOrderId, packageId, req.requestId);
+      duplicate = true;
+      return;
+    }
+
+    const pkg = validateIntegrationDraft({
+      restaurantId: restaurant.id,
+      source: order.platformKey,
+      sourcePlatform: order.platformKey,
+      externalOrderNo: order.platformOrderId,
+      externalOrderId: order.platformOrderId,
+      recipient: order.customerName,
+      phone: order.customerPhone,
+      address: order.deliveryAddress,
+      customerAddress: order.deliveryAddress,
+      zone: restaurant.zone,
+      paymentMethod: order.paymentMethod,
+      orderAmount: order.totalAmount,
+      items: order.items,
+      note: order.customerNote || "External API siparisi",
+      customerNote: order.customerNote,
+      rawPayload: order.rawPayload,
+      status: AWAITING_ASSIGNMENT_STATUS,
+    }, restaurant);
+    createPackageRecord(pkg, "Platform Siparisi", { requestId: req.requestId });
+    assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
+    updatePackageApiMetadata(pkg.id, {
+      externalRestaurantId: order.platformRestaurantId,
+      externalOrderId: order.platformOrderId,
+      platformSlug: order.platformKey,
+      providerName: order.platformKey,
+      contactPhone: order.customerPhone,
+      rawPayload: order.rawPayload,
+    });
+    replaceOrderItems(pkg.id, order.items);
+    updatePlatformOrderPackageId(platformOrderId, pkg.id, req.requestId);
+    packageId = pkg.id;
+  });
+
+  const platformOrder = getPlatformOrderById(platformOrderId);
+  const pkg = getPackageById(packageId);
+  if (!duplicate) {
+    logger.info("platform_order_created", {
+      request_id: req.requestId,
+      internal_restaurant_id: restaurant.id,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      platform_order_id: order.platformOrderId,
+      package_id: packageId,
+      tracking_no: pkg?.trackingNo || null,
+    });
+    logger.info("package_created", {
+      request_id: req.requestId,
+      internal_restaurant_id: restaurant.id,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      platform_order_id: order.platformOrderId,
+      package_id: packageId,
+      tracking_no: pkg?.trackingNo || null,
+    });
+  }
+  logger.info(duplicate ? "external_platform_order_duplicate" : "external_platform_order_persisted", {
+    request_id: req.requestId,
+    internal_restaurant_id: restaurant.id,
+    platform: order.platformKey,
+    platform_restaurant_id: order.platformRestaurantId,
+    platform_order_id: order.platformOrderId,
+    package_id: packageId,
+    tracking_no: pkg?.trackingNo || null,
+  });
+  return {
+    duplicate,
+    platformOrder,
+    package: pkg,
+  };
 }
 
 function apiPackageDraftFromWebhook(order, restaurant) {
@@ -7563,6 +7875,85 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (pathname === "/api/external/restaurants" && req.method === "GET") {
+    if (!requireExternalApiKey(req, res)) return;
+    const restaurants = getRestaurants().map(externalRestaurantPayload);
+    logger.info("external_restaurants_listed", {
+      request_id: req.requestId,
+      count: restaurants.length,
+    });
+    sendJson(res, 200, restaurants);
+    return;
+  }
+
+  if (pathname === "/api/external/packages" && req.method === "GET") {
+    if (!requireExternalApiKey(req, res)) return;
+    const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const onlyActive = requestUrl.searchParams.get("active") !== "0";
+    const packages = getPackages()
+      .filter((pkg) => !onlyActive || ![DELIVERED_STATUS, FAILED_STATUS, CANCELED_STATUS, REJECTED_STATUS].includes(normalizeStatus(pkg.status)))
+      .map(externalPackagePayload);
+    logger.info("external_packages_listed", {
+      request_id: req.requestId,
+      count: packages.length,
+    });
+    sendJson(res, 200, packages);
+    return;
+  }
+
+  const externalPackageMatch = pathname.match(/^\/api\/external\/packages\/([^/]+)$/);
+  if (externalPackageMatch && req.method === "GET") {
+    if (!requireExternalApiKey(req, res)) return;
+    const pkg = getPackageById(externalPackageMatch[1]);
+    if (!pkg) {
+      sendJson(res, 404, { error: "Paket bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, externalPackagePayload(pkg));
+    return;
+  }
+
+  if (pathname === "/api/external/platform-orders" && req.method === "POST") {
+    if (!requireExternalApiKey(req, res)) return;
+    const { json: body } = await readRequestBody(req);
+    const result = createOrGetExternalPlatformOrder(body, req);
+    sendJson(res, result.duplicate ? 200 : 201, {
+      ok: true,
+      duplicate: result.duplicate,
+      platformOrder: result.platformOrder,
+      package: externalPackagePayload(result.package),
+    });
+    return;
+  }
+
+  const externalPackageStatusMatch = pathname.match(/^\/api\/external\/packages\/([^/]+)\/status$/);
+  if (externalPackageStatusMatch && req.method === "PATCH") {
+    if (!requireExternalApiKey(req, res)) return;
+    const target = db.prepare("SELECT * FROM packages WHERE id = ?").get(externalPackageStatusMatch[1]);
+    if (!target) {
+      sendJson(res, 404, { error: "Paket bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const nextStatus = internalStatusFromExternal(body.status);
+    updatePackageLifecycle(target.id, { status: nextStatus }, mapPackageRow(target));
+    const updated = getPackageById(target.id);
+    logger.info("package_status_updated", {
+      request_id: req.requestId,
+      internal_restaurant_id: updated.restaurantId,
+      platform: platformApiKey(updated.platform || updated.sourcePlatform || updated.source),
+      platform_restaurant_id: updated.platformRestaurantId || null,
+      platform_order_id: updated.platformOrderId || null,
+      package_id: updated.id,
+      tracking_no: updated.trackingNo,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      package: externalPackagePayload(updated),
+    });
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/webhooks/health") {
     sendJson(res, 200, {
       ok: true,
@@ -9380,6 +9771,19 @@ async function handleApi(req, res, pathname) {
         restaurantId: restaurant.id,
         username: restaurant.username,
         selectedRestaurantId: createdRestaurant.id,
+      });
+      logger.info("restaurant_created", {
+        request_id: req.requestId,
+        internal_restaurant_id: restaurant.id,
+        platform: null,
+        platform_restaurant_id: null,
+        platform_order_id: null,
+        package_id: null,
+        tracking_no: null,
+        trendyol_restaurant_id: createdRestaurant.trendyolRestaurantId || null,
+        getir_restaurant_id: createdRestaurant.getirRestaurantId || null,
+        yemeksepeti_restaurant_id: createdRestaurant.yemeksepetiRestaurantId || null,
+        migros_restaurant_id: createdRestaurant.migrosRestaurantId || null,
       });
     } catch (error) {
       logger.error("restaurant_create_failed", {

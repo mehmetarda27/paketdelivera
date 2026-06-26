@@ -34,7 +34,10 @@ async function request(baseUrl, route, options = {}) {
   });
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(`${route} -> ${response.status}: ${body.error || body.message || "request failed"}`);
+    const error = new Error(`${route} -> ${response.status}: ${body.error || body.message || "request failed"}`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
   }
   return body;
 }
@@ -84,6 +87,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ADMIN_USERNAME: adminUsername,
       DELIVERA_ADMIN_PASSWORD: adminPassword,
+      DELIVERA_INTEGRATION_KEY: "test-integration-key",
       DELIVERA_ASSIGNMENT_RETRY_MS: "60000",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
     },
@@ -114,6 +118,8 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         latitude: 36.601,
         longitude: 34.32,
         platforms: ["Getir Yemek"],
+        yemeksepetiRestaurantId: `ys-${Date.now()}`,
+        externalRestaurantIds: JSON.stringify([{ platform: "other", restaurantId: `other-${Date.now()}` }]),
       }),
     });
     assert.ok(restaurantState.createdRestaurant?.id);
@@ -130,11 +136,20 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         latitude: 36.75,
         longitude: 34.55,
         platforms: ["POS"],
+        getirRestaurantId: `getir-${Date.now()}`,
       }),
     });
     assert.ok(secondRestaurantState.createdRestaurant?.id);
     assert.notEqual(secondRestaurantState.createdRestaurant.id, restaurantState.createdRestaurant.id);
     assert.ok(readRow(dbFile, "SELECT id FROM restaurants WHERE id = ?", secondRestaurantState.createdRestaurant.id));
+    assert.equal(
+      readRow(dbFile, "SELECT yemeksepeti_restaurant_id FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id).yemeksepeti_restaurant_id,
+      restaurantState.createdRestaurant.yemeksepetiRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT getir_restaurant_id FROM restaurants WHERE id = ?", secondRestaurantState.createdRestaurant.id).getir_restaurant_id,
+      secondRestaurantState.createdRestaurant.getirRestaurantId
+    );
 
     const courierState = await request(baseUrl, "/couriers", {
       method: "POST",
@@ -274,6 +289,89 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.ok(reloadedSecondRestaurantState.packages.some((pkg) => pkg.id === secondPackageState.createdPackage.id));
     assert.ok(!reloadedSecondRestaurantState.packages.some((pkg) => pkg.id === packageState.createdPackage.id));
+
+    await assert.rejects(
+      () => request(baseUrl, "/api/external/packages"),
+      (error) => error.status === 401
+    );
+
+    const externalHeaders = { Authorization: "Bearer test-integration-key" };
+    const externalRestaurants = await request(baseUrl, "/api/external/restaurants", {
+      headers: externalHeaders,
+    });
+    assert.ok(externalRestaurants.some((item) =>
+      item.id === restaurantState.createdRestaurant.id &&
+      item.yemeksepetiRestaurantId === restaurantState.createdRestaurant.yemeksepetiRestaurantId
+    ));
+
+    const externalOrderOne = await request(baseUrl, "/api/external/platform-orders", {
+      method: "POST",
+      headers: externalHeaders,
+      body: JSON.stringify({
+        platform: "yemeksepeti",
+        platformRestaurantId: restaurantState.createdRestaurant.yemeksepetiRestaurantId,
+        platformOrderId: `YS-${Date.now()}`,
+        customerName: "External Customer One",
+        customerPhone: "05550000001",
+        deliveryAddress: "External address one",
+        items: [{ name: "Lahmacun", quantity: 2, price: 120 }],
+        totalAmount: 240,
+        rawPayload: { source: "test" },
+      }),
+    });
+    const externalOrderTwo = await request(baseUrl, "/api/external/platform-orders", {
+      method: "POST",
+      headers: externalHeaders,
+      body: JSON.stringify({
+        platform: "getir",
+        platformRestaurantId: secondRestaurantState.createdRestaurant.getirRestaurantId,
+        platformOrderId: `GETIR-${Date.now()}`,
+        customerName: "External Customer Two",
+        customerPhone: "05550000002",
+        deliveryAddress: "External address two",
+        items: [{ name: "Burger", quantity: 1, price: 180 }],
+        totalAmount: 180,
+        rawPayload: { source: "test" },
+      }),
+    });
+    assert.equal(externalOrderOne.package.restaurantId, restaurantState.createdRestaurant.id);
+    assert.equal(externalOrderTwo.package.restaurantId, secondRestaurantState.createdRestaurant.id);
+    assert.notEqual(externalOrderOne.package.restaurantId, externalOrderTwo.package.restaurantId);
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderOne.package.id).restaurant_id,
+      restaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).restaurant_id,
+      secondRestaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE id = ?", externalOrderOne.platformOrder.id).platform_restaurant_id,
+      restaurantState.createdRestaurant.yemeksepetiRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE id = ?", externalOrderTwo.platformOrder.id).platform_restaurant_id,
+      secondRestaurantState.createdRestaurant.getirRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT package_id FROM platform_orders WHERE id = ?", externalOrderOne.platformOrder.id).package_id,
+      externalOrderOne.package.id
+    );
+    const externalPackageDetail = await request(baseUrl, `/api/external/packages/${externalOrderOne.package.id}`, {
+      headers: externalHeaders,
+    });
+    assert.equal(externalPackageDetail.platformRestaurantId, restaurantState.createdRestaurant.yemeksepetiRestaurantId);
+    assert.equal(externalPackageDetail.platformOrderId, externalOrderOne.platformOrder.platformOrderId);
+    const externalPackages = await request(baseUrl, "/api/external/packages", {
+      headers: externalHeaders,
+    });
+    assert.ok(externalPackages.some((pkg) => pkg.id === externalOrderOne.package.id));
+    const patched = await request(baseUrl, `/api/external/packages/${externalOrderOne.package.id}/status`, {
+      method: "PATCH",
+      headers: externalHeaders,
+      body: JSON.stringify({ status: "picked_up" }),
+    });
+    assert.equal(patched.package.status, "picked_up");
 
     const counts = readRow(dbFile, `
       SELECT
