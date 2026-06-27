@@ -205,6 +205,30 @@ function buildOrderMapUrl(order, target = "customer") {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
+function mapTargetQuery(order, target = "customer") {
+  const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
+  const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
+  const address = String(
+    target === "restaurant"
+      ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
+      : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
+  ).trim();
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return `${latitude},${longitude}`;
+  }
+  return address;
+}
+
+function buildGoogleMapsEmbedUrl(order, target = "customer") {
+  const apiKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
+  const query = mapTargetQuery(order, target);
+  if (!apiKey || !query) {
+    return "";
+  }
+  return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
+}
+
 function openOrderMap(order, target = "customer") {
   const url = buildOrderMapUrl(order, target);
   if (!url) {
@@ -212,6 +236,51 @@ function openOrderMap(order, target = "customer") {
     return;
   }
   window.open(url, "_blank");
+}
+
+function renderPackageMapPreview(target, pkg) {
+  if (!target) {
+    return;
+  }
+  const mapUrl = buildOrderMapUrl(pkg, "customer");
+  if (!mapUrl) {
+    target.classList.add("hidden");
+    target.innerHTML = "";
+    return;
+  }
+
+  const embedUrl = buildGoogleMapsEmbedUrl(pkg, "customer");
+  target.classList.remove("hidden");
+  target.setAttribute("role", "link");
+  target.setAttribute("tabindex", "0");
+  target.title = "Google Maps'te ac";
+  target.onclick = () => openOrderMap(pkg, "customer");
+  target.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openOrderMap(pkg, "customer");
+    }
+  };
+
+  if (embedUrl) {
+    target.classList.add("has-embed");
+    target.innerHTML = `<iframe title="Teslimat haritasi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>`;
+    return;
+  }
+
+  target.classList.remove("has-embed");
+  target.innerHTML = `
+    <div class="courier-package-map-art" aria-hidden="true">
+      <span class="mini-map-road mini-map-road-a"></span>
+      <span class="mini-map-road mini-map-road-b"></span>
+      <span class="mini-map-route"></span>
+      <span class="mini-map-pin"></span>
+    </div>
+    <div class="courier-package-map-copy">
+      <strong>Google Maps</strong>
+      <span>Haritada ac</span>
+    </div>
+  `;
 }
 
 window.openCourierPackageDetailsById = function(packageId) {
@@ -727,7 +796,8 @@ function renderCourierShiftSummary(shiftSummary) {
 
 function renderPackages(packages) {
   const activePackages = packages.filter(isActiveCourierPackage);
-  const signature = listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError"]);
+  const mapsKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
+  const signature = `${mapsKey}|${listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError", "deliveryAddress", "address", "customerAddress", "customerLat", "customerLng", "customerLatitude", "customerLongitude"])}`;
   if (courierRefs.packages.__deliveraRenderSignature === signature) {
     return;
   }
@@ -759,6 +829,7 @@ function renderPackages(packages) {
     node.querySelector(".eta-value").textContent = pkg.eta;
     node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
     node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.deliveryAddress || pkg.address)}`;
+    renderPackageMapPreview(node.querySelector(".courier-package-map-preview"), pkg);
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
 

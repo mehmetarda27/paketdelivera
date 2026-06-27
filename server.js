@@ -4268,6 +4268,12 @@ function buildRestaurantIntegrationWizard(req, restaurant, accounts) {
   };
 }
 
+function publicMapsConfig() {
+  return {
+    googleMapsEmbedApiKey: trimmed(process.env.GOOGLE_MAPS_EMBED_API_KEY),
+  };
+}
+
 function buildCourierWorkspace(courierId, options = {}) {
   const courier = getCourierById(courierId);
   if (!courier) {
@@ -4301,6 +4307,7 @@ function buildCourierWorkspace(courierId, options = {}) {
     shiftSummary: buildCourierShiftSummary(courierId),
     notifications: getNotifications("courier", courierId, 20),
     announcements: getAnnouncements("courier"),
+    mapsConfig: publicMapsConfig(),
     pagination: {
       packages: packagesPagination,
     },

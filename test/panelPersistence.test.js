@@ -263,6 +263,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.equal(courierWorkspace.courier.id, courierState.createdCourier.id);
     assert.ok(courierWorkspace.dayMetrics);
+    assert.ok(courierWorkspace.mapsConfig);
 
     const secondRestaurantLogin = await request(baseUrl, "/api/restaurant/session", {
       method: "POST",
