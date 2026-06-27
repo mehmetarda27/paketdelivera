@@ -281,6 +281,9 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", packageState.createdPackage.id).restaurant_id,
       restaurantState.createdRestaurant.id
     );
+    assert.ok(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", packageState.createdPackage.id).posentegra_id
+    );
 
     const courierLogin = await request(baseUrl, "/api/courier/login", {
       method: "POST",
@@ -327,9 +330,16 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", secondPackageState.createdPackage.id).restaurant_id,
       secondRestaurantState.createdRestaurant.id
     );
+    assert.ok(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", secondPackageState.createdPackage.id).posentegra_id
+    );
     assert.equal(
       readRow(dbFile, "SELECT COUNT(DISTINCT restaurant_id) AS count FROM packages").count,
       2
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
+      0
     );
 
     const reloadedRestaurantState = await request(baseUrl, "/api/restaurant/bootstrap", {
@@ -358,13 +368,14 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       item.posentegraId === posentegraRestaurantId
     ));
 
+    const externalOrderOneId = `YS-${Date.now()}`;
     const externalOrderOne = await request(baseUrl, "/api/external/platform-orders", {
       method: "POST",
       headers: externalHeaders,
       body: JSON.stringify({
         platform: "yemeksepeti",
         platformRestaurantId: restaurantState.createdRestaurant.yemeksepetiRestaurantId,
-        platformOrderId: `YS-${Date.now()}`,
+        platformOrderId: externalOrderOneId,
         customerName: "External Customer One",
         customerPhone: "05550000001",
         deliveryAddress: "External address one",
@@ -373,13 +384,14 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         rawPayload: { source: "test" },
       }),
     });
+    const externalOrderTwoId = `GETIR-${Date.now()}`;
     const externalOrderTwo = await request(baseUrl, "/api/external/platform-orders", {
       method: "POST",
       headers: externalHeaders,
       body: JSON.stringify({
         platform: "getir",
         platformRestaurantId: secondRestaurantState.createdRestaurant.getirRestaurantId,
-        platformOrderId: `GETIR-${Date.now()}`,
+        platformOrderId: externalOrderTwoId,
         customerName: "External Customer Two",
         customerPhone: "05550000002",
         deliveryAddress: "External address two",
@@ -418,12 +430,20 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       restaurantState.createdRestaurant.yemeksepetiRestaurantId
     );
     assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", externalOrderOne.package.id).posentegra_id,
+      externalOrderOneId
+    );
+    assert.equal(
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).restaurant_id,
       secondRestaurantState.createdRestaurant.id
     );
     assert.equal(
       readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).platform_restaurant_id,
       secondRestaurantState.createdRestaurant.getirRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", externalOrderTwo.package.id).posentegra_id,
+      externalOrderTwoId
     );
     assert.equal(
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderByRestaurantId.package.id).restaurant_id,
@@ -587,6 +607,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.ok(counts.couriers > 0);
     assert.ok(counts.packages > 0);
     assert.ok(counts.platform_orders > 0);
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
+      0
+    );
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

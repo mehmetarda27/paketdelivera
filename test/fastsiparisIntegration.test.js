@@ -259,6 +259,10 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
     assert.ok(statusCall);
     assert.equal(statusCall.body.status, "accepted");
     assert.equal(statusCall.body.packageId, webhookOrder.package.id);
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
+      0
+    );
   } finally {
     await stopServer(app);
     await new Promise((resolve) => mock.server.close(resolve));

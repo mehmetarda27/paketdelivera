@@ -1143,6 +1143,23 @@ function ensureUniqueTrackingNo(preferred) {
   return generateTrackingNo();
 }
 
+function resolvePackagePosentegraId(pkg = {}) {
+  return trimmed(
+    pkg.pid ??
+    pkg.posentegraId ??
+    pkg.posentegra_id ??
+    pkg.externalOrderId ??
+    pkg.external_order_id ??
+    pkg.externalOrderNo ??
+    pkg.external_order_no ??
+    pkg.platformOrderId ??
+    pkg.platform_order_id ??
+    pkg.trackingNo ??
+    pkg.tracking_no ??
+    pkg.id
+  );
+}
+
 function json(value) {
   return JSON.stringify(value);
 }
@@ -1496,6 +1513,11 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
     sourcePlatform: targetSourcePlatform,
     externalOrderNo: externalOrderId,
     externalOrderId,
+    posentegraId: resolvePackagePosentegraId({
+      pid: draft.pid,
+      posentegraId: draft.posentegraId ?? draft.posentegra_id,
+      externalOrderId,
+    }),
     recipient: draft.customerName || restaurantRow.name,
     phone: draft.phone || "-",
     address: draft.deliveryAddress || "-",
@@ -1798,6 +1820,8 @@ function validateIntegrationDraft(body, restaurant) {
   const paymentMethod = trimmed(body.paymentMethod);
   const createdAt = nowIso();
   const items = Array.isArray(body.items) ? body.items : [];
+  const externalOrderNo = trimmed(body.externalOrderNo);
+  const externalOrderId = trimmed(body.externalOrderId || body.externalOrderNo);
   const pkg = {
     id: uid("pkg"),
     trackingNo: generateTrackingNo(),
@@ -1806,9 +1830,14 @@ function validateIntegrationDraft(body, restaurant) {
     sourcePlatform: trimmed(body.sourcePlatform),
     platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalRestaurantId ?? body.external_restaurant_id),
     externalRestaurantId: trimmed(body.externalRestaurantId ?? body.external_restaurant_id ?? body.platformRestaurantId ?? body.platform_restaurant_id),
-    posentegraId: trimmed(body.pid ?? body.posentegraId ?? body.posentegra_id),
-    externalOrderNo: trimmed(body.externalOrderNo),
-    externalOrderId: trimmed(body.externalOrderId || body.externalOrderNo),
+    posentegraId: resolvePackagePosentegraId({
+      pid: body.pid,
+      posentegraId: body.posentegraId ?? body.posentegra_id,
+      externalOrderId,
+      externalOrderNo,
+    }),
+    externalOrderNo,
+    externalOrderId,
     recipient: trimmed(body.recipient),
     phone: trimmed(body.phone),
     address: trimmed(body.address),
@@ -5699,7 +5728,7 @@ async function syncPosentegraStatusChangeOrThrow(packageRow, nextStatus, req) {
     return null;
   }
 
-  const orderId = trimmed(packageRow.posentegra_id || packageRow.external_order_id || packageRow.external_order_no);
+  const orderId = trimmed(packageRow.posentegra_id);
   if (!orderId) {
     logger.warn("order_pid_missing_for_status_change", {
       request_id: req?.requestId || null,
@@ -5878,6 +5907,7 @@ function normalizeWebhookOrderPayload(payload = {}) {
   const address = client.deliveryAddress && typeof client.deliveryAddress === "object" ? client.deliveryAddress : {};
   const location = client.location && typeof client.location === "object" ? client.location : {};
   const externalRestaurantId = extractWebhookRestaurantId(payload);
+  const externalOrderId = trimmed(payload.pid || payload.externalOrderId || payload.orderId || payload.id);
   const platformSlug = trimmed(provider.slug || provider.kaynak || provider.id || provider.alici);
   const providerName = trimmed(provider.kaynak || provider.name || provider.alici || platformSlug);
   const statusInfo = mapOrderStatus(payload.status);
@@ -5894,8 +5924,12 @@ function normalizeWebhookOrderPayload(payload = {}) {
   ].filter(Boolean).join(", ");
 
   return {
-    externalOrderId: trimmed(payload.pid || payload.externalOrderId || payload.orderId || payload.id),
-    posentegraId: trimmed(payload.pid || payload.posentegraId || payload.posentegra_id),
+    externalOrderId,
+    posentegraId: resolvePackagePosentegraId({
+      pid: payload.pid,
+      posentegraId: payload.posentegraId ?? payload.posentegra_id,
+      externalOrderId,
+    }),
     confirmationId: trimmed(payload.confirmationId),
     externalRestaurantId,
     restaurantNameFromPayload: trimmed(payload.restaurantName || payload.restaurant?.name),
@@ -6039,7 +6073,12 @@ function externalPackagePayload(pkg) {
 
 function normalizeExternalPlatformOrderBody(body = {}) {
   const platform = normalizePlatformInput(body.platform) || trimmed(body.platform);
-  const posentegraId = trimmed(body.pid ?? body.posentegraId ?? body.posentegra_id);
+  const platformOrderId = trimmed(body.platformOrderId ?? body.platform_order_id ?? body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
+  const posentegraId = resolvePackagePosentegraId({
+    pid: body.pid,
+    posentegraId: body.posentegraId ?? body.posentegra_id,
+    externalOrderId: platformOrderId,
+  });
   const platformRestaurantId = trimmed(
     body.platformRestaurantId ??
     body.platform_restaurant_id ??
@@ -6050,7 +6089,6 @@ function normalizeExternalPlatformOrderBody(body = {}) {
     body.restaurant?.id ??
     posentegraId
   );
-  const platformOrderId = trimmed(body.platformOrderId ?? body.platform_order_id ?? body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
   const deliveryAddress = trimmed(body.deliveryAddress ?? body.delivery_address ?? body.address);
   const customerName = trimmed(body.customerName ?? body.customer_name ?? body.recipient);
   const customerPhone = trimmed(body.customerPhone ?? body.customer_phone ?? body.phone);
@@ -7291,6 +7329,17 @@ function createRestaurantRecord(body, trace = {}) {
 }
 
 function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {}) {
+  const packagePosentegraId = resolvePackagePosentegraId(pkg);
+  if (!packagePosentegraId) {
+    logger.error("order_pid_missing_for_package_create", {
+      request_id: trace.requestId || null,
+      package_id: pkg.id || null,
+      internal_restaurant_id: pkg.restaurantId || null,
+      platform_order_id: pkg.externalOrderId || pkg.externalOrderNo || null,
+      source: pkg.source || null,
+    });
+    throw validationError("Paket icin posentegra_id/order pid bulunamadi.");
+  }
   const insertSql = `
     INSERT INTO packages (
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, platform_restaurant_id, posentegra_id, external_order_no, external_order_id,
@@ -7308,7 +7357,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     packageType,
     pkg.sourcePlatform,
     pkg.platformRestaurantId || pkg.externalRestaurantId || null,
-    pkg.posentegraId || null,
+    packagePosentegraId,
     pkg.externalOrderNo,
     pkg.externalOrderId || pkg.externalOrderNo,
     pkg.recipient,
@@ -7352,6 +7401,25 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     tableName: "packages",
     insertedId: pkg.id,
     requestId: trace.requestId || null,
+  });
+  const verified = db.prepare("SELECT id, restaurant_id, platform_restaurant_id, posentegra_id, external_order_id FROM packages WHERE id = ?").get(pkg.id);
+  if (!verified?.posentegra_id) {
+    logger.error("package_posentegra_id_db_verify_failed", {
+      request_id: trace.requestId || null,
+      package_id: pkg.id,
+      internal_restaurant_id: pkg.restaurantId,
+      platform_order_id: pkg.externalOrderId || pkg.externalOrderNo || null,
+    });
+    throw new Error("packages.posentegra_id DB dogrulamasi basarisiz.");
+  }
+  logger.info("order_pid_linked", {
+    request_id: trace.requestId || null,
+    package_id: pkg.id,
+    internal_restaurant_id: verified.restaurant_id,
+    pid: verified.posentegra_id,
+    posentegra_id: verified.posentegra_id,
+    platform_restaurant_id: verified.platform_restaurant_id || null,
+    platform_order_id: verified.external_order_id || pkg.externalOrderNo || null,
   });
 }
 
@@ -7681,6 +7749,11 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
     ),
     externalOrderNo,
     externalOrderId: externalOrderNo,
+    posentegraId: resolvePackagePosentegraId({
+      pid: body.pid ?? shipment.pid,
+      posentegraId: body.posentegraId ?? body.posentegra_id ?? shipment.posentegraId ?? shipment.posentegra_id,
+      externalOrderId: externalOrderNo,
+    }),
     recipient: trimmed(recipientName) || "Musteri",
     phone: pickFirstValue(
       shipment.phone,
@@ -7716,7 +7789,12 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
 
 function upsertPlatformPackage(platform, restaurant, payload, options = {}) {
   return withImmediateTransaction(() => {
-    const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
+    const existing = findDuplicatePackage(
+      restaurant.id,
+      "platform_any",
+      payload.externalOrderId || payload.externalOrderNo,
+      payload.posentegraId
+    );
     upsertPlatformOrderRecord({
       platform,
       platformRestaurantId: payload.platformRestaurantId || payload.externalRestaurantId,
@@ -7840,6 +7918,11 @@ function createSimplePlatformPayload(order, restaurant) {
     externalRestaurantId: order.platformRestaurantId || restaurant.externalStoreId || "",
     externalOrderNo: order.orderId,
     externalOrderId: order.orderId,
+    posentegraId: resolvePackagePosentegraId({
+      pid: order.pid,
+      posentegraId: order.posentegraId ?? order.posentegra_id,
+      externalOrderId: order.orderId,
+    }),
     recipient: order.customerName,
     phone: order.phone,
     address: order.address,
