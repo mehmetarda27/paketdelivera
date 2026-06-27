@@ -124,14 +124,54 @@ const courierRefs = {
   profileForm: document.getElementById("courierProfileForm"),
 };
 
+function readStoredCourierAuth() {
+  try {
+    if (!courierState.token) {
+      courierState.token = localStorage.getItem(STORAGE_TOKEN_KEY) || "";
+    }
+    if (!courierState.refreshToken) {
+      courierState.refreshToken = localStorage.getItem(STORAGE_REFRESH_TOKEN_KEY) || "";
+    }
+  } catch {
+    if (!courierState.token) courierState.token = "";
+    if (!courierState.refreshToken) courierState.refreshToken = "";
+  }
+}
+
+function writeStoredCourierAuth() {
+  try {
+    if (courierState.token) {
+      localStorage.setItem(STORAGE_TOKEN_KEY, courierState.token);
+    } else {
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+    }
+    if (courierState.refreshToken) {
+      localStorage.setItem(STORAGE_REFRESH_TOKEN_KEY, courierState.refreshToken);
+    } else {
+      localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY);
+    }
+  } catch {
+    // In-memory session still works if storage is unavailable.
+  }
+}
+
+function clearStoredCourierAuth() {
+  try {
+    localStorage.removeItem(STORAGE_TOKEN_KEY);
+    localStorage.removeItem(STORAGE_REFRESH_TOKEN_KEY);
+  } catch {}
+}
+
 function persistCourierAuth(auth) {
   courierState.token = auth.token;
   courierState.refreshToken = auth.refreshToken;
+  writeStoredCourierAuth();
 }
 
 function clearCourierAuth() {
   courierState.token = "";
   courierState.refreshToken = "";
+  clearStoredCourierAuth();
   courierState.data = null;
   courierState.lastCoords = null;
   courierState.lastPackageSnapshot = new Map();
@@ -1604,4 +1644,6 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+readStoredCourierAuth();
+setLoggedIn(Boolean(courierState.token || courierState.refreshToken));
 loadCourierWorkspace();

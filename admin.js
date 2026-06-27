@@ -86,6 +86,40 @@ function adminHeaders() {
   return authHeaders(adminState.token);
 }
 
+function readStoredAdminAuth() {
+  try {
+    adminState.token = localStorage.getItem(ADMIN_TOKEN_KEY) || "";
+    adminState.refreshToken = localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "";
+  } catch {
+    adminState.token = "";
+    adminState.refreshToken = "";
+  }
+}
+
+function writeStoredAdminAuth() {
+  try {
+    if (adminState.token) {
+      localStorage.setItem(ADMIN_TOKEN_KEY, adminState.token);
+    } else {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
+    if (adminState.refreshToken) {
+      localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, adminState.refreshToken);
+    } else {
+      localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+    }
+  } catch {
+    // Storage may be unavailable in private contexts; in-memory auth still works.
+  }
+}
+
+function clearStoredAdminAuth() {
+  try {
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+  } catch {}
+}
+
 function htmlSafe(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -117,11 +151,13 @@ async function copyTextToClipboard(value) {
 function persistAdminAuth(auth) {
   adminState.token = auth.token;
   adminState.refreshToken = auth.refreshToken;
+  writeStoredAdminAuth();
 }
 
 function clearAdminAuth() {
   adminState.token = "";
   adminState.refreshToken = "";
+  clearStoredAdminAuth();
   adminState.data = null;
   adminState.selectedRestaurantId = "";
   stopAdminWorkspacePolling();
@@ -1865,7 +1901,6 @@ document.addEventListener("visibilitychange", () => {
     requestScreenWakeLock();
   }
 });
-requestScreenWakeLock();
 
 adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   adminState.selectedRestaurantId = event.target.value;
@@ -1892,6 +1927,10 @@ adminRefs.logoutButton?.addEventListener("click", () => {
   }
 });
 
+readStoredAdminAuth();
+setAdminLoggedIn(Boolean(adminState.token || adminState.refreshToken));
+requestScreenWakeLock();
+
 loadAdminState().catch((error) => {
   clearAdminAuth();
   adminRefs.summary.textContent = error.message;
@@ -1900,7 +1939,5 @@ loadAdminState().catch((error) => {
     adminRefs.liveBadge.textContent = "Canli akis kapali";
   }
 });
-
-startAdminWorkspacePolling();
 
 renderPlatformChecks();

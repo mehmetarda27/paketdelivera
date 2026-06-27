@@ -87,6 +87,42 @@ function restaurantAuthHeaders() {
   return authHeaders(restaurantState.token);
 }
 
+function readStoredRestaurantAuth() {
+  try {
+    restaurantState.token = localStorage.getItem(RESTAURANT_TOKEN_KEY) || "";
+    restaurantState.refreshToken = localStorage.getItem(RESTAURANT_REFRESH_TOKEN_KEY) || "";
+  } catch {
+    restaurantState.token = "";
+    restaurantState.refreshToken = "";
+  }
+}
+
+function writeStoredRestaurantAuth() {
+  try {
+    if (restaurantState.token) {
+      localStorage.setItem(RESTAURANT_TOKEN_KEY, restaurantState.token);
+    } else {
+      localStorage.removeItem(RESTAURANT_TOKEN_KEY);
+    }
+    if (restaurantState.refreshToken) {
+      localStorage.setItem(RESTAURANT_REFRESH_TOKEN_KEY, restaurantState.refreshToken);
+    } else {
+      localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
+    }
+  } catch {}
+}
+
+function writeStoredRestaurantAccessInfo() {
+  // Keep restaurant ID/API key in memory only. Persistent auth uses session tokens.
+}
+
+function clearStoredRestaurantAuth() {
+  try {
+    localStorage.removeItem(RESTAURANT_TOKEN_KEY);
+    localStorage.removeItem(RESTAURANT_REFRESH_TOKEN_KEY);
+  } catch {}
+}
+
 function safeSetText(element, value) {
   if (!element) {
     return;
@@ -99,6 +135,7 @@ function persistRestaurantAccessInfo(payload = {}) {
   const apiKey = String(payload.apiKey || "").trim();
   restaurantState.storedRestaurantId = restaurantId;
   restaurantState.storedApiKey = apiKey;
+  writeStoredRestaurantAccessInfo();
 }
 
 function clearRestaurantAccessInfo() {
@@ -140,6 +177,7 @@ async function tryRestaurantSessionFromStoredAccess() {
 function persistRestaurantAuth(auth) {
   restaurantState.token = auth.token;
   restaurantState.refreshToken = auth.refreshToken;
+  writeStoredRestaurantAuth();
   const currentRestaurant = auth?.state?.restaurants?.[0];
   if (currentRestaurant) {
     persistRestaurantAccessInfo({
@@ -152,6 +190,7 @@ function persistRestaurantAuth(auth) {
 function clearRestaurantAuth() {
   restaurantState.token = "";
   restaurantState.refreshToken = "";
+  clearStoredRestaurantAuth();
   restaurantState.data = null;
   restaurantState.selectedRestaurantId = "";
   stopRestaurantWorkspacePolling();
@@ -1847,7 +1886,6 @@ restaurantRefs.platformSelect?.addEventListener("change", applyPlatformFormMode)
 if (restaurantRefs.samplePaymentMethod) {
   restaurantRefs.samplePaymentMethod.innerHTML = PAYMENT_OPTIONS.map((item) => `<option value="${item}">${item}</option>`).join("");
 }
-applyRestaurantAccessFromQuery();
 simplifyPlatformAccountForm();
 restaurantRefs.samplePaymentMethod?.addEventListener("change", () => {
   if (restaurantState.data) {
@@ -1936,6 +1974,10 @@ handleImagePreview(restaurantRefs.packageImageInput, restaurantRefs.packageImage
       }, 500);
     }
   });
+
+readStoredRestaurantAuth();
+applyRestaurantAccessFromQuery();
+setRestaurantWorkspaceVisible(Boolean(restaurantState.token || restaurantState.refreshToken));
 
 api("/api/bootstrap")
   .then((data) => {

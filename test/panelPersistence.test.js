@@ -110,7 +110,18 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       method: "POST",
       body: JSON.stringify({ username: adminUsername, password: adminPassword }),
     });
-    const adminHeaders = { Authorization: `Bearer ${adminLogin.token}` };
+    let adminHeaders = { Authorization: `Bearer ${adminLogin.token}` };
+    const refreshedAdmin = await request(baseUrl, "/api/admin/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: adminLogin.refreshToken }),
+    });
+    assert.ok(refreshedAdmin.token);
+    assert.ok(refreshedAdmin.refreshToken);
+    adminHeaders = { Authorization: `Bearer ${refreshedAdmin.token}` };
+    const refreshedAdminBootstrap = await request(baseUrl, "/api/admin/bootstrap", {
+      headers: { Authorization: `Bearer ${refreshedAdmin.token}` },
+    });
+    assert.ok(Array.isArray(refreshedAdminBootstrap.restaurants));
 
     const restaurantState = await request(baseUrl, "/restaurants", {
       method: "POST",
@@ -214,7 +225,18 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       method: "POST",
       body: JSON.stringify({ username: restaurantUsername, password: restaurantPassword }),
     });
-    const restaurantHeaders = { Authorization: `Bearer ${restaurantLogin.token}` };
+    let restaurantHeaders = { Authorization: `Bearer ${restaurantLogin.token}` };
+    const refreshedRestaurant = await request(baseUrl, "/api/restaurant/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: restaurantLogin.refreshToken }),
+    });
+    assert.ok(refreshedRestaurant.token);
+    const refreshedRestaurantHeaders = { Authorization: `Bearer ${refreshedRestaurant.token}` };
+    restaurantHeaders = refreshedRestaurantHeaders;
+    const refreshedRestaurantBootstrap = await request(baseUrl, "/api/restaurant/bootstrap", {
+      headers: refreshedRestaurantHeaders,
+    });
+    assert.equal(refreshedRestaurantBootstrap.restaurants[0].id, restaurantState.createdRestaurant.id);
 
     const platformOrderId = `PLATFORM-${Date.now()}`;
     const platformOrderState = await request(baseUrl, "/platform-orders", {
@@ -265,8 +287,17 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       body: JSON.stringify({ username: courierState.createdCourier.username, password: "Kurye123!" }),
     });
     assert.ok(courierLogin.token);
+    const refreshedCourier = await request(baseUrl, "/api/courier/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: courierLogin.refreshToken }),
+    });
+    assert.ok(refreshedCourier.token);
+    const refreshedCourierWorkspace = await request(baseUrl, "/api/courier/me", {
+      headers: { Authorization: `Bearer ${refreshedCourier.token}` },
+    });
+    assert.equal(refreshedCourierWorkspace.courier.id, courierState.createdCourier.id);
     const courierWorkspace = await request(baseUrl, "/api/courier/me", {
-      headers: { Authorization: `Bearer ${courierLogin.token}` },
+      headers: { Authorization: `Bearer ${refreshedCourier.token}` },
     });
     assert.equal(courierWorkspace.courier.id, courierState.createdCourier.id);
     assert.ok(courierWorkspace.dayMetrics);
