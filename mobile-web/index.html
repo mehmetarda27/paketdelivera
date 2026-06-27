@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Delivera Paket</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #07110d;
+      color: #f7fbf8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 20% 10%, rgba(31, 185, 129, 0.24), transparent 34%),
+        linear-gradient(145deg, #07110d, #101b17 54%, #07110d);
+    }
+
+    main {
+      width: min(420px, 100%);
+      display: grid;
+      gap: 18px;
+      text-align: center;
+    }
+
+    .mark {
+      width: 84px;
+      height: 84px;
+      margin: 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 24px;
+      background: linear-gradient(145deg, #19b57c, #092019);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+    }
+
+    .mark svg { width: 54px; height: 54px; }
+
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: rgba(247, 251, 248, 0.76);
+      line-height: 1.5;
+    }
+
+    button {
+      min-height: 48px;
+      border: 0;
+      border-radius: 12px;
+      color: #07110d;
+      background: #38d898;
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" fill="none" role="img">
+        <rect x="10" y="18" width="30" height="25" rx="4" stroke="#fff" stroke-width="5"/>
+        <path d="M40 27h8l6 7v9H40V27Z" stroke="#fff" stroke-width="5" stroke-linejoin="round"/>
+        <circle cx="22" cy="47" r="5" fill="#fff"/>
+        <circle cx="47" cy="47" r="5" fill="#fff"/>
+        <path d="M18 15h20" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <h1>Delivera Paket</h1>
+    <p>Kurye paneline baglaniliyor. Render servisi uyanirken bu ekran birkac saniye kalabilir.</p>
+    <button type="button" onclick="location.reload()">Tekrar dene</button>
+  </main>
+</body>
+</html>

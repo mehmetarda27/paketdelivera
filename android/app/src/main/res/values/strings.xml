@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Delivera Paket</string>
+    <string name="title_activity_main">Delivera Paket</string>
+    <string name="package_name">com.delivera.paket</string>
+    <string name="custom_url_scheme">com.delivera.paket</string>
+</resources>
