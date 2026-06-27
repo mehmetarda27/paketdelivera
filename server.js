@@ -3199,7 +3199,7 @@ function updatePlatformOrderStatusByPackage(pkg, status) {
 
 function isPlatformBackedPackage(pkg) {
   const source = normalizeOrderSource(pkg?.source, pkg?.source_platform || pkg?.sourcePlatform);
-  return source !== "external_manual" && source !== "manual";
+  return ["platform_webhook", "platform_api", "platform_polling"].includes(source);
 }
 
 function readRequestBody(req) {
@@ -7900,7 +7900,7 @@ function appendPlatformStatusLog(packageId, entry) {
 }
 
 async function callPlatformStatusCallback(packageRecord, status, meta = {}) {
-  if (!packageRecord || !packageRecord.sourcePlatform) {
+  if (!packageRecord || !packageRecord.sourcePlatform || !isPlatformBackedPackage(packageRecord)) {
     return { ok: false };
   }
 
@@ -7911,17 +7911,31 @@ async function callPlatformStatusCallback(packageRecord, status, meta = {}) {
     status,
     meta,
   };
-  appendPlatformStatusLog(packageRecord.id, {
-    status,
-    message: `platform ${status} callback hazirlaniyor`,
-    platform: packageRecord.sourcePlatform,
-    meta,
-  });
   let result;
   try {
     result = await sendPlatformStatusCallback({ db, packageRecord, status, meta });
   } catch (error) {
     result = { ok: false, error: error.message };
+  }
+  if (result?.mode === "not_configured" || result?.status === "not_configured") {
+    logger.info("Platform status callback skipped", {
+      packageId: packageRecord.id,
+      platform: packageRecord.sourcePlatform,
+      status,
+      reason: result?.error || "callback_not_configured",
+    });
+    logPlatformEvent({
+      platform: packageRecord.sourcePlatform,
+      restaurantId: packageRecord.restaurantId,
+      platformAccountId: result?.platformAccountId || null,
+      eventType: "callback",
+      status: "skipped",
+      httpStatus: null,
+      errorCode: null,
+      errorMessage: result?.error || "callback_not_configured",
+      metadata: { packageId: packageRecord.id, callbackMode: result?.mode || null, callbackStatus: result?.status || null },
+    });
+    return result;
   }
   const message = result?.ok
     ? `platforma ${status} bildirildi`

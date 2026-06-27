@@ -16,6 +16,19 @@ function normalizePlatform(value) {
   return trimmed(value).toLowerCase().replaceAll("_", " ").replaceAll("-", " ");
 }
 
+function callbackEnvKey(platform) {
+  return `DELIVERA_PLATFORM_CALLBACK_URL_${trimmed(platform).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+function resolveCallbackUrl(account, packageRecord) {
+  return trimmed(
+    account?.callback_url ||
+    process.env[callbackEnvKey(packageRecord?.sourcePlatform)] ||
+    process.env.DELIVERA_PLATFORM_CALLBACK_URL ||
+    process.env.PLATFORM_CALLBACK_URL
+  );
+}
+
 function findCallbackAccount(db, packageRecord) {
   if (!db || !packageRecord?.restaurantId || !packageRecord?.sourcePlatform) {
     return null;
@@ -31,7 +44,7 @@ function findCallbackAccount(db, packageRecord) {
 
 async function sendPlatformStatusCallback({ db, packageRecord, status, meta = {}, timeoutMs = 8000 }) {
   const account = findCallbackAccount(db, packageRecord);
-  const callbackUrl = trimmed(account?.callback_url);
+  const callbackUrl = resolveCallbackUrl(account, packageRecord);
   if (!callbackUrl) {
     return {
       ok: false,
@@ -48,6 +61,8 @@ async function sendPlatformStatusCallback({ db, packageRecord, status, meta = {}
     orderId: packageRecord.externalOrderId || packageRecord.externalOrderNo,
     packageId: packageRecord.id,
     restaurantId: packageRecord.restaurantId,
+    platformRestaurantId: packageRecord.platformRestaurantId || packageRecord.externalRestaurantId || null,
+    posentegraId: packageRecord.posentegraId || null,
     courierId: packageRecord.assignedCourierId || null,
     status,
     meta,
