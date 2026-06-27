@@ -36,6 +36,7 @@ const { createRateLimitStore } = require("./services/rateLimitStore");
 const { createQueueService, JOB_TYPES } = require("./services/queueService");
 const { createSessionRevocationService } = require("./services/sessionRevocationService");
 const { sendPlatformStatusCallback } = require("./services/platformCallbackService");
+const posentegraClient = require("./services/posentegraClient");
 const {
   createConnectionHealthService,
   HEALTH_STATUS,
@@ -5614,6 +5615,236 @@ function logWebhookAttempt(entry) {
   return Number(result.lastInsertRowid || 0);
 }
 
+function logPosentegraApiAttempt({ requestId, restaurantId = null, packageId = null, event, responseStatus, requestBody = null, responseBody = null, error = null, externalRestaurantId = null, externalOrderId = null, isMatched = null }) {
+  return logWebhookAttempt({
+    requestId,
+    restaurantId,
+    sourcePlatform: "Posentegra",
+    provider: "posentegra",
+    platform: "posentegra",
+    externalRestaurantId,
+    externalOrderId,
+    externalOrderNo: externalOrderId,
+    signatureValid: !error,
+    responseStatus: responseStatus || (error ? 502 : 200),
+    status: event,
+    isMatched,
+    requestBody: json({
+      event,
+      packageId,
+      request: requestBody || null,
+      response: responseBody || null,
+      error: error ? { message: error.message, code: error.code || null } : null,
+    }),
+    rawPayload: {
+      event,
+      packageId,
+      request: requestBody || null,
+      response: responseBody || null,
+      error: error ? { message: error.message, code: error.code || null } : null,
+    },
+    lastError: error?.message || null,
+    errorMessage: error?.message || null,
+  });
+}
+
+function extractPosentegraRestaurantId(result) {
+  const body = result?.responseBody || {};
+  return trimmed(body.id || body.restaurantId || body.restaurant_id || body.data?.id || body.data?.restaurantId || body.data?.restaurant_id);
+}
+
+function updateRestaurantPosentegraIdOrThrow(restaurantId, posentegraId, requestId) {
+  const incoming = trimmed(posentegraId);
+  if (!incoming) {
+    throw validationError("Posentegra restoran ID bos dondu.");
+  }
+  db.prepare("UPDATE restaurants SET posentegra_id = ? WHERE id = ?").run(incoming, restaurantId);
+  const verified = db.prepare("SELECT id, posentegra_id FROM restaurants WHERE id = ?").get(restaurantId);
+  if (!verified || verified.posentegra_id !== incoming) {
+    logger.error("posentegra_id_db_verify_failed", {
+      request_id: requestId,
+      internal_restaurant_id: restaurantId,
+      posentegra_id: incoming,
+    });
+    throw new Error("restaurants.posentegra_id DB dogrulamasi basarisiz.");
+  }
+  logger.info("posentegra_id_db_update_success", {
+    request_id: requestId,
+    internal_restaurant_id: restaurantId,
+    posentegra_id: incoming,
+  });
+  return verified;
+}
+
+function posentegraStatusForPackageStatus(status) {
+  const normalized = normalizeStatus(status);
+  if (normalized === ACCEPTED_BY_COURIER_STATUS) return "accepted";
+  if (normalized === ON_ROUTE_STATUS) return "on_the_way";
+  if (normalized === DELIVERED_STATUS) return "delivered";
+  if (normalized === FAILED_STATUS) return "failed";
+  return normalized;
+}
+
+async function syncPosentegraStatusChangeOrThrow(packageRow, nextStatus, req) {
+  if (!isPlatformBackedPackage(packageRow)) {
+    return null;
+  }
+  if (!posentegraClient.configured()) {
+    logger.info("posentegra_status_change_skipped", {
+      request_id: req?.requestId || null,
+      package_id: packageRow.id,
+      status: nextStatus,
+      reason: "posentegra_not_configured",
+    });
+    return null;
+  }
+
+  const orderId = trimmed(packageRow.posentegra_id || packageRow.external_order_id || packageRow.external_order_no);
+  if (!orderId) {
+    logger.warn("order_pid_missing_for_status_change", {
+      request_id: req?.requestId || null,
+      package_id: packageRow.id,
+      internal_restaurant_id: packageRow.restaurant_id,
+      platform_order_id: packageRow.external_order_id || packageRow.external_order_no || null,
+      status: nextStatus,
+    });
+    throw validationError("Posentegra/FastSiparis order pid bulunamadigi icin durum degistirilemedi.");
+  }
+
+  const mappedStatus = posentegraStatusForPackageStatus(nextStatus);
+  logger.info("posentegra_status_change_start", {
+    request_id: req?.requestId || null,
+    pid: orderId,
+    posentegra_id: orderId,
+    package_id: packageRow.id,
+    platform_order_id: packageRow.external_order_id || packageRow.external_order_no || null,
+    status: mappedStatus,
+  });
+  try {
+    const result = await posentegraClient.changeOrderStatus(orderId, mappedStatus, {
+      packageId: packageRow.id,
+      internalStatus: normalizeStatus(nextStatus),
+    });
+    logger.info("posentegra_status_change_success", {
+      request_id: req?.requestId || null,
+      pid: orderId,
+      posentegra_id: orderId,
+      package_id: packageRow.id,
+      platform_order_id: packageRow.external_order_id || packageRow.external_order_no || null,
+      status: mappedStatus,
+    });
+    logPosentegraApiAttempt({
+      requestId: req?.requestId || null,
+      restaurantId: packageRow.restaurant_id,
+      packageId: packageRow.id,
+      event: "posentegra_status_change",
+      responseStatus: result.status,
+      requestBody: result.requestBody,
+      responseBody: result.responseBody,
+      externalRestaurantId: packageRow.platform_restaurant_id || null,
+      externalOrderId: orderId,
+      isMatched: true,
+    });
+    return result;
+  } catch (error) {
+    logger.error("posentegra_status_change_failed", {
+      request_id: req?.requestId || null,
+      pid: orderId,
+      posentegra_id: orderId,
+      package_id: packageRow.id,
+      platform_order_id: packageRow.external_order_id || packageRow.external_order_no || null,
+      status: mappedStatus,
+      error_message: error.message,
+    });
+    logPosentegraApiAttempt({
+      requestId: req?.requestId || null,
+      restaurantId: packageRow.restaurant_id,
+      packageId: packageRow.id,
+      event: "posentegra_status_change_failed",
+      responseStatus: error.result?.status || 502,
+      requestBody: error.result?.requestBody || null,
+      responseBody: error.result?.responseBody || null,
+      error,
+      externalRestaurantId: packageRow.platform_restaurant_id || null,
+      externalOrderId: orderId,
+      isMatched: true,
+    });
+    throw error;
+  }
+}
+
+async function createRestaurantInPosentegraOrRollback(restaurant, requestId) {
+  if (!posentegraClient.configured()) {
+    logger.info("posentegra_restaurant_create_skipped", {
+      request_id: requestId,
+      internal_restaurant_id: restaurant.id,
+      reason: "posentegra_not_configured",
+    });
+    return "";
+  }
+
+  logger.info("posentegra_restaurant_create_start", {
+    request_id: requestId,
+    internal_restaurant_id: restaurant.id,
+    restaurant_name: restaurant.name,
+    business_id: posentegraClient.businessId() || null,
+  });
+
+  try {
+    const createResult = await posentegraClient.createRestaurant(restaurant);
+    logPosentegraApiAttempt({
+      requestId,
+      restaurantId: restaurant.id,
+      event: "posentegra_restaurant_create",
+      responseStatus: createResult.status,
+      requestBody: createResult.requestBody,
+      responseBody: createResult.responseBody,
+    });
+    const posentegraId = extractPosentegraRestaurantId(createResult);
+    if (!posentegraId) {
+      throw new Error("Posentegra restoran create response icinde id bulunamadi.");
+    }
+    const linkResult = await posentegraClient.linkRestaurantToBusiness(posentegraId);
+    if (linkResult) {
+      logPosentegraApiAttempt({
+        requestId,
+        restaurantId: restaurant.id,
+        event: "posentegra_business_restaurant_link",
+        responseStatus: linkResult.status,
+        requestBody: linkResult.requestBody,
+        responseBody: linkResult.responseBody,
+        externalRestaurantId: posentegraId,
+      });
+    }
+    updateRestaurantPosentegraIdOrThrow(restaurant.id, posentegraId, requestId);
+    logger.info("posentegra_restaurant_create_success", {
+      request_id: requestId,
+      internal_restaurant_id: restaurant.id,
+      posentegra_id: posentegraId,
+    });
+    return posentegraId;
+  } catch (error) {
+    logger.error("posentegra_restaurant_create_failed", {
+      request_id: requestId,
+      internal_restaurant_id: restaurant.id,
+      error_message: error.message,
+    });
+    logPosentegraApiAttempt({
+      requestId,
+      restaurantId: restaurant.id,
+      event: "posentegra_restaurant_create_failed",
+      responseStatus: error.result?.status || 502,
+      requestBody: error.result?.requestBody || null,
+      responseBody: error.result?.responseBody || null,
+      error,
+    });
+    dbFacade.transaction(() => {
+      db.prepare("DELETE FROM restaurants WHERE id = ?").run(restaurant.id);
+    });
+    throw error;
+  }
+}
+
 function webhookPlatformLabel(slug, providerName = "") {
   const value = trimmed(slug || providerName).toLowerCase();
   if (["ys", "yemeksepeti", "yemek-sepeti", "yemek sepeti"].includes(value)) return "Yemeksepeti";
@@ -6120,6 +6351,27 @@ function updatePackageApiMetadata(packageId, order) {
     nowIso(),
     packageId
   );
+  const verified = db.prepare("SELECT id, restaurant_id, platform_restaurant_id, posentegra_id, external_order_id FROM packages WHERE id = ?").get(packageId);
+  if (platformRestaurantId && verified?.platform_restaurant_id === platformRestaurantId) {
+    logger.info("package_platform_restaurant_id_saved", {
+      package_id: packageId,
+      internal_restaurant_id: verified.restaurant_id,
+      platform_restaurant_id: platformRestaurantId,
+      pid: order.posentegraId || null,
+      posentegra_id: order.posentegraId || null,
+      platform_order_id: order.externalOrderId || order.confirmationId || verified.external_order_id || null,
+    });
+  }
+  if (order.posentegraId) {
+    logger.info("order_pid_linked", {
+      package_id: packageId,
+      internal_restaurant_id: verified?.restaurant_id || null,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      platform_restaurant_id: platformRestaurantId || verified?.platform_restaurant_id || null,
+      platform_order_id: order.externalOrderId || order.confirmationId || verified?.external_order_id || null,
+    });
+  }
 }
 
 function replaceOrderItems(packageId, products = []) {
@@ -6169,6 +6421,16 @@ function logPlatformRestaurantNotMatched(order, req = null) {
 }
 
 function upsertWebhookPackage(order, restaurant, options = {}) {
+  if (order.posentegraId) {
+    logger.info("order_pid_detected", {
+      request_id: options.requestId || null,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      platform_restaurant_id: order.externalRestaurantId || null,
+      internal_restaurant_id: restaurant.id,
+      platform_order_id: order.externalOrderId || order.confirmationId || null,
+    });
+  }
   const existing = db.prepare(`
     SELECT * FROM packages
     WHERE restaurant_id = ?
@@ -6244,6 +6506,16 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       packageId: existing.id,
     });
     if (order.posentegraId) {
+      logger.info("order_pid_duplicate_skipped", {
+        request_id: options.requestId || null,
+        pid: order.posentegraId,
+        posentegra_id: order.posentegraId,
+        platform: platformApiKey(order.platform),
+        platform_restaurant_id: order.externalRestaurantId || null,
+        internal_restaurant_id: restaurant.id,
+        package_id: existing.id,
+        platform_order_id: order.externalOrderId || order.confirmationId || null,
+      });
       logger.info("posentegra_duplicate_skipped", {
         request_id: options.requestId || null,
         pid: order.posentegraId,
@@ -10070,15 +10342,25 @@ async function handleApi(req, res, pathname) {
       }));
       logAfterCommit("restaurants", restaurant.id, req.requestId);
       selectInsertedRowOrThrow("restaurants", restaurant.id, req.requestId);
+      const createdPosentegraId = await createRestaurantInPosentegraOrRollback(restaurant, req.requestId);
       createdRestaurant = getRestaurants({ restaurantId: restaurant.id })[0];
       if (!createdRestaurant?.id) {
         throw new Error(`restaurants insert committed but getRestaurants returned empty for id ${restaurant.id}`);
+      }
+      if (posentegraClient.configured() && (!createdRestaurant.posentegraId || createdRestaurant.posentegraId !== createdPosentegraId)) {
+        logger.error("posentegra_id_db_verify_failed", {
+          request_id: req.requestId,
+          internal_restaurant_id: restaurant.id,
+          posentegra_id: createdPosentegraId || null,
+        });
+        throw new Error("Posentegra ID DB dogrulamasi basarisiz.");
       }
       logger.info("restaurant_create_transaction_committed", {
         requestId: req.requestId,
         restaurantId: restaurant.id,
         username: restaurant.username,
         selectedRestaurantId: createdRestaurant.id,
+        posentegraId: createdRestaurant.posentegraId || null,
       });
       logger.info("restaurant_created", {
         request_id: req.requestId,
@@ -10092,6 +10374,7 @@ async function handleApi(req, res, pathname) {
         getir_restaurant_id: createdRestaurant.getirRestaurantId || null,
         yemeksepeti_restaurant_id: createdRestaurant.yemeksepetiRestaurantId || null,
         migros_restaurant_id: createdRestaurant.migrosRestaurantId || null,
+        posentegra_id: createdRestaurant.posentegraId || null,
       });
     } catch (error) {
       logger.error("restaurant_create_failed", {
@@ -10111,7 +10394,10 @@ async function handleApi(req, res, pathname) {
 
     sendJson(res, 201, {
       ...decorateState(),
-      createdRestaurant: sanitizeRestaurant(createdRestaurant, true),
+      createdRestaurant: {
+        ...sanitizeRestaurant(createdRestaurant, true),
+        verification: posentegraClient.configured() ? Boolean(createdRestaurant.posentegraId) : Boolean(createdRestaurant.id),
+      },
       auditLogs: getAuditLogs(20),
     });
     return;
@@ -10980,6 +11266,13 @@ async function handleApi(req, res, pathname) {
 
     if (nextStatus === DELIVERED_STATUS && !body.paymentStatus) {
       sendJson(res, 400, { error: "Teslim oncesi odeme durumu secilmelidir." });
+      return;
+    }
+
+    try {
+      await syncPosentegraStatusChangeOrThrow(target, nextStatus, req);
+    } catch (error) {
+      sendJson(res, error.statusCode || 502, { error: error.message || "Posentegra durum degisikligi basarisiz." });
       return;
     }
 
