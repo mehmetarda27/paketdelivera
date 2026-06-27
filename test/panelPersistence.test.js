@@ -396,8 +396,16 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       restaurantState.createdRestaurant.id
     );
     assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", externalOrderOne.package.id).platform_restaurant_id,
+      restaurantState.createdRestaurant.yemeksepetiRestaurantId
+    );
+    assert.equal(
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).restaurant_id,
       secondRestaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).platform_restaurant_id,
+      secondRestaurantState.createdRestaurant.getirRestaurantId
     );
     assert.equal(
       readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE id = ?", externalOrderOne.platformOrder.id).platform_restaurant_id,
@@ -440,6 +448,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       restaurantState.createdRestaurant.id
     );
     assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", webhookOrder.package.id).platform_restaurant_id,
+      yemeksepetiRestaurantId
+    );
+    assert.equal(
       readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE platform_order_id = ?", webhookOrderId).platform_restaurant_id,
       yemeksepetiRestaurantId
     );
@@ -474,6 +486,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.equal(
       readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", posentegraWebhookOrder.package.id).posentegra_id,
       posentegraPid
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", posentegraWebhookOrder.package.id).platform_restaurant_id,
+      posentegraRestaurantId
     );
     assert.equal(
       readRow(dbFile, "SELECT posentegra_id FROM platform_orders WHERE platform_order_id = ?", posentegraPid).posentegra_id,

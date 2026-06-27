@@ -1703,11 +1703,17 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
     longitude: formData.get("longitude"),
     platforms: formData.getAll("platforms"),
     trendyolRestaurantId: formData.get("trendyolRestaurantId"),
+    trendyol_restaurant_id: formData.get("trendyolRestaurantId"),
     yemeksepetiRestaurantId: formData.get("yemeksepetiRestaurantId"),
+    yemeksepeti_restaurant_id: formData.get("yemeksepetiRestaurantId"),
     getirRestaurantId: formData.get("getirRestaurantId"),
+    getir_restaurant_id: formData.get("getirRestaurantId"),
     migrosRestaurantId: formData.get("migrosRestaurantId"),
+    migros_restaurant_id: formData.get("migrosRestaurantId"),
     posentegraId: formData.get("posentegraId"),
+    posentegra_id: formData.get("posentegraId"),
     externalRestaurantIds: formData.get("externalRestaurantIds"),
+    external_restaurant_ids: formData.get("externalRestaurantIds"),
   };
   try {
     const data = await api("/api/admin/restaurants", {

@@ -341,6 +341,7 @@ db.exec(`
     delivery_address TEXT,
     package_type TEXT,
     source_platform TEXT NOT NULL,
+    platform_restaurant_id TEXT,
     posentegra_id TEXT,
     external_order_no TEXT NOT NULL,
     external_order_id TEXT,
@@ -741,6 +742,7 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
 }
 [
   ["confirmation_id", "TEXT"],
+  ["platform_restaurant_id", "TEXT"],
   ["posentegra_id", "TEXT"],
   ["external_restaurant_id", "TEXT"],
   ["restaurant_name_from_payload", "TEXT"],
@@ -1068,6 +1070,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_packages_posentegra_id
   ON packages (posentegra_id)
   WHERE posentegra_id IS NOT NULL AND posentegra_id != '';
+
+  CREATE INDEX IF NOT EXISTS idx_packages_platform_restaurant_id
+  ON packages (platform_restaurant_id)
+  WHERE platform_restaurant_id IS NOT NULL AND platform_restaurant_id != '';
 
   CREATE INDEX IF NOT EXISTS idx_platform_orders_posentegra_id
   ON platform_orders (posentegra_id)
@@ -1797,6 +1803,9 @@ function validateIntegrationDraft(body, restaurant) {
     restaurantId: restaurant.id,
     source: trimmed(body.source) || "platform_webhook",
     sourcePlatform: trimmed(body.sourcePlatform),
+    platformRestaurantId: trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalRestaurantId ?? body.external_restaurant_id),
+    externalRestaurantId: trimmed(body.externalRestaurantId ?? body.external_restaurant_id ?? body.platformRestaurantId ?? body.platform_restaurant_id),
+    posentegraId: trimmed(body.pid ?? body.posentegraId ?? body.posentegra_id),
     externalOrderNo: trimmed(body.externalOrderNo),
     externalOrderId: trimmed(body.externalOrderId || body.externalOrderNo),
     recipient: trimmed(body.recipient),
@@ -3860,7 +3869,7 @@ function getPackages(filter = {}) {
     externalOrderNo: row.external_order_no,
     externalOrderId: row.external_order_id || row.external_order_no,
     platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
-    platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    platformRestaurantId: row.platform_restaurant_id || platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
     posentegraId: row.posentegra_id || platformOrder?.posentegraId || "",
     platformOrderDbId: platformOrder?.id || "",
     confirmationId: row.confirmation_id || "",
@@ -3999,7 +4008,7 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     externalOrderNo: row.external_order_no,
     externalOrderId: row.external_order_id || row.external_order_no,
     platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
-    platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    platformRestaurantId: row.platform_restaurant_id || platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
     posentegraId: row.posentegra_id || platformOrder?.posentegraId || "",
     platformOrderDbId: platformOrder?.id || "",
     recipient: row.recipient,
@@ -5924,6 +5933,8 @@ function createOrGetExternalPlatformOrder(body, req) {
       restaurantId: restaurant.id,
       source: order.platformKey,
       sourcePlatform: order.platformKey,
+      platformRestaurantId: order.platformRestaurantId,
+      externalRestaurantId: order.platformRestaurantId,
       posentegraId: order.posentegraId,
       externalOrderNo: order.platformOrderId,
       externalOrderId: order.platformOrderId,
@@ -6016,6 +6027,8 @@ function apiPackageDraftFromWebhook(order, restaurant) {
     restaurantId: restaurant.id,
     source: "platform_webhook",
     sourcePlatform: order.platform,
+    platformRestaurantId: order.externalRestaurantId,
+    externalRestaurantId: order.externalRestaurantId,
     posentegraId: order.posentegraId,
     externalOrderNo: order.externalOrderId || order.confirmationId || `WEBHOOK-${Date.now()}`,
     externalOrderId: order.externalOrderId || order.confirmationId,
@@ -6053,9 +6066,11 @@ function apiPackageDraftFromWebhook(order, restaurant) {
 }
 
 function updatePackageApiMetadata(packageId, order) {
+  const platformRestaurantId = order.platformRestaurantId || order.externalRestaurantId || "";
   db.prepare(`
     UPDATE packages
-    SET posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id),
+    SET platform_restaurant_id = COALESCE(NULLIF(?, ''), platform_restaurant_id),
+        posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id),
         confirmation_id = ?, external_restaurant_id = ?, restaurant_name_from_payload = ?, platform_slug = ?,
         provider_id = ?, provider_name = ?, contact_phone = ?, city = ?, district = ?, street = ?,
         building_no = ?, floor = ?, door_no = ?, address_description = ?, status_text = ?, raw_status = ?,
@@ -6063,9 +6078,10 @@ function updatePackageApiMetadata(packageId, order) {
         delivery_type = ?, is_scheduled = ?, scheduled_date = ?, raw_payload_json = ?, updated_at = ?
     WHERE id = ?
   `).run(
+    platformRestaurantId,
     order.posentegraId || "",
     order.confirmationId || null,
-    order.externalRestaurantId || null,
+    order.externalRestaurantId || order.platformRestaurantId || null,
     order.restaurantNameFromPayload || null,
     order.platformSlug || null,
     order.providerId || null,
@@ -6168,7 +6184,9 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       UPDATE packages
       SET source_platform = ?, external_order_no = ?, recipient = ?, phone = ?, address = ?, delivery_address = ?,
           payment_method = ?, order_amount = ?, customer_lat = ?, customer_lng = ?, customer_address = ?,
-          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?, posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id), updated_at = ?
+          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?,
+          platform_restaurant_id = COALESCE(NULLIF(?, ''), platform_restaurant_id),
+          posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id), updated_at = ?
       WHERE id = ?
     `).run(
       order.platform,
@@ -6187,6 +6205,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       json(apiPackageDraftFromWebhook(order, restaurant).items),
       order.status === "pending" ? normalizeStatus(existing.status) : normalizeStatus(order.status),
       existing.assignment_status || assignmentStatusForOrder(existing.status),
+      order.externalRestaurantId || "",
       order.posentegraId || "",
       nowIso(),
       existing.id
@@ -6382,12 +6401,12 @@ function updateRestaurantPlatformIds(restaurantId, body = {}) {
     throw httpError(404, "Restoran bulunamadi.");
   }
   const platformIds = normalizeRestaurantPlatformIds({
-    trendyolRestaurantId: body.trendyolRestaurantId ?? current.trendyol_restaurant_id,
-    yemeksepetiRestaurantId: body.yemeksepetiRestaurantId ?? current.yemeksepeti_restaurant_id,
-    getirRestaurantId: body.getirRestaurantId ?? current.getir_restaurant_id,
-    migrosRestaurantId: body.migrosRestaurantId ?? current.migros_restaurant_id,
-    posentegraId: body.posentegraId ?? current.posentegra_id,
-    externalRestaurantIds: body.externalRestaurantIds ?? current.external_restaurant_ids,
+    trendyolRestaurantId: body.trendyolRestaurantId ?? body.trendyol_restaurant_id ?? current.trendyol_restaurant_id,
+    yemeksepetiRestaurantId: body.yemeksepetiRestaurantId ?? body.yemeksepeti_restaurant_id ?? current.yemeksepeti_restaurant_id,
+    getirRestaurantId: body.getirRestaurantId ?? body.getir_restaurant_id ?? current.getir_restaurant_id,
+    migrosRestaurantId: body.migrosRestaurantId ?? body.migros_restaurant_id ?? current.migros_restaurant_id,
+    posentegraId: body.posentegraId ?? body.posentegra_id ?? current.posentegra_id,
+    externalRestaurantIds: body.externalRestaurantIds ?? body.external_restaurant_ids ?? current.external_restaurant_ids,
   });
   assertUniqueRestaurantPlatformIds(platformIds, restaurantId);
   db.prepare(`
@@ -6990,11 +7009,11 @@ function createRestaurantRecord(body, trace = {}) {
 function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {}) {
   const insertSql = `
     INSERT INTO packages (
-      id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, posentegra_id, external_order_no, external_order_id,
+      id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, platform_restaurant_id, posentegra_id, external_order_no, external_order_id,
       recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, assignment_tried_courier_ids_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     pkg.id,
@@ -7004,6 +7023,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     pkg.deliveryAddress || pkg.address,
     packageType,
     pkg.sourcePlatform,
+    pkg.platformRestaurantId || pkg.externalRestaurantId || null,
     pkg.posentegraId || null,
     pkg.externalOrderNo,
     pkg.externalOrderId || pkg.externalOrderNo,
@@ -7351,6 +7371,30 @@ function normalizeIncomingPlatformPayload(platform, body, account, restaurant) {
     restaurantId: restaurant.id,
     source: "platform_webhook",
     sourcePlatform: platform,
+    platformRestaurantId: pickFirstValue(
+      shipment.platformRestaurantId,
+      shipment.platform_restaurant_id,
+      shipment.externalRestaurantId,
+      shipment.external_restaurant_id,
+      shipment.externalStoreId,
+      shipment.external_store_id,
+      body.platformRestaurantId,
+      body.platform_restaurant_id,
+      body.externalRestaurantId,
+      body.external_restaurant_id
+    ),
+    externalRestaurantId: pickFirstValue(
+      shipment.externalRestaurantId,
+      shipment.external_restaurant_id,
+      shipment.platformRestaurantId,
+      shipment.platform_restaurant_id,
+      shipment.externalStoreId,
+      shipment.external_store_id,
+      body.externalRestaurantId,
+      body.external_restaurant_id,
+      body.platformRestaurantId,
+      body.platform_restaurant_id
+    ),
     externalOrderNo,
     externalOrderId: externalOrderNo,
     recipient: trimmed(recipientName) || "Musteri",
@@ -7391,6 +7435,9 @@ function upsertPlatformPackage(platform, restaurant, payload, options = {}) {
     const existing = findDuplicatePackage(restaurant.id, "platform_any", payload.externalOrderId || payload.externalOrderNo);
     upsertPlatformOrderRecord({
       platform,
+      platformRestaurantId: payload.platformRestaurantId || payload.externalRestaurantId,
+      externalRestaurantId: payload.externalRestaurantId || payload.platformRestaurantId,
+      posentegraId: payload.posentegraId,
       orderId: payload.externalOrderId || payload.externalOrderNo,
       customerName: payload.recipient,
       phone: payload.phone,
@@ -7505,6 +7552,8 @@ function createSimplePlatformPayload(order, restaurant) {
   return {
     source,
     sourcePlatform: order.platform,
+    platformRestaurantId: order.platformRestaurantId || restaurant.externalStoreId || "",
+    externalRestaurantId: order.platformRestaurantId || restaurant.externalStoreId || "",
     externalOrderNo: order.orderId,
     externalOrderId: order.orderId,
     recipient: order.customerName,
