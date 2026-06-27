@@ -4344,12 +4344,20 @@ function dayKey(value = nowIso()) {
 }
 
 function deliveredPackagesForCourierOnDate(courierId, reportDate = dayKey()) {
+  const excludedApprovedPackagesSql = dbFacade.clientName() === "postgres"
+    ? `SELECT package_item.value #>> '{}'
+       FROM courier_daily_reports
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(NULLIF(courier_daily_reports.package_ids_json, ''), '[]')::jsonb) AS package_item(value)
+       WHERE courier_id = ? AND status = 'approved'`
+    : `SELECT value
+       FROM courier_daily_reports, json_each(courier_daily_reports.package_ids_json)
+       WHERE courier_id = ? AND status = 'approved'`;
   const rows = db.prepare(`
     SELECT * FROM packages
     WHERE assigned_courier_id = ?
       AND status = ?
       AND substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) = ?
-      AND id NOT IN (SELECT value FROM courier_daily_reports, json_each(courier_daily_reports.package_ids_json) WHERE courier_id = ? AND status = 'approved')
+      AND id NOT IN (${excludedApprovedPackagesSql})
     ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
   `).all(courierId, DELIVERED_STATUS, reportDate, courierId);
   const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];

@@ -253,6 +253,17 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       restaurantState.createdRestaurant.id
     );
 
+    const courierLogin = await request(baseUrl, "/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({ username: courierState.createdCourier.username, password: "Kurye123!" }),
+    });
+    assert.ok(courierLogin.token);
+    const courierWorkspace = await request(baseUrl, "/api/courier/me", {
+      headers: { Authorization: `Bearer ${courierLogin.token}` },
+    });
+    assert.equal(courierWorkspace.courier.id, courierState.createdCourier.id);
+    assert.ok(courierWorkspace.dayMetrics);
+
     const secondRestaurantLogin = await request(baseUrl, "/api/restaurant/session", {
       method: "POST",
       body: JSON.stringify({ username: secondRestaurantUsername, password: secondRestaurantPassword }),
