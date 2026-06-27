@@ -243,6 +243,19 @@ function summarizeParams(params = []) {
   });
 }
 
+function normalizePgResult(result) {
+  if (!Array.isArray(result)) {
+    return {
+      rows: result?.rows || [],
+      rowCount: Number(result?.rowCount || 0),
+    };
+  }
+  return {
+    rows: result.flatMap((item) => item?.rows || []),
+    rowCount: result.reduce((total, item) => total + Number(item?.rowCount || 0), 0),
+  };
+}
+
 async function queryPostgres(sql, params = []) {
   const pool = await getPgPool();
   const pgSql = translateSql(sql);
@@ -316,20 +329,18 @@ async function queryPostgres(sql, params = []) {
     });
     throw error;
   }
+  const normalizedResult = normalizePgResult(res);
   if (shouldLogQuery) {
     logger.info("postgres_query_result", {
       operation: operation?.type || "query",
       table: operation?.table || null,
       sql: compactSql(pgSql),
-      rowCount: res.rowCount,
-      rows: res.rows.slice(0, 3),
+      rowCount: normalizedResult.rowCount,
+      rows: normalizedResult.rows.slice(0, 3),
       inTransaction: Boolean(pgTxClient),
     });
   }
-  return {
-    rows: res.rows,
-    rowCount: res.rowCount,
-  };
+  return normalizedResult;
 }
 
 async function handleRequest(req) {
