@@ -47,6 +47,34 @@ function escapeCourierHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+function presentCourierText(value, fallback) {
+  const text = String(value ?? "").trim();
+  if (!text || text === "null" || text === "undefined") {
+    return fallback;
+  }
+  return text;
+}
+
+function presentCourierAmount(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return "Tutar yok";
+  }
+  return formatCurrency(amount);
+}
+
+function presentCourierPayment(pkg) {
+  const method = presentCourierText(pkg?.paymentMethod, "");
+  const status = presentCourierText(paymentStatusLabel(pkg?.paymentStatus), "");
+  if (!method && !status) {
+    return "Odeme bilgisi yok";
+  }
+  if (method && status) {
+    return `${method} - ${status}`;
+  }
+  return method || status;
+}
+
 function courierFailureReasonLabel(reason) {
   return COURIER_FAILURE_REASON_OPTIONS.find((item) => item.value === reason)?.label || reason || "Sorun yok";
 }
@@ -906,14 +934,33 @@ function renderPackages(packages) {
     let selectedPaymentStatus = currentDraft.paymentStatus || pkg.paymentStatus || "";
     let selectedFailureReason = currentDraft.failureReason || "";
 
-    node.querySelector(".tracking-no").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.trackingNo)} - ${escapeCourierHtml(pkg.platformOrderId || pkg.externalOrderNo)}`;
-    node.querySelector(".recipient-name").textContent = `${pkg.recipient} - ${pkg.phone}`;
-    node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : (pkg.platform || pkg.sourcePlatform || "-"))} - Restoran Platform ID: ${escapeCourierHtml(pkg.platformRestaurantId || "-")}`;
+    const customerName = presentCourierText(pkg.recipient, "Musteri adi yok");
+    const customerPhone = presentCourierText(pkg.phone, "Telefon yok");
+    const deliveryAddress = presentCourierText(pkg.deliveryAddress || pkg.address || pkg.customerAddress, "Adres yok");
+    const platformOrderId = presentCourierText(pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo, "Platform siparis ID yok");
+    const posentegraPid = presentCourierText(pkg.posentegraId || pkg.posentegra_id, "");
+    const paymentText = presentCourierPayment(pkg);
+
+    node.querySelector(".tracking-no").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(presentCourierText(pkg.trackingNo, "Takip no yok"))}`;
+    node.querySelector(".recipient-name").textContent = customerName;
+    node.querySelector(".customer-name-value").textContent = customerName;
+    node.querySelector(".customer-phone-value").textContent = customerPhone;
+    node.querySelector(".order-amount-value").textContent = presentCourierAmount(pkg.orderAmount);
+    node.querySelector(".payment-status-value").textContent = paymentText;
+    node.querySelector(".platform-order-id-value").textContent = platformOrderId;
+    const posentegraPidRow = node.querySelector(".posentegra-pid-row");
+    if (posentegraPid) {
+      node.querySelector(".posentegra-pid-value").textContent = posentegraPid;
+      posentegraPidRow?.classList.remove("hidden");
+    } else {
+      posentegraPidRow?.classList.add("hidden");
+    }
+    node.querySelector(".platform-name").innerHTML = `${COURIER_PACKAGE_ICON} ${escapeCourierHtml(pkg.source === "external_manual" || pkg.source === "manual" ? "Manuel Paket" : presentCourierText(pkg.platform || pkg.sourcePlatform, "Platform yok"))} - Restoran Platform ID: ${escapeCourierHtml(presentCourierText(pkg.platformRestaurantId, "Yok"))}`;
     node.querySelector(".restaurant-name").innerHTML = `${COURIER_MOTO_ICON} ${escapeCourierHtml(pkg.restaurantName)} - ${escapeCourierHtml(pkg.restaurantId || "-")}`;
     node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)}`;
-    node.querySelector(".eta-value").textContent = pkg.eta;
-    node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
-    node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.deliveryAddress || pkg.address)}`;
+    node.querySelector(".eta-value").textContent = presentCourierText(pkg.eta, "ETA yok");
+    node.querySelector(".payment-method").textContent = `${paymentText} - ${presentCourierAmount(pkg.orderAmount)}`;
+    node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(deliveryAddress)}`;
     renderPackageMapPreview(node.querySelector(".courier-package-map-preview"), pkg);
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
