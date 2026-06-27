@@ -308,6 +308,7 @@ db.exec(`
     zone TEXT NOT NULL,
     x REAL NOT NULL,
     y REAL NOT NULL,
+    posentegra_id TEXT,
     username TEXT UNIQUE,
     password_hash TEXT,
     password_salt TEXT,
@@ -340,6 +341,7 @@ db.exec(`
     delivery_address TEXT,
     package_type TEXT,
     source_platform TEXT NOT NULL,
+    posentegra_id TEXT,
     external_order_no TEXT NOT NULL,
     external_order_id TEXT,
     recipient TEXT NOT NULL,
@@ -519,6 +521,7 @@ db.exec(`
     platform TEXT NOT NULL,
     platform_order_id TEXT NOT NULL,
     platform_restaurant_id TEXT,
+    posentegra_id TEXT,
     restaurant_id TEXT NOT NULL,
     package_id TEXT,
     customer_name TEXT NOT NULL,
@@ -738,6 +741,7 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
 }
 [
   ["confirmation_id", "TEXT"],
+  ["posentegra_id", "TEXT"],
   ["external_restaurant_id", "TEXT"],
   ["restaurant_name_from_payload", "TEXT"],
   ["platform_slug", "TEXT"],
@@ -863,6 +867,7 @@ if (!restaurantColumns.includes("password_salt")) {
   ["yemeksepeti_restaurant_id", "TEXT"],
   ["getir_restaurant_id", "TEXT"],
   ["migros_restaurant_id", "TEXT"],
+  ["posentegra_id", "TEXT"],
   ["external_restaurant_ids", "TEXT"],
 ].forEach(([columnName, definition]) => {
   if (!restaurantColumns.includes(columnName)) {
@@ -873,6 +878,7 @@ if (!restaurantColumns.includes("password_salt")) {
 const platformOrderColumns = db.prepare("PRAGMA table_info(platform_orders)").all().map((row) => row.name);
 [
   ["platform_restaurant_id", "TEXT"],
+  ["posentegra_id", "TEXT"],
   ["package_id", "TEXT"],
 ].forEach(([columnName, definition]) => {
   if (!platformOrderColumns.includes(columnName)) {
@@ -1046,6 +1052,10 @@ db.exec(`
   ON restaurants (migros_restaurant_id)
   WHERE migros_restaurant_id IS NOT NULL AND migros_restaurant_id != '';
 
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_restaurants_posentegra_external
+  ON restaurants (posentegra_id)
+  WHERE posentegra_id IS NOT NULL AND posentegra_id != '';
+
   CREATE INDEX IF NOT EXISTS idx_order_items_order_id
   ON order_items (order_id);
 
@@ -1054,6 +1064,14 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_packages_api_order_lookup
   ON packages (external_order_id, confirmation_id, restaurant_id);
+
+  CREATE INDEX IF NOT EXISTS idx_packages_posentegra_id
+  ON packages (posentegra_id)
+  WHERE posentegra_id IS NOT NULL AND posentegra_id != '';
+
+  CREATE INDEX IF NOT EXISTS idx_platform_orders_posentegra_id
+  ON platform_orders (posentegra_id)
+  WHERE posentegra_id IS NOT NULL AND posentegra_id != '';
 
   CREATE TABLE IF NOT EXISTS platform_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1186,6 +1204,7 @@ function normalizeRestaurantPlatformIds(body = {}) {
     yemeksepetiRestaurantId: trimmed(body.yemeksepetiRestaurantId ?? body.yemeksepeti_restaurant_id),
     getirRestaurantId: trimmed(body.getirRestaurantId ?? body.getir_restaurant_id),
     migrosRestaurantId: trimmed(body.migrosRestaurantId ?? body.migros_restaurant_id),
+    posentegraId: trimmed(body.posentegraId ?? body.posentegra_id),
     externalRestaurantIds: parseExternalRestaurantIds(body.externalRestaurantIds ?? body.external_restaurant_ids),
   };
 }
@@ -1196,6 +1215,7 @@ function assertUniqueRestaurantPlatformIds(platformIds, excludeRestaurantId = ""
     ["yemeksepeti_restaurant_id", "Yemeksepeti Restoran ID", platformIds.yemeksepetiRestaurantId],
     ["getir_restaurant_id", "Getir Restoran ID", platformIds.getirRestaurantId],
     ["migros_restaurant_id", "Migros Yemek Restoran ID", platformIds.migrosRestaurantId],
+    ["posentegra_id", "Posentegra Restoran ID", platformIds.posentegraId],
   ];
   checks.forEach(([columnName, label, value]) => {
     if (!value) return;
@@ -1223,13 +1243,13 @@ function assertUniqueRestaurantPlatformIds(platformIds, excludeRestaurantId = ""
   });
 
   const rows = db.prepare(`
-    SELECT id, name, trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, external_restaurant_ids
+    SELECT id, name, trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, posentegra_id, external_restaurant_ids
     FROM restaurants
     WHERE id != ?
   `).all(excludeRestaurantId || "");
   for (const row of rows) {
     const ids = parseExternalRestaurantIds(row.external_restaurant_ids);
-    ["trendyol_restaurant_id", "yemeksepeti_restaurant_id", "getir_restaurant_id", "migros_restaurant_id"].forEach((columnName) => {
+    ["trendyol_restaurant_id", "yemeksepeti_restaurant_id", "getir_restaurant_id", "migros_restaurant_id", "posentegra_id"].forEach((columnName) => {
       if (row[columnName]) ids.push({ platform: columnName, restaurantId: row[columnName] });
     });
     if (ids.some((item) => incoming.has(item.restaurantId))) {
@@ -2988,6 +3008,7 @@ function mapPlatformOrder(row) {
     platform: row.platform,
     platformOrderId: row.platform_order_id,
     platformRestaurantId: row.platform_restaurant_id || "",
+    posentegraId: row.posentegra_id || "",
     restaurantId: row.restaurant_id,
     packageId: row.package_id || "",
     customerName: row.customer_name,
@@ -3011,9 +3032,10 @@ function getPlatformOrderForPackageRow(row) {
     FROM platform_orders
     WHERE package_id = ?
        OR (restaurant_id = ? AND platform_order_id = ?)
+       OR (posentegra_id IS NOT NULL AND posentegra_id != '' AND posentegra_id = ?)
     ORDER BY datetime(updated_at) DESC
     LIMIT 1
-  `).get(row.id, row.restaurant_id, row.external_order_id || row.external_order_no || "");
+  `).get(row.id, row.restaurant_id, row.external_order_id || row.external_order_no || "", row.posentegra_id || "");
   return platformOrder ? mapPlatformOrder(platformOrder) : null;
 }
 
@@ -3062,6 +3084,7 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   const platform = normalizePlatformInput(order.platform) || order.platform;
   const platformOrderId = trimmed(order.orderId || order.platformOrderId || order.externalOrderNo);
   const platformRestaurantId = trimmed(order.platformRestaurantId || order.platform_restaurant_id || order.externalStoreId || order.externalRestaurantId || options.platformRestaurantId);
+  const posentegraId = trimmed(order.posentegraId || order.posentegra_id || order.pid || options.posentegraId);
   const packageId = trimmed(order.packageId || order.package_id || options.packageId);
   if (!platform || !platformOrderId || !restaurantId) {
     logger.warn("INSERT_SKIPPED", {
@@ -3086,11 +3109,13 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
     db.prepare(`
       UPDATE platform_orders
       SET platform_restaurant_id = COALESCE(NULLIF(?, ''), platform_restaurant_id),
+          posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id),
           package_id = COALESCE(NULLIF(?, ''), package_id),
           customer_name = ?, phone = ?, address = ?, total_price = ?, note = ?, status = ?, raw_payload = ?, updated_at = ?
       WHERE id = ?
     `).run(
       platformRestaurantId,
+      posentegraId,
       packageId,
       trimmed(order.customerName) || "Musteri",
       trimmed(order.phone) || "Gizli Numara",
@@ -3108,14 +3133,15 @@ function upsertPlatformOrderRecord(order, restaurantId, status = "pending_approv
   const id = uid("po");
   const insertSql = `
     INSERT INTO platform_orders (
-      id, platform, platform_order_id, platform_restaurant_id, restaurant_id, package_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, platform, platform_order_id, platform_restaurant_id, posentegra_id, restaurant_id, package_id, customer_name, phone, address, total_price, note, status, raw_payload, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
     platform,
     platformOrderId,
     platformRestaurantId || null,
+    posentegraId || null,
     restaurantId,
     packageId || null,
     trimmed(order.customerName) || "Musteri",
@@ -3730,6 +3756,7 @@ function getRestaurants(filter = {}) {
     yemeksepetiRestaurantId: row.yemeksepeti_restaurant_id || "",
     getirRestaurantId: row.getir_restaurant_id || "",
     migrosRestaurantId: row.migros_restaurant_id || "",
+    posentegraId: row.posentegra_id || "",
     externalRestaurantIds: parseExternalRestaurantIds(row.external_restaurant_ids),
     apiKey: row.api_key,
     webhookSecret: row.webhook_secret,
@@ -3834,6 +3861,7 @@ function getPackages(filter = {}) {
     externalOrderId: row.external_order_id || row.external_order_no,
     platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
     platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    posentegraId: row.posentegra_id || platformOrder?.posentegraId || "",
     platformOrderDbId: platformOrder?.id || "",
     confirmationId: row.confirmation_id || "",
     externalRestaurantId: row.external_restaurant_id || "",
@@ -3972,6 +4000,7 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     externalOrderId: row.external_order_id || row.external_order_no,
     platformOrderId: platformOrder?.platformOrderId || row.external_order_id || row.external_order_no,
     platformRestaurantId: platformOrder?.platformRestaurantId || row.external_restaurant_id || "",
+    posentegraId: row.posentegra_id || platformOrder?.posentegraId || "",
     platformOrderDbId: platformOrder?.id || "",
     recipient: row.recipient,
     phone: row.phone,
@@ -5623,6 +5652,7 @@ function normalizeWebhookOrderPayload(payload = {}) {
 
   return {
     externalOrderId: trimmed(payload.pid || payload.externalOrderId || payload.orderId || payload.id),
+    posentegraId: trimmed(payload.pid || payload.posentegraId || payload.posentegra_id),
     confirmationId: trimmed(payload.confirmationId),
     externalRestaurantId,
     restaurantNameFromPayload: trimmed(payload.restaurantName || payload.restaurant?.name),
@@ -5671,6 +5701,7 @@ function restaurantMatchesExternalId(restaurant, externalRestaurantId, platform 
   if (restaurant.yemeksepetiRestaurantId === incoming && (platformKey.includes("yemek") || platformKey === "ys")) return true;
   if (restaurant.getirRestaurantId === incoming && platformKey.includes("getir")) return true;
   if (restaurant.migrosRestaurantId === incoming && platformKey.includes("migros")) return true;
+  if (restaurant.posentegraId === incoming) return true;
   if ([restaurant.trendyolRestaurantId, restaurant.yemeksepetiRestaurantId, restaurant.getirRestaurantId, restaurant.migrosRestaurantId].includes(incoming)) return true;
   return (restaurant.externalRestaurantIds || []).some((item) => item.restaurantId === incoming);
 }
@@ -5740,6 +5771,7 @@ function externalRestaurantPayload(restaurant) {
     getirRestaurantId: restaurant.getirRestaurantId || "",
     yemeksepetiRestaurantId: restaurant.yemeksepetiRestaurantId || "",
     migrosRestaurantId: restaurant.migrosRestaurantId || "",
+    posentegraId: restaurant.posentegraId || "",
     otherPlatformIds: restaurant.externalRestaurantIds || [],
   };
 }
@@ -5752,6 +5784,7 @@ function externalPackagePayload(pkg) {
     restaurantName: pkg.restaurantName || "",
     platform: platformApiKey(pkg.platform || pkg.sourcePlatform || pkg.source),
     platformRestaurantId: pkg.platformRestaurantId || "",
+    posentegraId: pkg.posentegraId || "",
     platformOrderId: pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo || "",
     status: externalStatusFromInternal(pkg.status),
     courierId: pkg.assignedCourierId || null,
@@ -5763,6 +5796,7 @@ function externalPackagePayload(pkg) {
 
 function normalizeExternalPlatformOrderBody(body = {}) {
   const platform = normalizePlatformInput(body.platform) || trimmed(body.platform);
+  const posentegraId = trimmed(body.pid ?? body.posentegraId ?? body.posentegra_id);
   const platformRestaurantId = trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalRestaurantId ?? body.external_restaurant_id);
   const platformOrderId = trimmed(body.platformOrderId ?? body.platform_order_id ?? body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
   const deliveryAddress = trimmed(body.deliveryAddress ?? body.delivery_address ?? body.address);
@@ -5775,6 +5809,7 @@ function normalizeExternalPlatformOrderBody(body = {}) {
   return {
     platform,
     platformKey: platformApiKey(platform),
+    posentegraId,
     platformRestaurantId,
     platformOrderId,
     customerName,
@@ -5795,7 +5830,19 @@ function createOrGetExternalPlatformOrder(body, req) {
     platform: order.platformKey,
     platform_restaurant_id: order.platformRestaurantId,
     platform_order_id: order.platformOrderId,
+    pid: order.posentegraId || null,
+    posentegra_id: order.posentegraId || null,
   });
+  if (order.posentegraId) {
+    logger.info("posentegra_id_detected", {
+      request_id: req.requestId,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      platform_order_id: order.platformOrderId,
+    });
+  }
   const restaurant = findRestaurantByExternalRestaurantId(order.platformRestaurantId, order.platform);
   if (!restaurant) {
     const error = validationError("Platform restoran ID ile eslesen restoran bulunamadi.");
@@ -5804,6 +5851,8 @@ function createOrGetExternalPlatformOrder(body, req) {
       platform: order.platformKey,
       platform_restaurant_id: order.platformRestaurantId,
       provider_slug: order.platformKey,
+      pid: order.posentegraId || null,
+      posentegra_id: order.posentegraId || null,
     });
     logger.warn("platform_restaurant_match_failed", {
       request_id: req.requestId,
@@ -5819,7 +5868,20 @@ function createOrGetExternalPlatformOrder(body, req) {
     platform: order.platformKey,
     platform_restaurant_id: order.platformRestaurantId,
     platform_order_id: order.platformOrderId,
+    pid: order.posentegraId || null,
+    posentegra_id: order.posentegraId || null,
   });
+  if (order.posentegraId) {
+    logger.info("posentegra_restaurant_matched", {
+      request_id: req.requestId,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      internal_restaurant_id: restaurant.id,
+      platform_order_id: order.platformOrderId,
+    });
+  }
 
   let platformOrderId;
   let packageId;
@@ -5828,6 +5890,7 @@ function createOrGetExternalPlatformOrder(body, req) {
     platformOrderId = upsertPlatformOrderRecord({
       platform: order.platform,
       platformRestaurantId: order.platformRestaurantId,
+      posentegraId: order.posentegraId,
       platformOrderId: order.platformOrderId,
       orderId: order.platformOrderId,
       customerName: order.customerName,
@@ -5836,7 +5899,7 @@ function createOrGetExternalPlatformOrder(body, req) {
       totalPrice: order.totalAmount,
       customerNote: order.customerNote,
       rawPayload: order.rawPayload,
-    }, restaurant.id, "approved", { requestId: req.requestId, platformRestaurantId: order.platformRestaurantId });
+    }, restaurant.id, "approved", { requestId: req.requestId, platformRestaurantId: order.platformRestaurantId, posentegraId: order.posentegraId });
 
     const existingOrder = db.prepare("SELECT * FROM platform_orders WHERE id = ?").get(platformOrderId);
     if (existingOrder?.package_id) {
@@ -5848,7 +5911,7 @@ function createOrGetExternalPlatformOrder(body, req) {
       }
     }
 
-    const duplicatePackage = findDuplicatePackage(restaurant.id, order.platformKey, order.platformOrderId) ||
+    const duplicatePackage = findDuplicatePackage(restaurant.id, order.platformKey, order.platformOrderId, order.posentegraId) ||
       db.prepare("SELECT * FROM packages WHERE restaurant_id = ? AND external_order_id = ?").get(restaurant.id, order.platformOrderId);
     if (duplicatePackage) {
       packageId = duplicatePackage.id;
@@ -5861,6 +5924,7 @@ function createOrGetExternalPlatformOrder(body, req) {
       restaurantId: restaurant.id,
       source: order.platformKey,
       sourcePlatform: order.platformKey,
+      posentegraId: order.posentegraId,
       externalOrderNo: order.platformOrderId,
       externalOrderId: order.platformOrderId,
       recipient: order.customerName,
@@ -5900,6 +5964,8 @@ function createOrGetExternalPlatformOrder(body, req) {
       platform: order.platformKey,
       platform_restaurant_id: order.platformRestaurantId,
       platform_order_id: order.platformOrderId,
+      pid: order.posentegraId || null,
+      posentegra_id: order.posentegraId || null,
       package_id: packageId,
       tracking_no: pkg?.trackingNo || null,
     });
@@ -5909,8 +5975,22 @@ function createOrGetExternalPlatformOrder(body, req) {
       platform: order.platformKey,
       platform_restaurant_id: order.platformRestaurantId,
       platform_order_id: order.platformOrderId,
+      pid: order.posentegraId || null,
+      posentegra_id: order.posentegraId || null,
       package_id: packageId,
       tracking_no: pkg?.trackingNo || null,
+    });
+  }
+  if (order.posentegraId) {
+    logger.info(duplicate ? "posentegra_duplicate_skipped" : "posentegra_order_created", {
+      request_id: req.requestId,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      internal_restaurant_id: restaurant.id,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      platform_order_id: order.platformOrderId,
+      package_id: packageId,
     });
   }
   logger.info(duplicate ? "external_platform_order_duplicate" : "external_platform_order_persisted", {
@@ -5919,6 +5999,8 @@ function createOrGetExternalPlatformOrder(body, req) {
     platform: order.platformKey,
     platform_restaurant_id: order.platformRestaurantId,
     platform_order_id: order.platformOrderId,
+    pid: order.posentegraId || null,
+    posentegra_id: order.posentegraId || null,
     package_id: packageId,
     tracking_no: pkg?.trackingNo || null,
   });
@@ -5934,6 +6016,7 @@ function apiPackageDraftFromWebhook(order, restaurant) {
     restaurantId: restaurant.id,
     source: "platform_webhook",
     sourcePlatform: order.platform,
+    posentegraId: order.posentegraId,
     externalOrderNo: order.externalOrderId || order.confirmationId || `WEBHOOK-${Date.now()}`,
     externalOrderId: order.externalOrderId || order.confirmationId,
     recipient: order.customerName || "Musteri",
@@ -5972,13 +6055,15 @@ function apiPackageDraftFromWebhook(order, restaurant) {
 function updatePackageApiMetadata(packageId, order) {
   db.prepare(`
     UPDATE packages
-    SET confirmation_id = ?, external_restaurant_id = ?, restaurant_name_from_payload = ?, platform_slug = ?,
+    SET posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id),
+        confirmation_id = ?, external_restaurant_id = ?, restaurant_name_from_payload = ?, platform_slug = ?,
         provider_id = ?, provider_name = ?, contact_phone = ?, city = ?, district = ?, street = ?,
         building_no = ?, floor = ?, door_no = ?, address_description = ?, status_text = ?, raw_status = ?,
         discounted_price = ?, total_discount = ?, pos_payment_method = ?, pos_ticket = ?, short_code = ?,
         delivery_type = ?, is_scheduled = ?, scheduled_date = ?, raw_payload_json = ?, updated_at = ?
     WHERE id = ?
   `).run(
+    order.posentegraId || "",
     order.confirmationId || null,
     order.externalRestaurantId || null,
     order.restaurantNameFromPayload || null,
@@ -6050,6 +6135,8 @@ function logPlatformRestaurantNotMatched(order, req = null) {
     platform_restaurant_id: order.externalRestaurantId || null,
     provider_slug: order.platformSlug || null,
     platform_order_id: order.externalOrderId || order.confirmationId || null,
+    pid: order.posentegraId || null,
+    posentegra_id: order.posentegraId || null,
   });
 }
 
@@ -6060,9 +6147,10 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       AND (
         (external_order_id IS NOT NULL AND external_order_id != '' AND external_order_id = ?)
         OR (confirmation_id IS NOT NULL AND confirmation_id != '' AND confirmation_id = ?)
+        OR (posentegra_id IS NOT NULL AND posentegra_id != '' AND posentegra_id = ?)
       )
     ORDER BY datetime(created_at) DESC
-  `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "");
+  `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "", order.posentegraId || "");
 
   if (existing) {
     logger.warn("INSERT_SKIPPED", {
@@ -6073,13 +6161,14 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       platform: order.platform,
       platformOrderId: order.externalOrderId || order.confirmationId || null,
       platformRestaurantId: order.externalRestaurantId || null,
+      posentegraId: order.posentegraId || null,
       restaurantId: restaurant.id,
     });
     db.prepare(`
       UPDATE packages
       SET source_platform = ?, external_order_no = ?, recipient = ?, phone = ?, address = ?, delivery_address = ?,
           payment_method = ?, order_amount = ?, customer_lat = ?, customer_lng = ?, customer_address = ?,
-          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?, updated_at = ?
+          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?, posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id), updated_at = ?
       WHERE id = ?
     `).run(
       order.platform,
@@ -6098,6 +6187,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       json(apiPackageDraftFromWebhook(order, restaurant).items),
       order.status === "pending" ? normalizeStatus(existing.status) : normalizeStatus(order.status),
       existing.assignment_status || assignmentStatusForOrder(existing.status),
+      order.posentegraId || "",
       nowIso(),
       existing.id
     );
@@ -6107,6 +6197,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       platform: order.platform,
       platformRestaurantId: order.externalRestaurantId,
       externalRestaurantId: order.externalRestaurantId,
+      posentegraId: order.posentegraId,
       orderId: order.externalOrderId || order.confirmationId,
       packageId: existing.id,
       customerName: order.customerName,
@@ -6118,8 +6209,21 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
     }, restaurant.id, order.statusText || "pending_approval", {
       requestId: options.requestId || null,
       platformRestaurantId: order.externalRestaurantId,
+      posentegraId: order.posentegraId,
       packageId: existing.id,
     });
+    if (order.posentegraId) {
+      logger.info("posentegra_duplicate_skipped", {
+        request_id: options.requestId || null,
+        pid: order.posentegraId,
+        posentegra_id: order.posentegraId,
+        platform: platformApiKey(order.platform),
+        platform_restaurant_id: order.externalRestaurantId || null,
+        internal_restaurant_id: restaurant.id,
+        package_id: existing.id,
+        platform_order_id: order.externalOrderId || order.confirmationId || null,
+      });
+    }
     return { packageId: existing.id, duplicate: true };
   }
 
@@ -6141,6 +6245,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
     platform: order.platform,
     platformRestaurantId: order.externalRestaurantId,
     externalRestaurantId: order.externalRestaurantId,
+    posentegraId: order.posentegraId,
     orderId: order.externalOrderId || order.confirmationId,
     packageId: pkg.id,
     customerName: order.customerName,
@@ -6152,8 +6257,21 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
   }, restaurant.id, order.statusText || "pending_approval", {
     requestId: options.requestId || null,
     platformRestaurantId: order.externalRestaurantId,
+    posentegraId: order.posentegraId,
     packageId: pkg.id,
   });
+  if (order.posentegraId) {
+    logger.info("posentegra_order_created", {
+      request_id: options.requestId || null,
+      pid: order.posentegraId,
+      posentegra_id: order.posentegraId,
+      platform: platformApiKey(order.platform),
+      platform_restaurant_id: order.externalRestaurantId || null,
+      internal_restaurant_id: restaurant.id,
+      package_id: pkg.id,
+      platform_order_id: order.externalOrderId || order.confirmationId || null,
+    });
+  }
   return { packageId: pkg.id, duplicate: false };
 }
 
@@ -6268,19 +6386,21 @@ function updateRestaurantPlatformIds(restaurantId, body = {}) {
     yemeksepetiRestaurantId: body.yemeksepetiRestaurantId ?? current.yemeksepeti_restaurant_id,
     getirRestaurantId: body.getirRestaurantId ?? current.getir_restaurant_id,
     migrosRestaurantId: body.migrosRestaurantId ?? current.migros_restaurant_id,
+    posentegraId: body.posentegraId ?? current.posentegra_id,
     externalRestaurantIds: body.externalRestaurantIds ?? current.external_restaurant_ids,
   });
   assertUniqueRestaurantPlatformIds(platformIds, restaurantId);
   db.prepare(`
     UPDATE restaurants
     SET trendyol_restaurant_id = ?, yemeksepeti_restaurant_id = ?, getir_restaurant_id = ?,
-        migros_restaurant_id = ?, external_restaurant_ids = ?
+        migros_restaurant_id = ?, posentegra_id = ?, external_restaurant_ids = ?
     WHERE id = ?
   `).run(
     platformIds.trendyolRestaurantId || null,
     platformIds.yemeksepetiRestaurantId || null,
     platformIds.getirRestaurantId || null,
     platformIds.migrosRestaurantId || null,
+    platformIds.posentegraId || null,
     json(platformIds.externalRestaurantIds || []),
     restaurantId
   );
@@ -6829,9 +6949,9 @@ function createRestaurantRecord(body, trace = {}) {
   const insertSql = `
     INSERT INTO restaurants (
       id, name, zone, x, y, username, password_hash, password_salt, platforms_json, api_key, webhook_secret,
-      trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, external_restaurant_ids,
+      trendyol_restaurant_id, yemeksepeti_restaurant_id, getir_restaurant_id, migros_restaurant_id, posentegra_id, external_restaurant_ids,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     restaurant.id,
@@ -6849,6 +6969,7 @@ function createRestaurantRecord(body, trace = {}) {
     restaurant.yemeksepetiRestaurantId || null,
     restaurant.getirRestaurantId || null,
     restaurant.migrosRestaurantId || null,
+    restaurant.posentegraId || null,
     json(restaurant.externalRestaurantIds || []),
     new Date().toISOString(),
   ];
@@ -6869,11 +6990,11 @@ function createRestaurantRecord(body, trace = {}) {
 function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {}) {
   const insertSql = `
     INSERT INTO packages (
-      id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, external_order_no, external_order_id,
+      id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, posentegra_id, external_order_no, external_order_id,
       recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, assignment_tried_courier_ids_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     pkg.id,
@@ -6883,6 +7004,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     pkg.deliveryAddress || pkg.address,
     packageType,
     pkg.sourcePlatform,
+    pkg.posentegraId || null,
     pkg.externalOrderNo,
     pkg.externalOrderId || pkg.externalOrderNo,
     pkg.recipient,
@@ -6929,8 +7051,22 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
   });
 }
 
-function findDuplicatePackage(restaurantId, source, externalOrderId) {
-  if (!restaurantId || !externalOrderId) {
+function findDuplicatePackage(restaurantId, source, externalOrderId, posentegraId = "") {
+  if (!restaurantId || (!externalOrderId && !posentegraId)) {
+    return null;
+  }
+
+  if (posentegraId) {
+    const existingByPosentegraId = db.prepare(`
+      SELECT * FROM packages
+      WHERE restaurant_id = ? AND posentegra_id = ?
+    `).get(restaurantId, posentegraId);
+    if (existingByPosentegraId) {
+      return existingByPosentegraId;
+    }
+  }
+
+  if (!externalOrderId) {
     return null;
   }
 
@@ -8075,6 +8211,17 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const order = normalizeWebhookOrderPayload(body);
+    if (order.posentegraId) {
+      logger.info("posentegra_id_detected", {
+        request_id: req.requestId,
+        pid: order.posentegraId,
+        posentegra_id: order.posentegraId,
+        platform: platformApiKey(order.platform || order.platformSlug),
+        platform_restaurant_id: order.externalRestaurantId || null,
+        platform_order_id: order.externalOrderId || order.confirmationId || null,
+        provider_slug: order.platformSlug || null,
+      });
+    }
     try {
       const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
       if (!restaurant) {
@@ -8093,6 +8240,17 @@ async function handleApi(req, res, pathname) {
         });
         return;
       }
+      if (order.posentegraId) {
+        logger.info("posentegra_restaurant_matched", {
+          request_id: req.requestId,
+          pid: order.posentegraId,
+          posentegra_id: order.posentegraId,
+          platform: platformApiKey(order.platform || order.platformSlug),
+          platform_restaurant_id: order.externalRestaurantId || null,
+          internal_restaurant_id: restaurant.id,
+          platform_order_id: order.externalOrderId || order.confirmationId || null,
+        });
+      }
 
       const result = upsertWebhookPackage(order, restaurant, { requestId: req.requestId });
       resolveUnmatchedOrderForMatchedPackage(order, restaurant.id, result.packageId);
@@ -8109,6 +8267,7 @@ async function handleApi(req, res, pathname) {
           platform: order.platform,
           externalOrderId: order.externalOrderId,
           externalRestaurantId: order.externalRestaurantId,
+          posentegraId: order.posentegraId,
           duplicate: result.duplicate,
         },
       });

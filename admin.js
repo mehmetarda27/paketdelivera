@@ -488,6 +488,7 @@ function integrationIdentityCard(item, type) {
         item.yemeksepetiRestaurantId ? `Yemeksepeti: ${item.yemeksepetiRestaurantId}` : "",
         item.getirRestaurantId ? `Getir: ${item.getirRestaurantId}` : "",
         item.migrosRestaurantId ? `Migros: ${item.migrosRestaurantId}` : "",
+        item.posentegraId ? `Posentegra: ${item.posentegraId}` : "",
         ...(Array.isArray(item.externalRestaurantIds) ? item.externalRestaurantIds.map((entry) => `${entry.platform || "Diger"}: ${entry.restaurantId}`) : []),
       ].filter(Boolean)
     : [];
@@ -512,7 +513,7 @@ function integrationIdentityCard(item, type) {
 
 function renderIntegrationIdentities(restaurants, couriers) {
   if (adminRefs.restaurantIntegrationIdList) {
-    const signature = listRenderSignature(restaurants || [], ["id", "name", "username", "zone", "platforms", "trendyolRestaurantId", "yemeksepetiRestaurantId", "getirRestaurantId", "migrosRestaurantId", "externalRestaurantIds"]);
+    const signature = listRenderSignature(restaurants || [], ["id", "name", "username", "zone", "platforms", "trendyolRestaurantId", "yemeksepetiRestaurantId", "getirRestaurantId", "migrosRestaurantId", "posentegraId", "externalRestaurantIds"]);
     if (adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature !== signature) {
       adminRefs.restaurantIntegrationIdList.__deliveraRenderSignature = signature;
       adminRefs.restaurantIntegrationIdList.innerHTML = restaurants?.length
@@ -793,7 +794,7 @@ function buildPackageCard(pkg) {
   }
   node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)} - Paket ID: ${htmlSafe(pkg.id)}`;
   node.querySelector(".recipient-name").innerHTML = `${SVG_PHONE} ${pkg.recipient} - ${pkg.phone}`;
-  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform || pkg.platform || "-"} - Platform Restoran ID: ${htmlSafe(pkg.platformRestaurantId || "-")} - Platform Siparis ID: ${htmlSafe(pkg.platformOrderId || pkg.externalOrderNo || "-")}`;
+  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform || pkg.platform || "-"} - Platform Restoran ID: ${htmlSafe(pkg.platformRestaurantId || "-")} - Posentegra PID: ${htmlSafe(pkg.posentegraId || "-")} - Platform Siparis ID: ${htmlSafe(pkg.platformOrderId || pkg.externalOrderNo || "-")}`;
   node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${pkg.restaurantName} - Sistem ID: ${htmlSafe(pkg.restaurantId || "-")}`;
   node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}`;
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
@@ -1669,6 +1670,7 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
     yemeksepetiRestaurantId: formData.get("yemeksepetiRestaurantId"),
     getirRestaurantId: formData.get("getirRestaurantId"),
     migrosRestaurantId: formData.get("migrosRestaurantId"),
+    posentegraId: formData.get("posentegraId"),
     externalRestaurantIds: formData.get("externalRestaurantIds"),
   };
   try {
@@ -1706,6 +1708,7 @@ document.addEventListener("click", async (event) => {
       yemeksepetiRestaurantId: (prompt("Yemeksepeti Restoran ID", restaurant.yemeksepetiRestaurantId || "") ?? restaurant.yemeksepetiRestaurantId) || "",
       getirRestaurantId: (prompt("Getir Restoran ID", restaurant.getirRestaurantId || "") ?? restaurant.getirRestaurantId) || "",
       migrosRestaurantId: (prompt("Migros Yemek Restoran ID", restaurant.migrosRestaurantId || "") ?? restaurant.migrosRestaurantId) || "",
+      posentegraId: (prompt("Posentegra Restoran ID", restaurant.posentegraId || "") ?? restaurant.posentegraId) || "",
       externalRestaurantIds: prompt("Diger Platform ID'leri JSON", externalDefault) ?? externalDefault,
     };
     try {

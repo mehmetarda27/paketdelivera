@@ -645,6 +645,13 @@ window.showPackageDetailsModal = function(pkg) {
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; background: var(--bg); padding: 16px; border-radius: 12px; border: 1px solid var(--line);">
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform</span><br><strong>${pkg.sourcePlatform || "-"}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Harici No</span><br><strong>${pkg.externalOrderNo || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Package ID</span><br><strong>${pkg.id || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Tracking No</span><br><strong>${pkg.trackingNo || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Restaurant ID</span><br><strong>${pkg.restaurantId || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Restaurant Name</span><br><strong>${pkg.restaurantName || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Restaurant ID</span><br><strong>${pkg.platformRestaurantId || pkg.externalRestaurantId || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Posentegra ID / PID</span><br><strong>${pkg.posentegraId || "-"}</strong></div>
+            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Order ID</span><br><strong>${pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo || "-"}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Müşteri</span><br><strong>${pkg.recipient || "-"}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Telefon</span><br><strong>${pkg.phone || "-"}</strong></div>
             <div style="grid-column: 1 / -1;"><span style="color: var(--ink-soft); font-size: 0.85rem;">Adres</span><br><strong>${pkg.deliveryAddress || pkg.address || "-"}</strong></div>
@@ -659,6 +666,12 @@ window.showPackageDetailsModal = function(pkg) {
             <strong style="color: #F27A1A; display: block; margin-bottom: 8px;">Müşteri Notu:</strong>
             <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">${pkg.customerNote || pkg.note}</p>
           </div>
+          ` : ""}
+          ${pkg.rawPayload ? `
+          <details style="background: var(--bg); padding: 16px; border-radius: 12px; border: 1px solid var(--line);">
+            <summary style="cursor: pointer; font-weight: 700;">Raw payload</summary>
+            <pre class="code-block" style="white-space: pre-wrap; overflow: auto; max-height: 280px;">${htmlSafe(JSON.stringify(pkg.rawPayload, null, 2))}</pre>
+          </details>
           ` : ""}
       </div>
     </div>

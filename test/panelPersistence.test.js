@@ -73,7 +73,9 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
   const restaurantPassword = "Rest12345!";
   const secondRestaurantUsername = `rest2_${Date.now()}`;
   const secondRestaurantPassword = "Rest22345!";
-  const yemeksepetiRestaurantId = "6377deac15d5d59aee02bf51";
+  const yemeksepetiRestaurantId = `ys-${Date.now()}`;
+  const posentegraRestaurantId = "6377deac15d5d59aee02bf51";
+  const posentegraPid = "a7j7-2619-ni3r";
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
@@ -122,6 +124,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         longitude: 34.32,
         platforms: ["Getir Yemek"],
         yemeksepetiRestaurantId,
+        posentegraId: posentegraRestaurantId,
         externalRestaurantIds: JSON.stringify([{ platform: "other", restaurantId: `other-${Date.now()}` }]),
       }),
     });
@@ -152,6 +155,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.equal(
       readRow(dbFile, "SELECT getir_restaurant_id FROM restaurants WHERE id = ?", secondRestaurantState.createdRestaurant.id).getir_restaurant_id,
       secondRestaurantState.createdRestaurant.getirRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id).posentegra_id,
+      posentegraRestaurantId
     );
 
     const courierState = await request(baseUrl, "/couriers", {
@@ -316,7 +323,8 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.ok(externalRestaurants.some((item) =>
       item.id === restaurantState.createdRestaurant.id &&
-      item.yemeksepetiRestaurantId === restaurantState.createdRestaurant.yemeksepetiRestaurantId
+      item.yemeksepetiRestaurantId === restaurantState.createdRestaurant.yemeksepetiRestaurantId &&
+      item.posentegraId === posentegraRestaurantId
     ));
 
     const externalOrderOne = await request(baseUrl, "/api/external/platform-orders", {
@@ -407,6 +415,59 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.equal(
       readRow(dbFile, "SELECT package_id FROM platform_orders WHERE platform_order_id = ?", webhookOrderId).package_id,
       webhookOrder.package.id
+    );
+
+    const posentegraPackageCountBefore = readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count;
+    const posentegraWebhookBody = {
+      provider: { slug: "ys", kaynak: "Yemek Sepeti" },
+      pid: posentegraPid,
+      restaurantId: posentegraRestaurantId,
+      restaurant: { id: posentegraRestaurantId, name: "Persistence Test Restaurant" },
+      customerName: "Posentegra Customer",
+      customerPhone: "05550000005",
+      addressText: "Posentegra webhook address",
+      totalPrice: 410,
+      products: [{ id: "prod-pos-1", name: "Sucuk", quantity: 1, price: 410, totalPrice: 410 }],
+    };
+    const posentegraWebhookOrder = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify(posentegraWebhookBody),
+    });
+    assert.equal(posentegraWebhookOrder.matched, true);
+    assert.equal(posentegraWebhookOrder.package.restaurantId, restaurantState.createdRestaurant.id);
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", posentegraWebhookOrder.package.id).restaurant_id,
+      restaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", posentegraWebhookOrder.package.id).posentegra_id,
+      posentegraPid
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM platform_orders WHERE platform_order_id = ?", posentegraPid).posentegra_id,
+      posentegraPid
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE platform_order_id = ?", posentegraPid).platform_restaurant_id,
+      posentegraRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count,
+      posentegraPackageCountBefore + 1
+    );
+
+    const posentegraDuplicate = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify(posentegraWebhookBody),
+    });
+    assert.equal(posentegraDuplicate.matched, true);
+    assert.equal(posentegraDuplicate.duplicate, true);
+    assert.equal(posentegraDuplicate.package.id, posentegraWebhookOrder.package.id);
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count,
+      posentegraPackageCountBefore + 1
     );
 
     const packageCountBeforeUnmatched = readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count;
