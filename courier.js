@@ -223,8 +223,11 @@ function mapTargetQuery(order, target = "customer") {
 function buildGoogleMapsEmbedUrl(order, target = "customer") {
   const apiKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
   const query = mapTargetQuery(order, target);
-  if (!apiKey || !query) {
+  if (!query) {
     return "";
+  }
+  if (!apiKey) {
+    return `https://maps.google.com/maps?q=${encodeURIComponent(query)}&z=16&output=embed`;
   }
   return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
 }
@@ -236,6 +239,24 @@ function openOrderMap(order, target = "customer") {
     return;
   }
   window.open(url, "_blank");
+}
+
+function renderStaticMapFallback(target, pkg) {
+  target.classList.remove("has-embed");
+  target.classList.add("map-fallback");
+  const query = mapTargetQuery(pkg, "customer");
+  target.innerHTML = `
+    <div class="courier-package-map-art" aria-hidden="true">
+      <span class="mini-map-road mini-map-road-a"></span>
+      <span class="mini-map-road mini-map-road-b"></span>
+      <span class="mini-map-route"></span>
+      <span class="mini-map-pin"></span>
+    </div>
+    <div class="courier-package-map-copy">
+      <strong>Harita yuklenemedi</strong>
+      <span>${escapeCourierHtml(query || "Google Maps'te ac")}</span>
+    </div>
+  `;
 }
 
 function renderPackageMapPreview(target, pkg) {
@@ -250,6 +271,11 @@ function renderPackageMapPreview(target, pkg) {
   }
 
   const embedUrl = buildGoogleMapsEmbedUrl(pkg, "customer");
+  if (!embedUrl) {
+    renderStaticMapFallback(target, pkg);
+    return;
+  }
+
   target.classList.remove("hidden");
   target.setAttribute("role", "link");
   target.setAttribute("tabindex", "0");
@@ -262,25 +288,18 @@ function renderPackageMapPreview(target, pkg) {
     }
   };
 
-  if (embedUrl) {
-    target.classList.add("has-embed");
-    target.innerHTML = `<iframe title="Teslimat haritasi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>`;
-    return;
-  }
-
-  target.classList.remove("has-embed");
+  target.classList.add("has-embed");
+  target.classList.remove("map-fallback");
   target.innerHTML = `
-    <div class="courier-package-map-art" aria-hidden="true">
-      <span class="mini-map-road mini-map-road-a"></span>
-      <span class="mini-map-road mini-map-road-b"></span>
-      <span class="mini-map-route"></span>
-      <span class="mini-map-pin"></span>
-    </div>
-    <div class="courier-package-map-copy">
+    <iframe title="Gercek Google Maps teslimat on izlemesi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>
+    <div class="courier-map-glass">
       <strong>Google Maps</strong>
-      <span>Haritada ac</span>
+      <span>Dokun, rotayi ac</span>
     </div>
   `;
+  target.querySelector("iframe")?.addEventListener("error", () => {
+    renderStaticMapFallback(target, pkg);
+  }, { once: true });
 }
 
 window.openCourierPackageDetailsById = function(packageId) {
