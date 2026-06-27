@@ -118,6 +118,10 @@ async function getPgPool() {
           END;
           $$ LANGUAGE plpgsql IMMUTABLE;
         `);
+        logger.info("PostgreSQL initialized successfully", {
+          envName: databaseEnvInfo().variable,
+          source: databaseEnvInfo().source,
+        });
       } finally {
         client.release();
       }

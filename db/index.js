@@ -33,6 +33,7 @@ function logDatabaseDecision(client, reason = "") {
     reason,
     postgresUrlConfigured: info.configured,
     postgresEnvName: info.variable,
+    postgresUrlSource: info.source,
     detectedPostgresEnvNames: info.detectedVariables,
     supportedPostgresEnvNames: info.supportedVariables,
     postgresRequired: info.postgresRequired,

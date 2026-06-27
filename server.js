@@ -3527,6 +3527,7 @@ function systemStatusPayload() {
       sizeBytes: databaseSizeBytes(),
       postgresUrlConfigured: dbEnv.configured,
       postgresEnvName: dbEnv.variable,
+      postgresUrlSource: dbEnv.source,
       postgresRequired: dbEnv.postgresRequired,
       renderDetected: dbEnv.renderDetected,
       skipReason: dbEnv.skipReason,

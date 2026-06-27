@@ -1,4 +1,9 @@
+const fs = require("fs");
 const path = require("path");
+
+const DATABASE_URL_SECRET_FILE = "/etc/secrets/DATABASE_URL";
+const DATABASE_URL_SOURCE_ENV = "env:DATABASE_URL";
+const DATABASE_URL_SOURCE_SECRET_FILE = `file:${DATABASE_URL_SECRET_FILE}`;
 
 const POSTGRES_URL_ENV_KEYS = [
   "DATABASE_URL",
@@ -27,6 +32,32 @@ const RENDER_ENV_KEYS = [
 function trimmed(value) {
   return String(value || "").trim();
 }
+
+function loadDatabaseUrlFromSecretFile() {
+  if (trimmed(process.env.DATABASE_URL)) {
+    process.env.DELIVERA_DATABASE_URL_SOURCE = DATABASE_URL_SOURCE_ENV;
+    console.info("[database_init] DATABASE_URL found in env");
+    return;
+  }
+
+  try {
+    if (!fs.existsSync(DATABASE_URL_SECRET_FILE)) {
+      return;
+    }
+    const fileValue = trimmed(fs.readFileSync(DATABASE_URL_SECRET_FILE, "utf8"));
+    if (!fileValue) {
+      console.warn(`[database_init] ${DATABASE_URL_SECRET_FILE} exists but is empty`);
+      return;
+    }
+    process.env.DATABASE_URL = fileValue;
+    process.env.DELIVERA_DATABASE_URL_SOURCE = DATABASE_URL_SOURCE_SECRET_FILE;
+    console.info(`[database_init] DATABASE_URL loaded from ${DATABASE_URL_SECRET_FILE}`);
+  } catch (error) {
+    console.error(`[database_init] Failed to read ${DATABASE_URL_SECRET_FILE}`, error);
+  }
+}
+
+loadDatabaseUrlFromSecretFile();
 
 function configuredEnv(keys) {
   return keys
@@ -78,6 +109,7 @@ function databaseEnvInfo() {
   return {
     configured: Boolean(postgresEnv),
     variable: postgresEnv?.name || null,
+    source: process.env.DELIVERA_DATABASE_URL_SOURCE || (postgresEnv ? `env:${postgresEnv.name}` : null),
     maskedValue: postgresEnv ? maskValue(postgresEnv.value) : null,
     detectedVariables: configuredPostgresEnv,
     supportedVariables: POSTGRES_URL_ENV_KEYS,
@@ -95,6 +127,7 @@ function databaseEnvInfo() {
 }
 
 module.exports = {
+  DATABASE_URL_SECRET_FILE,
   POSTGRES_URL_ENV_KEYS,
   databaseEnvInfo,
   databaseUrl,
