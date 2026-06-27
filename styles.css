@@ -2930,22 +2930,32 @@ body.theme-courier::after,
 
 .theme-courier .courier-package-map-preview.map-fallback {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 108px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  min-height: 76px;
+  gap: 10px;
+  min-height: 94px;
+  padding: 9px;
+  border-color: rgba(17, 131, 95, 0.18);
   background:
+    radial-gradient(circle at 18% 20%, rgba(17, 131, 95, 0.20), transparent 30%),
+    radial-gradient(circle at 82% 72%, rgba(59, 130, 246, 0.16), transparent 31%),
     linear-gradient(90deg, rgba(17, 131, 95, 0.10) 1px, transparent 1px),
     linear-gradient(0deg, rgba(17, 131, 95, 0.08) 1px, transparent 1px),
-    #eef7f2;
-  background-size: 22px 22px;
-  box-shadow: inset 0 0 0 1px #d7e7df;
+    #f3fbf7;
+  background-size: auto, auto, 22px 22px, 22px 22px, auto;
+  box-shadow:
+    0 10px 24px rgba(15, 23, 42, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.74);
 }
 
 .theme-courier .courier-package-map-art {
   position: relative;
   height: 76px;
   overflow: hidden;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(222, 246, 235, 0.72));
+  box-shadow: inset 0 0 0 1px rgba(17, 131, 95, 0.12);
 }
 
 .theme-courier .mini-map-road {
@@ -3003,9 +3013,9 @@ body.theme-courier::after,
 
 .theme-courier .courier-package-map-copy {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
-  padding-right: 8px;
+  padding-right: 2px;
 }
 
 .theme-courier .courier-package-map-copy strong,
@@ -3024,6 +3034,30 @@ body.theme-courier::after,
 .theme-courier .courier-package-map-copy span {
   color: var(--courier-muted, #657483) !important;
   font-size: 0.78rem !important;
+}
+
+.theme-courier .courier-map-fallback-btn {
+  justify-self: start;
+  min-height: 30px;
+  margin-top: 3px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--courier-action, #11835f), var(--courier-action-strong, #0b654a));
+  box-shadow: 0 8px 16px rgba(17, 131, 95, 0.20);
+  font-size: 0.78rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.theme-courier .courier-map-fallback-btn:focus-visible {
+  outline: 2px solid rgba(17, 131, 95, 0.35);
+  outline-offset: 2px;
+}
+
+.theme-courier .courier-map-fallback-btn:hover {
+  transform: translateY(-1px);
 }
 
 .theme-courier .courier-task-flags {

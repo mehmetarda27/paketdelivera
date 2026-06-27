@@ -263,11 +263,8 @@ function mapTargetQuery(order, target = "customer") {
 function buildGoogleMapsEmbedUrl(order, target = "customer") {
   const apiKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
   const query = mapTargetQuery(order, target);
-  if (!query) {
+  if (!query || !apiKey) {
     return "";
-  }
-  if (!apiKey) {
-    return `https://maps.google.com/maps?q=${encodeURIComponent(query)}&z=16&output=embed`;
   }
   return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
 }
@@ -285,6 +282,7 @@ function renderStaticMapFallback(target, pkg) {
   target.classList.remove("has-embed");
   target.classList.add("map-fallback");
   const query = mapTargetQuery(pkg, "customer");
+  const label = query || "Adres bilgisi bekleniyor";
   target.innerHTML = `
     <div class="courier-package-map-art" aria-hidden="true">
       <span class="mini-map-road mini-map-road-a"></span>
@@ -293,10 +291,15 @@ function renderStaticMapFallback(target, pkg) {
       <span class="mini-map-pin"></span>
     </div>
     <div class="courier-package-map-copy">
-      <strong>Harita yuklenemedi</strong>
-      <span>${escapeCourierHtml(query || "Google Maps'te ac")}</span>
+      <strong>Google Maps</strong>
+      <span>${escapeCourierHtml(label)}</span>
+      <button class="courier-map-fallback-btn" type="button">Haritada Ac</button>
     </div>
   `;
+  target.querySelector(".courier-map-fallback-btn")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openOrderMap(pkg, "customer");
+  });
 }
 
 function renderPackageMapPreview(target, pkg) {
@@ -312,6 +315,17 @@ function renderPackageMapPreview(target, pkg) {
 
   const embedUrl = buildGoogleMapsEmbedUrl(pkg, "customer");
   if (!embedUrl) {
+    target.classList.remove("hidden");
+    target.setAttribute("role", "link");
+    target.setAttribute("tabindex", "0");
+    target.title = "Google Maps'te ac";
+    target.onclick = () => openOrderMap(pkg, "customer");
+    target.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openOrderMap(pkg, "customer");
+      }
+    };
     renderStaticMapFallback(target, pkg);
     return;
   }
@@ -330,6 +344,8 @@ function renderPackageMapPreview(target, pkg) {
 
   target.classList.add("has-embed");
   target.classList.remove("map-fallback");
+  const previewToken = `${pkg.id || ""}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  target.dataset.mapPreviewToken = previewToken;
   target.innerHTML = `
     <iframe title="Gercek Google Maps teslimat on izlemesi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>
     <div class="courier-map-glass">
@@ -337,9 +353,19 @@ function renderPackageMapPreview(target, pkg) {
       <span>Dokun, rotayi ac</span>
     </div>
   `;
-  target.querySelector("iframe")?.addEventListener("error", () => {
+  let iframeLoaded = false;
+  const iframe = target.querySelector("iframe");
+  iframe?.addEventListener("load", () => {
+    iframeLoaded = true;
+  }, { once: true });
+  iframe?.addEventListener("error", () => {
     renderStaticMapFallback(target, pkg);
   }, { once: true });
+  window.setTimeout(() => {
+    if (!iframeLoaded && target.dataset.mapPreviewToken === previewToken) {
+      renderStaticMapFallback(target, pkg);
+    }
+  }, 6500);
 }
 
 window.openCourierPackageDetailsById = function(packageId) {
