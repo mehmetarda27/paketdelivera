@@ -5768,6 +5768,12 @@ function createOrGetExternalPlatformOrder(body, req) {
   const restaurant = findRestaurantByExternalRestaurantId(order.platformRestaurantId, order.platform);
   if (!restaurant) {
     const error = validationError("Platform restoran ID ile eslesen restoran bulunamadi.");
+    logger.warn("platform_restaurant_not_matched", {
+      request_id: req.requestId,
+      platform: order.platformKey,
+      platform_restaurant_id: order.platformRestaurantId,
+      provider_slug: order.platformKey,
+    });
     logger.warn("platform_restaurant_match_failed", {
       request_id: req.requestId,
       platform: order.platformKey,
@@ -6006,7 +6012,17 @@ function replaceOrderItems(packageId, products = []) {
   });
 }
 
-function upsertWebhookPackage(order, restaurant) {
+function logPlatformRestaurantNotMatched(order, req = null) {
+  logger.warn("platform_restaurant_not_matched", {
+    request_id: req?.requestId || null,
+    platform: platformApiKey(order.platform || order.platformSlug || order.providerName),
+    platform_restaurant_id: order.externalRestaurantId || null,
+    provider_slug: order.platformSlug || null,
+    platform_order_id: order.externalOrderId || order.confirmationId || null,
+  });
+}
+
+function upsertWebhookPackage(order, restaurant, options = {}) {
   const existing = db.prepare(`
     SELECT * FROM packages
     WHERE restaurant_id = ?
@@ -6023,9 +6039,10 @@ function upsertWebhookPackage(order, restaurant) {
       tableName: "platform_orders",
       reason: "existing_platform_order_updated_instead",
       existingId: existing.id,
-      platform,
-      platformOrderId,
-      restaurantId,
+      platform: order.platform,
+      platformOrderId: order.externalOrderId || order.confirmationId || null,
+      platformRestaurantId: order.externalRestaurantId || null,
+      restaurantId: restaurant.id,
     });
     db.prepare(`
       UPDATE packages
@@ -6055,6 +6072,23 @@ function upsertWebhookPackage(order, restaurant) {
     );
     updatePackageApiMetadata(existing.id, order);
     replaceOrderItems(existing.id, order.products);
+    upsertPlatformOrderRecord({
+      platform: order.platform,
+      platformRestaurantId: order.externalRestaurantId,
+      externalRestaurantId: order.externalRestaurantId,
+      orderId: order.externalOrderId || order.confirmationId,
+      packageId: existing.id,
+      customerName: order.customerName,
+      phone: order.customerPhone || order.contactPhone,
+      address: order.addressText,
+      totalPrice: order.discountedPrice || order.totalPrice,
+      customerNote: order.clientNote,
+      rawPayload: order.rawPayload,
+    }, restaurant.id, order.statusText || "pending_approval", {
+      requestId: options.requestId || null,
+      platformRestaurantId: order.externalRestaurantId,
+      packageId: existing.id,
+    });
     return { packageId: existing.id, duplicate: true };
   }
 
@@ -6074,14 +6108,21 @@ function upsertWebhookPackage(order, restaurant) {
   replaceOrderItems(pkg.id, order.products);
   upsertPlatformOrderRecord({
     platform: order.platform,
+    platformRestaurantId: order.externalRestaurantId,
+    externalRestaurantId: order.externalRestaurantId,
     orderId: order.externalOrderId || order.confirmationId,
+    packageId: pkg.id,
     customerName: order.customerName,
     phone: order.customerPhone || order.contactPhone,
     address: order.addressText,
     totalPrice: order.discountedPrice || order.totalPrice,
     customerNote: order.clientNote,
     rawPayload: order.rawPayload,
-  }, restaurant.id, order.statusText || "pending_approval");
+  }, restaurant.id, order.statusText || "pending_approval", {
+    requestId: options.requestId || null,
+    platformRestaurantId: order.externalRestaurantId,
+    packageId: pkg.id,
+  });
   return { packageId: pkg.id, duplicate: false };
 }
 
@@ -8007,6 +8048,7 @@ async function handleApi(req, res, pathname) {
       const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
       if (!restaurant) {
         const unmatchedId = upsertUnmatchedOrder(order);
+        logPlatformRestaurantNotMatched(order, req);
         logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 202, status: "unmatched" });
         broadcastLiveEvent({
           type: "order:unmatched",
@@ -8021,7 +8063,7 @@ async function handleApi(req, res, pathname) {
         return;
       }
 
-      const result = upsertWebhookPackage(order, restaurant);
+      const result = upsertWebhookPackage(order, restaurant, { requestId: req.requestId });
       resolveUnmatchedOrderForMatchedPackage(order, restaurant.id, result.packageId);
       rebalancePackages();
       const createdPackage = getPackageById(result.packageId);
@@ -8357,10 +8399,11 @@ async function handleApi(req, res, pathname) {
     const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
     if (!restaurant) {
       const unmatchedId = upsertUnmatchedOrder(order);
+      logPlatformRestaurantNotMatched(order, req);
       sendJson(res, 202, { ok: true, matched: false, unmatchedOrderId: unmatchedId, ...decorateState() });
       return;
     }
-    const result = upsertWebhookPackage(order, restaurant);
+    const result = upsertWebhookPackage(order, restaurant, { requestId: req.requestId });
     resolveUnmatchedOrderForMatchedPackage(order, restaurant.id, result.packageId);
     rebalancePackages();
     writeAuditLog({

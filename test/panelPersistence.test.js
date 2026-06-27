@@ -73,6 +73,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
   const restaurantPassword = "Rest12345!";
   const secondRestaurantUsername = `rest2_${Date.now()}`;
   const secondRestaurantPassword = "Rest22345!";
+  const yemeksepetiRestaurantId = "6377deac15d5d59aee02bf51";
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
@@ -88,6 +89,8 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       DELIVERA_ADMIN_USERNAME: adminUsername,
       DELIVERA_ADMIN_PASSWORD: adminPassword,
       DELIVERA_INTEGRATION_KEY: "test-integration-key",
+      WEBHOOK_SECRET: "test-webhook-secret",
+      WEBHOOK_ENABLED: "true",
       DELIVERA_ASSIGNMENT_RETRY_MS: "60000",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
     },
@@ -118,7 +121,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         latitude: 36.601,
         longitude: 34.32,
         platforms: ["Getir Yemek"],
-        yemeksepetiRestaurantId: `ys-${Date.now()}`,
+        yemeksepetiRestaurantId,
         externalRestaurantIds: JSON.stringify([{ platform: "other", restaurantId: `other-${Date.now()}` }]),
       }),
     });
@@ -362,6 +365,56 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     });
     assert.equal(externalPackageDetail.platformRestaurantId, restaurantState.createdRestaurant.yemeksepetiRestaurantId);
     assert.equal(externalPackageDetail.platformOrderId, externalOrderOne.platformOrder.platformOrderId);
+
+    const webhookOrderId = `YS-WEBHOOK-${Date.now()}`;
+    const webhookOrder = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify({
+        provider: { slug: "ys" },
+        restaurantId: yemeksepetiRestaurantId,
+        restaurant: { id: yemeksepetiRestaurantId, name: "Persistence Test Restaurant" },
+        orderId: webhookOrderId,
+        customerName: "Webhook Customer",
+        customerPhone: "05550000003",
+        addressText: "Webhook address",
+        totalPrice: 320,
+        products: [{ id: "prod-1", name: "Kofte", quantity: 1, price: 320, totalPrice: 320 }],
+      }),
+    });
+    assert.equal(webhookOrder.matched, true);
+    assert.equal(webhookOrder.package.restaurantId, restaurantState.createdRestaurant.id);
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", webhookOrder.package.id).restaurant_id,
+      restaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE platform_order_id = ?", webhookOrderId).platform_restaurant_id,
+      yemeksepetiRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT package_id FROM platform_orders WHERE platform_order_id = ?", webhookOrderId).package_id,
+      webhookOrder.package.id
+    );
+
+    const packageCountBeforeUnmatched = readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count;
+    const unmatchedWebhookOrder = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify({
+        provider: { slug: "ys" },
+        restaurantId: "unknown-yemeksepeti-restaurant",
+        orderId: `YS-UNMATCHED-${Date.now()}`,
+        customerName: "Unmatched Webhook Customer",
+        customerPhone: "05550000004",
+        addressText: "Unmatched webhook address",
+        totalPrice: 100,
+        products: [{ id: "prod-2", name: "Ayran", quantity: 1, price: 100, totalPrice: 100 }],
+      }),
+    });
+    assert.equal(unmatchedWebhookOrder.matched, false);
+    assert.equal(readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count, packageCountBeforeUnmatched);
+
     const externalPackages = await request(baseUrl, "/api/external/packages", {
       headers: externalHeaders,
     });
