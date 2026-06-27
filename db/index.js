@@ -1,29 +1,55 @@
 const fs = require("fs");
 const path = require("path");
 const { Worker } = require("worker_threads");
+const { databaseEnvInfo, databaseUrl, postgresRequired } = require("./config");
 
 const ROOT = path.resolve(__dirname, "..");
 let connection = null;
 let connectionFile = "";
 let activeAdapter = null;
+let databaseDecisionLogged = false;
 
 let pgWorker = null;
 let pgSab = null;
 let pgSabInts = null;
 let pgSabBuffer = null;
 
-function databaseUrl() {
-  return process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
-}
-
 function isProduction() {
-  return String(process.env.NODE_ENV || "").toLowerCase() === "production" ||
-    String(process.env.RENDER || "").toLowerCase() === "true" ||
-    ["1", "true", "yes"].includes(String(process.env.DELIVERA_REQUIRE_POSTGRES || "").toLowerCase());
+  return postgresRequired();
 }
 
 function hasPostgresUrl() {
   return Boolean(databaseUrl());
+}
+
+function logDatabaseDecision(client, reason = "") {
+  if (databaseDecisionLogged) {
+    return;
+  }
+  databaseDecisionLogged = true;
+  const info = databaseEnvInfo();
+  const payload = {
+    client,
+    reason,
+    postgresUrlConfigured: info.configured,
+    postgresEnvName: info.variable,
+    detectedPostgresEnvNames: info.detectedVariables,
+    supportedPostgresEnvNames: info.supportedVariables,
+    postgresRequired: info.postgresRequired,
+    nodeEnv: info.nodeEnv,
+    renderDetected: info.renderDetected,
+    renderEnvNames: info.renderVariables,
+    cwd: info.cwd,
+    skipReason: info.skipReason,
+  };
+  const line = `[database_init] ${JSON.stringify(payload)}`;
+  if (client === "postgres") {
+    console.info(line);
+  } else if (info.postgresRequired) {
+    console.error(line);
+  } else {
+    console.warn(line);
+  }
 }
 
 function resolveDbFile() {
@@ -46,15 +72,25 @@ function resolveDbFile() {
 
 function clientName() {
   if (hasPostgresUrl()) {
+    logDatabaseDecision("postgres", "supported_postgres_connection_string_env_detected");
     return "postgres";
   }
 
   if (isProduction()) {
-    throw new Error("DATABASE_URL is required when NODE_ENV=production. SQLite is disabled in production.");
+    const info = databaseEnvInfo();
+    logDatabaseDecision("none", info.skipReason);
+    throw new Error(
+      `PostgreSQL connection string is required in production/Render. ` +
+      `Checked env vars: ${info.supportedVariables.join(", ")}. ` +
+      `Detected postgres env vars: ${info.detectedVariables.join(", ") || "none"}. ` +
+      `Render detected: ${info.renderDetected}. NODE_ENV=${info.nodeEnv || "(empty)"}. SQLite is disabled.`
+    );
   }
 
   const configured = String(process.env.DATABASE_CLIENT || process.env.DB_CLIENT || process.env.DB_ADAPTER || process.env.DATABASE_ADAPTER || "sqlite").toLowerCase();
-  return configured === "postgresql" ? "postgres" : configured;
+  const client = configured === "postgresql" ? "postgres" : configured;
+  logDatabaseDecision(client, "no_postgres_env_local_fallback");
+  return client;
 }
 
 function adapterName() {
@@ -176,7 +212,11 @@ function sendWorkerRequest(req) {
   }
   
   if (!parsed.ok) {
-    throw new Error(parsed.error || "Unknown worker thread error");
+    const error = new Error(parsed.error || "Unknown worker thread error");
+    if (parsed.stack) {
+      error.stack = parsed.stack;
+    }
+    throw error;
   }
   
   return parsed.data;
@@ -257,7 +297,12 @@ function createSqliteAdapter() {
 
 function createPostgresAdapter() {
   // Ensure worker is running
-  getWorker();
+  try {
+    getWorker();
+  } catch (error) {
+    console.error("[database_init] PostgreSQL worker initialization failed", error);
+    throw error;
+  }
 
   return {
     name: "postgres",
@@ -435,6 +480,8 @@ module.exports = {
   all,
   clientName,
   close,
+  databaseEnvInfo,
+  databaseUrl,
   get,
   getDb,
   poolStatus,

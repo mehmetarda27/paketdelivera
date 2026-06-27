@@ -2,12 +2,13 @@ const { parentPort, workerData } = require("worker_threads");
 const { Pool } = require("pg");
 const { createClient } = require("redis");
 const logger = require("../services/logger");
+const { databaseEnvInfo, databaseUrl } = require("../db/config");
 
 const { sab } = workerData;
 const sabInts = new Int32Array(sab);
 const sabBuffer = new Uint8Array(sab);
 
-const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+const pgUrl = databaseUrl();
 const redisUrl = process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL || "";
 
 let pgPool = null;
@@ -34,8 +35,17 @@ async function getPgPool() {
 
   pgPoolPromise = (async () => {
     if (!pgUrl) {
-      throw new Error("DATABASE_URL or POSTGRES_URL is not configured.");
+      const info = databaseEnvInfo();
+      throw new Error(
+        `PostgreSQL connection string is not configured. Checked env vars: ${info.supportedVariables.join(", ")}. ` +
+        `Detected postgres env vars: ${info.detectedVariables.join(", ") || "none"}. ` +
+        `Render detected: ${info.renderDetected}. NODE_ENV=${info.nodeEnv || "(empty)"}.`
+      );
     }
+    logger.info("postgres_connection_string_detected", {
+      envName: databaseEnvInfo().variable,
+      supportedEnvNames: databaseEnvInfo().supportedVariables,
+    });
     const pool = new Pool({
       connectionString: pgUrl,
       ssl: pgSslConfig(),
@@ -403,7 +413,8 @@ parentPort.on("message", async () => {
     Atomics.store(sabInts, 0, 2);
   } catch (error) {
     // Write error to buffer
-    const resStr = JSON.stringify({ ok: false, error: error.message });
+    logger.error("postgres_worker_request_failed", { error });
+    const resStr = JSON.stringify({ ok: false, error: error.message, stack: error.stack });
     const resBytes = Buffer.from(resStr, "utf8");
     sabInts[1] = resBytes.length;
     resBytes.copy(sabBuffer, 8);

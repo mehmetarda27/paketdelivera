@@ -9,7 +9,8 @@ try {
 } catch {}
 
 const ROOT = path.resolve(__dirname, "..");
-const USE_POSTGRES = Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+const { databaseUrl } = require("../db/config");
+const USE_POSTGRES = Boolean(databaseUrl());
 const GENERATED_TEMP_LOAD_DB = !USE_POSTGRES && !process.env.DELIVERA_LOAD_DB_FILE;
 const DB_FILE = path.resolve(process.env.DELIVERA_LOAD_DB_FILE || path.join(os.tmpdir(), `delivera-load-${process.pid}-${Date.now()}.sqlite`));
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();

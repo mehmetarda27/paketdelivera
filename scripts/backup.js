@@ -6,7 +6,7 @@ try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 } catch {}
 
-const { getDb, close, clientName, resolveDbFile } = require("../db");
+const { getDb, close, clientName, resolveDbFile, databaseUrl } = require("../db");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKUP_DIR = path.resolve(process.env.DELIVERA_BACKUP_DIR || path.join(ROOT, "backups"));
@@ -61,7 +61,7 @@ function main() {
     }
     
   } else if (client === "postgres" || client === "postgresql") {
-    const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+    const pgUrl = databaseUrl();
     if (!pgUrl) {
       throw new Error("DATABASE_URL or POSTGRES_URL is not set for PostgreSQL backup.");
     }

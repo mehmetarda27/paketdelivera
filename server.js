@@ -249,7 +249,17 @@ const STATIC_FILES = {
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-const migrationSummary = runMigrations();
+logger.info("Database environment detected", dbFacade.databaseEnvInfo());
+let migrationSummary;
+try {
+  migrationSummary = runMigrations();
+} catch (error) {
+  logger.error("Database initialization failed", {
+    error,
+    databaseEnv: dbFacade.databaseEnvInfo(),
+  });
+  throw error;
+}
 logger.info("Database migrations checked", {
   database: migrationSummary.database,
   adapter: migrationSummary.adapter,
@@ -3503,6 +3513,7 @@ function systemStatusPayload() {
   const activeStatuses = [PENDING_APPROVAL_STATUS, PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS];
   const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const dbOk = Boolean(db.prepare("SELECT 1 AS ok").get()?.ok);
+  const dbEnv = dbFacade.databaseEnvInfo();
 
   return {
     ok: true,
@@ -3514,7 +3525,11 @@ function systemStatusPayload() {
       mode: dbFacade.clientName(),
       file: dbFacade.clientName() === "postgres" ? null : DB_FILE,
       sizeBytes: databaseSizeBytes(),
-      postgresUrlConfigured: Boolean(trimmed(process.env.DATABASE_URL || process.env.POSTGRES_URL)),
+      postgresUrlConfigured: dbEnv.configured,
+      postgresEnvName: dbEnv.variable,
+      postgresRequired: dbEnv.postgresRequired,
+      renderDetected: dbEnv.renderDetected,
+      skipReason: dbEnv.skipReason,
       pool: dbFacade.poolStatus(),
     },
     migrations: {

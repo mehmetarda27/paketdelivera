@@ -9,7 +9,8 @@ try {
 
 const ROOT = path.resolve(__dirname, "..");
 const SQLITE_FILE = path.resolve(process.env.DATABASE_PATH || process.env.DB_PATH || process.env.DELIVERA_DB_FILE || path.join(ROOT, "delivera.sqlite"));
-const PG_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+const { databaseUrl } = require("../db/config");
+const PG_URL = databaseUrl();
 
 async function main() {
   if (!fs.existsSync(SQLITE_FILE)) {
