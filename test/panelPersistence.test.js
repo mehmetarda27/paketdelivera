@@ -388,8 +388,26 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         rawPayload: { source: "test" },
       }),
     });
+    const externalPosentegraPid = `POSENTEGRA-EXT-${Date.now()}`;
+    const externalOrderByRestaurantId = await request(baseUrl, "/api/external/platform-orders", {
+      method: "POST",
+      headers: externalHeaders,
+      body: JSON.stringify({
+        platform: "yemeksepeti",
+        restaurantId: posentegraRestaurantId,
+        pid: externalPosentegraPid,
+        platformOrderId: `POSENTEGRA-ORDER-${Date.now()}`,
+        customerName: "External Posentegra Customer",
+        customerPhone: "05550000006",
+        deliveryAddress: "External Posentegra address",
+        items: [{ name: "Pizza", quantity: 1, price: 260 }],
+        totalAmount: 260,
+        rawPayload: { restaurantId: posentegraRestaurantId, pid: externalPosentegraPid },
+      }),
+    });
     assert.equal(externalOrderOne.package.restaurantId, restaurantState.createdRestaurant.id);
     assert.equal(externalOrderTwo.package.restaurantId, secondRestaurantState.createdRestaurant.id);
+    assert.equal(externalOrderByRestaurantId.package.restaurantId, restaurantState.createdRestaurant.id);
     assert.notEqual(externalOrderOne.package.restaurantId, externalOrderTwo.package.restaurantId);
     assert.equal(
       readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderOne.package.id).restaurant_id,
@@ -406,6 +424,18 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.equal(
       readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", externalOrderTwo.package.id).platform_restaurant_id,
       secondRestaurantState.createdRestaurant.getirRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT restaurant_id FROM packages WHERE id = ?", externalOrderByRestaurantId.package.id).restaurant_id,
+      restaurantState.createdRestaurant.id
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT platform_restaurant_id FROM packages WHERE id = ?", externalOrderByRestaurantId.package.id).platform_restaurant_id,
+      posentegraRestaurantId
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", externalOrderByRestaurantId.package.id).posentegra_id,
+      externalPosentegraPid
     );
     assert.equal(
       readRow(dbFile, "SELECT platform_restaurant_id FROM platform_orders WHERE id = ?", externalOrderOne.platformOrder.id).platform_restaurant_id,

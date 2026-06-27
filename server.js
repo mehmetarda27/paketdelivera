@@ -5634,7 +5634,10 @@ function extractWebhookRestaurantId(payload = {}) {
     payload.restaurant?.id ||
     payload.provider?.restaurantId ||
     payload.branchId ||
-    payload.storeId
+    payload.storeId ||
+    payload.pid ||
+    payload.posentegraId ||
+    payload.posentegra_id
   );
 }
 
@@ -5806,7 +5809,16 @@ function externalPackagePayload(pkg) {
 function normalizeExternalPlatformOrderBody(body = {}) {
   const platform = normalizePlatformInput(body.platform) || trimmed(body.platform);
   const posentegraId = trimmed(body.pid ?? body.posentegraId ?? body.posentegra_id);
-  const platformRestaurantId = trimmed(body.platformRestaurantId ?? body.platform_restaurant_id ?? body.externalRestaurantId ?? body.external_restaurant_id);
+  const platformRestaurantId = trimmed(
+    body.platformRestaurantId ??
+    body.platform_restaurant_id ??
+    body.externalRestaurantId ??
+    body.external_restaurant_id ??
+    body.restaurantId ??
+    body.restaurant_id ??
+    body.restaurant?.id ??
+    posentegraId
+  );
   const platformOrderId = trimmed(body.platformOrderId ?? body.platform_order_id ?? body.orderId ?? body.order_id ?? body.externalOrderId ?? body.external_order_id);
   const deliveryAddress = trimmed(body.deliveryAddress ?? body.delivery_address ?? body.address);
   const customerName = trimmed(body.customerName ?? body.customer_name ?? body.recipient);
