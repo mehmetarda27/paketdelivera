@@ -22,6 +22,8 @@ const restaurantState = {
   packageCursor: "0",
   workspacePollId: null,
   liveStream: null,
+  workspaceLoadPromise: null,
+  queuedWorkspaceLoad: null,
   activeWorkspaceCard: "restaurant-integration-wizard",
 };
 
@@ -347,7 +349,9 @@ function startRestaurantLiveStream() {
           playSignal("ready");
         }
       }
-      loadRestaurantWorkspace({ silent: true });
+      if (event?.type !== "courier-location") {
+        loadRestaurantWorkspace({ silent: true, force: true });
+      }
     },
     onError() {
       if (restaurantRefs.liveBadge) {
@@ -1438,6 +1442,26 @@ function renderRestaurantNotifications(notifications) {
 }
 
 function hydrateRestaurant(data, explicitIntegration = null) {
+  const nextSignature = JSON.stringify({
+    restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.updatedAt]),
+    platformAccounts: (data.platformAccounts || []).map((item) => [item.id, item.active, item.connectionStatus, item.lastSyncAt, item.updatedAt]),
+    packages: (data.packages || []).map((item) => [item.id, item.status, item.assignmentStatus, item.assignedCourierId, item.paymentStatus, item.updatedAt]),
+    notifications: (data.notifications || []).map((item) => [item.id, item.readAt, item.createdAt]),
+    performance: data.restaurantPerformance,
+    wizard: data.integrationWizard,
+    selectedRestaurantId: restaurantState.selectedRestaurantId,
+    historyRange: restaurantState.historyRange,
+    historyVisibleCount: restaurantState.historyVisibleCount,
+    explicitIntegration,
+  });
+  if (restaurantState.lastHydrateSignature === nextSignature) {
+    restaurantState.data = data;
+    if (data.restaurants?.[0]) {
+      restaurantState.selectedRestaurantId = data.restaurants[0].id || restaurantState.selectedRestaurantId;
+    }
+    return;
+  }
+  restaurantState.lastHydrateSignature = nextSignature;
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
   if (data.restaurants?.[0]) {
@@ -1505,6 +1529,26 @@ restaurantRefs.historyMore?.addEventListener("click", () => {
 });
 
 async function loadRestaurantWorkspace(options = {}) {
+  if (restaurantState.workspaceLoadPromise) {
+    if (options.force) {
+      restaurantState.queuedWorkspaceLoad = { ...(restaurantState.queuedWorkspaceLoad || {}), ...options };
+    }
+    return restaurantState.workspaceLoadPromise;
+  }
+
+  restaurantState.workspaceLoadPromise = doLoadRestaurantWorkspace(options)
+    .finally(async () => {
+      restaurantState.workspaceLoadPromise = null;
+      const queuedOptions = restaurantState.queuedWorkspaceLoad;
+      restaurantState.queuedWorkspaceLoad = null;
+      if (queuedOptions) {
+        await loadRestaurantWorkspace(queuedOptions);
+      }
+    });
+  return restaurantState.workspaceLoadPromise;
+}
+
+async function doLoadRestaurantWorkspace(options = {}) {
   if (!restaurantState.token) {
     if (restaurantState.refreshToken) {
       try {

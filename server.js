@@ -3249,6 +3249,54 @@ function getPlatformOrderForPackageRow(row) {
   return platformOrder ? mapPlatformOrder(platformOrder) : null;
 }
 
+function buildPlatformOrderLookup(packageRows = []) {
+  const rows = (packageRows || []).filter(Boolean);
+  if (!rows.length) {
+    return () => null;
+  }
+
+  const packageIds = [...new Set(rows.map((row) => row.id).filter(Boolean))];
+  const orderIds = [...new Set(rows.map((row) => row.external_order_id || row.external_order_no || "").filter(Boolean))];
+  const posentegraIds = [...new Set(rows.map((row) => row.posentegra_id || "").filter(Boolean))];
+  const where = [];
+  const params = [];
+
+  if (packageIds.length) {
+    where.push(`package_id IN (${packageIds.map(() => "?").join(",")})`);
+    params.push(...packageIds);
+  }
+  if (orderIds.length) {
+    where.push(`platform_order_id IN (${orderIds.map(() => "?").join(",")})`);
+    params.push(...orderIds);
+  }
+  if (posentegraIds.length) {
+    where.push(`posentegra_id IN (${posentegraIds.map(() => "?").join(",")})`);
+    params.push(...posentegraIds);
+  }
+
+  if (!where.length) {
+    return () => null;
+  }
+
+  const candidates = db.prepare(`
+    SELECT *
+    FROM platform_orders
+    WHERE ${where.join(" OR ")}
+    ORDER BY datetime(updated_at) DESC
+  `).all(...params);
+
+  return (row) => {
+    const externalOrderId = row.external_order_id || row.external_order_no || "";
+    const posentegraId = row.posentegra_id || "";
+    const match = candidates.find((candidate) =>
+      candidate.package_id === row.id ||
+      (candidate.restaurant_id === row.restaurant_id && candidate.platform_order_id === externalOrderId) ||
+      (posentegraId && candidate.posentegra_id === posentegraId)
+    );
+    return match ? mapPlatformOrder(match) : null;
+  };
+}
+
 function platformOrdersPagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT, offset: 0 }) {
   const total = filter.restaurantId
     ? countTable("platform_orders", "restaurant_id = ?", [filter.restaurantId])
@@ -4054,9 +4102,10 @@ function getPackages(filter = {}) {
   const rows = pagination
     ? db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...params, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
     : db.prepare(sql).all(...params);
+  const platformOrderLookup = buildPlatformOrderLookup(rows);
 
   return rows.map((row) => {
-    const platformOrder = getPlatformOrderForPackageRow(row);
+    const platformOrder = platformOrderLookup(row);
     return {
     id: row.id,
     trackingNo: row.tracking_no,
@@ -4200,8 +4249,10 @@ function assignmentStateForPackage(pkg) {
   };
 }
 
-function mapPackageRow(row, restaurantMap = new Map()) {
-  const platformOrder = getPlatformOrderForPackageRow(row);
+function mapPackageRow(row, restaurantMap = new Map(), platformOrder) {
+  if (arguments.length < 3) {
+    platformOrder = getPlatformOrderForPackageRow(row);
+  }
   return {
     id: row.id,
     trackingNo: row.tracking_no,
@@ -4268,6 +4319,7 @@ function getCourierPackages(courierId, pagination = null) {
   const rows = pagination
     ? db.prepare(`SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?`).all(courierId, clampLimit(pagination.limit), parsePositiveInteger(pagination.offset))
     : db.prepare(`SELECT * FROM packages WHERE assigned_courier_id = ? ORDER BY datetime(created_at) DESC`).all(courierId);
+  const platformOrderLookup = buildPlatformOrderLookup(rows);
   const restaurantIds = [...new Set(rows.map((row) => row.restaurant_id))];
   const restaurantMap = new Map(
     restaurantIds.map((restaurantId) => {
@@ -4276,7 +4328,7 @@ function getCourierPackages(courierId, pagination = null) {
     })
   );
 
-  return rows.map((row) => mapPackageRow(row, restaurantMap));
+  return rows.map((row) => mapPackageRow(row, restaurantMap, platformOrderLookup(row)));
 }
 
 function normalizePhone(value) {
@@ -4352,7 +4404,9 @@ function packagesForAccounting({ restaurantId = "", startDate = "", endDate = ""
     where.push("substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) <= ?");
     params.push(endDate);
   }
-  return db.prepare(`SELECT * FROM packages WHERE ${where.join(" AND ")} ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC`).all(...params).map((row) => mapPackageRow(row));
+  const rows = db.prepare(`SELECT * FROM packages WHERE ${where.join(" AND ")} ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC`).all(...params);
+  const platformOrderLookup = buildPlatformOrderLookup(rows);
+  return rows.map((row) => mapPackageRow(row, new Map(), platformOrderLookup(row)));
 }
 
 function accountingBucketForPackage(pkg) {
@@ -4526,8 +4580,9 @@ function mapPackageRowsWithRestaurants(rows) {
       return [restaurantId, restaurant?.name || "Bilinmeyen Restoran"];
     })
   );
+  const platformOrderLookup = buildPlatformOrderLookup(rows);
 
-  return rows.map((row) => mapPackageRow(row, restaurantMap));
+  return rows.map((row) => mapPackageRow(row, restaurantMap, platformOrderLookup(row)));
 }
 
 function getCourierHistoryPackages(courierId, limit = 500) {
@@ -4862,7 +4917,8 @@ function deliveredPackagesForCourierOnDate(courierId, reportDate = dayKey()) {
       return [restaurantId, restaurant?.name || "Bilinmeyen Restoran"];
     })
   );
-  return rows.map((row) => mapPackageRow(row, restaurantMap));
+  const platformOrderLookup = buildPlatformOrderLookup(rows);
+  return rows.map((row) => mapPackageRow(row, restaurantMap, platformOrderLookup(row)));
 }
 
 function paymentAccountingBucket(pkg) {
@@ -11794,8 +11850,9 @@ async function handleApi(req, res, pathname) {
       session.courier_id
     );
 
-    const workspace = buildCourierWorkspace(session.courier_id);
-    const courier = workspace?.courier;
+    const lightweightLocationOnly = body.locationOnly === true && !availabilityChanged;
+    const workspace = lightweightLocationOnly ? null : buildCourierWorkspace(session.courier_id);
+    const courier = workspace?.courier || sanitizeCourier(db.prepare("SELECT * FROM couriers WHERE id = ?").get(session.courier_id));
     writeAuditLog({
       actorRole: "courier",
       actorId: session.courier_id,
@@ -11813,7 +11870,7 @@ async function handleApi(req, res, pathname) {
         ? (body.available ? "Kurye tekrar atamaya acildi." : "Kurye pasife alindi.")
         : "",
     });
-    sendJson(res, 200, workspace || { courier: null, packages: [] });
+    sendJson(res, 200, workspace || { courier, packages: [] });
     return;
   }
 

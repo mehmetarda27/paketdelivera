@@ -1,6 +1,6 @@
 const STORAGE_TOKEN_KEY = "kuryeTakipCourierToken";
 const STORAGE_REFRESH_TOKEN_KEY = "kuryeTakipCourierRefreshToken";
-const LOCATION_PUSH_MS = 2_000;
+const LOCATION_PUSH_MS = 10_000;
 const WORKSPACE_POLL_MS = 12_000;
 
 const courierState = {
@@ -9,6 +9,8 @@ const courierState = {
   data: null,
   watchId: null,
   lastCoords: null,
+  lastLocationPushAt: 0,
+  locationPushPromise: null,
   heartbeatId: null,
   workspacePollId: null,
   historyRange: "7d",
@@ -19,6 +21,8 @@ const courierState = {
   packageActionDrafts: new Map(),
   liveStream: null,
   lastWorkspaceLoadAt: 0,
+  workspaceLoadPromise: null,
+  queuedWorkspaceLoad: null,
   connectionBusy: false,
   focusPackage: null,
   activeProfileSection: "",
@@ -1327,6 +1331,37 @@ function restoreCourierConnectionFromWorkspace(courier = courierState.data?.cour
 }
 
 function hydrateCourierWorkspace(data) {
+  const nextSignature = JSON.stringify({
+    courier: data.courier ? [
+      data.courier.id,
+      data.courier.name,
+      data.courier.status,
+      data.courier.available,
+      data.courier.updatedAt,
+    ] : null,
+    packages: (data.packages || []).map((item) => [
+      item.id,
+      item.status,
+      item.assignmentStatus,
+      item.paymentStatus,
+      item.assignedCourierId,
+      item.updatedAt,
+    ]),
+    historyPackages: (data.historyPackages || []).map((item) => [item.id, item.status, item.paymentStatus, item.updatedAt]),
+    notifications: (data.notifications || []).map((item) => [item.id, item.readAt, item.createdAt]),
+    announcements: (data.announcements || []).map((item) => [item.id, item.active, item.updatedAt, item.createdAt]),
+    dayMetrics: data.dayMetrics,
+    earningsSummary: data.earningsSummary,
+    shiftSummary: data.shiftSummary,
+    historyRange: courierState.historyRange,
+    historyVisibleCount: courierState.historyVisibleCount,
+  });
+  if (courierState.lastHydrateSignature === nextSignature) {
+    courierState.data = data;
+    setLoggedIn(true);
+    return;
+  }
+  courierState.lastHydrateSignature = nextSignature;
   initializeCourierProfilePanels();
   processIncomingPackageNotifications(data.packages);
   clearResolvedPackageDrafts(data.packages);
@@ -1385,16 +1420,27 @@ courierRefs.mapButton?.addEventListener("click", () => {
   openOrderMap(courierState.focusPackage, "customer");
 });
 
-async function pushCourierLocation(payload) {
+async function pushCourierLocation(payload, options = {}) {
   const isLocationOnlyUpdate =
+    options.locationOnly ||
     (typeof payload.latitude === "number" || typeof payload.longitude === "number") &&
     typeof payload.available !== "boolean";
-  const data = await api("/api/courier/location", {
+  if (isLocationOnlyUpdate && courierState.locationPushPromise) {
+    return courierState.locationPushPromise;
+  }
+  const request = api("/api/courier/location", {
     method: "PATCH",
     headers: authHeaders(courierState.token),
     body: JSON.stringify(payload),
     retryWithRefresh: refreshCourierAccess,
   });
+  if (isLocationOnlyUpdate) {
+    courierState.locationPushPromise = request.finally(() => {
+      courierState.locationPushPromise = null;
+      courierState.lastLocationPushAt = Date.now();
+    });
+  }
+  const data = await (isLocationOnlyUpdate ? courierState.locationPushPromise : request);
   if (isLocationOnlyUpdate) {
     if (courierState.data?.courier && data?.courier) {
       courierState.data = {
@@ -1422,7 +1468,8 @@ async function heartbeatCourierLocation() {
     await pushCourierLocation({
       ...coords,
       available: courierState.data.courier.available,
-    });
+      locationOnly: true,
+    }, { locationOnly: true });
     setShiftGreetingStatus(courierState.data?.courier?.available);
   } catch (error) {
     setLocationStatus(error.message);
@@ -1445,7 +1492,7 @@ function getCurrentCourierPosition() {
 
     navigator.geolocation.getCurrentPosition(resolve, reject, {
       enableHighAccuracy: true,
-      maximumAge: 1_000,
+      maximumAge: 5_000,
       timeout: 12_000,
     });
   });
@@ -1482,13 +1529,17 @@ function startLocationWatch(initialCoords = null) {
         Math.abs(last.latitude - coords.latitude) > 0.00005 ||
         Math.abs(last.longitude - coords.longitude) > 0.00005;
 
-      courierState.lastCoords = coords;
       setShiftGreetingStatus(courierState.data?.courier?.available ?? true);
+      if (!moved && Date.now() - courierState.lastLocationPushAt < LOCATION_PUSH_MS) {
+        return;
+      }
+      courierState.lastCoords = coords;
       try {
         await pushCourierLocation({
           ...coords,
           available: courierState.data?.courier?.available ?? true,
-        });
+          locationOnly: true,
+        }, { locationOnly: true });
       } catch (error) {
         setLocationStatus(error.message);
       }
@@ -1496,7 +1547,7 @@ function startLocationWatch(initialCoords = null) {
     handleLocationError,
     {
       enableHighAccuracy: true,
-      maximumAge: 1_000,
+      maximumAge: 5_000,
       timeout: 12_000,
     }
   );
@@ -1560,6 +1611,26 @@ async function setCourierConnection(connected) {
 }
 
 async function loadCourierWorkspace(options = {}) {
+  if (courierState.workspaceLoadPromise) {
+    if (options.force) {
+      courierState.queuedWorkspaceLoad = { ...(courierState.queuedWorkspaceLoad || {}), ...options };
+    }
+    return courierState.workspaceLoadPromise;
+  }
+
+  courierState.workspaceLoadPromise = doLoadCourierWorkspace(options)
+    .finally(async () => {
+      courierState.workspaceLoadPromise = null;
+      const queuedOptions = courierState.queuedWorkspaceLoad;
+      courierState.queuedWorkspaceLoad = null;
+      if (queuedOptions) {
+        await loadCourierWorkspace(queuedOptions);
+      }
+    });
+  return courierState.workspaceLoadPromise;
+}
+
+async function doLoadCourierWorkspace(options = {}) {
   if (!courierState.token) {
     if (courierState.refreshToken) {
       try {

@@ -18,6 +18,8 @@ const adminState = {
   packageCursor: "0",
   liveStream: null,
   workspacePollId: null,
+  workspaceLoadPromise: null,
+  queuedWorkspaceLoad: null,
   activeWorkspaceCard: "admin-announcements",
 };
 
@@ -314,7 +316,9 @@ function startAdminLiveStream() {
           playSignal("ready");
         }
       }
-      loadAdminState().catch(() => {});
+      if (event?.type !== "courier-location") {
+        loadAdminState({ force: true }).catch(() => {});
+      }
     },
     onError() {
       if (adminRefs.liveBadge) {
@@ -339,6 +343,26 @@ function bootstrapPath() {
 }
 
 async function loadAdminState(options = {}) {
+  if (adminState.workspaceLoadPromise) {
+    if (options.force) {
+      adminState.queuedWorkspaceLoad = { ...(adminState.queuedWorkspaceLoad || {}), ...options };
+    }
+    return adminState.workspaceLoadPromise;
+  }
+
+  adminState.workspaceLoadPromise = doLoadAdminState(options)
+    .finally(async () => {
+      adminState.workspaceLoadPromise = null;
+      const queuedOptions = adminState.queuedWorkspaceLoad;
+      adminState.queuedWorkspaceLoad = null;
+      if (queuedOptions) {
+        await loadAdminState(queuedOptions);
+      }
+    });
+  return adminState.workspaceLoadPromise;
+}
+
+async function doLoadAdminState(options = {}) {
   if (!adminState.token) {
     if (adminState.refreshToken) {
       try {
@@ -1607,6 +1631,29 @@ function renderRestaurantAccounting(items = [], settlements = []) {
 }
 
 function hydrateAdmin(data) {
+  const nextSignature = JSON.stringify({
+    stats: data.stats,
+    restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.updatedAt]),
+    couriers: (data.couriers || []).map((item) => [item.id, item.name, item.status, item.available, item.zone, item.updatedAt, item.lastLocationAt]),
+    packages: (data.packages || []).map((item) => [item.id, item.status, item.assignmentStatus, item.assignedCourierId, item.paymentStatus, item.updatedAt]),
+    webhookLogs: (data.webhookLogs || []).map((item) => [item.id, item.status, item.createdAt]),
+    unmatchedOrders: (data.unmatchedOrders || []).map((item) => [item.id, item.isResolved, item.updatedAt, item.createdAt]),
+    auditLogs: (data.auditLogs || []).map((item) => [item.id, item.createdAt]),
+    courierDailyReports: (data.courierDailyReports || []).map((item) => [item.id, item.status, item.updatedAt]),
+    notifications: (data.notifications || []).map((item) => [item.id, item.readAt, item.createdAt]),
+    announcements: (data.announcements || []).map((item) => [item.id, item.active, item.updatedAt, item.createdAt]),
+    shiftPlans: (data.shiftPlans || []).map((item) => [item.id, item.status, item.updatedAt]),
+    cashReconciliations: (data.cashReconciliations || []).map((item) => [item.id, item.status, item.updatedAt]),
+    restaurantAccounting: (data.restaurantAccounting || []).map((item) => [item.restaurantId, item.startDate, item.endDate, item.packageCount, item.totalAmount, item.settlementStatus]),
+    selectedRestaurantId: adminState.selectedRestaurantId,
+    packageCursor: data.pagination?.nextCursor || adminState.packageCursor,
+  });
+  if (adminState.lastHydrateSignature === nextSignature) {
+    adminState.data = data;
+    setAdminLoggedIn(true);
+    return;
+  }
+  adminState.lastHydrateSignature = nextSignature;
   adminState.data = data;
   setAdminLoggedIn(true);
   initializeAdminWorkspaceCards();
