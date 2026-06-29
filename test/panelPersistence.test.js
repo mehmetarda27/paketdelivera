@@ -306,6 +306,129 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.ok(courierWorkspace.dayMetrics);
     assert.ok(courierWorkspace.mapsConfig);
 
+    await assert.rejects(
+      () => request(baseUrl, `/api/admin/packages/${packageState.createdPackage.id}/status`, {
+        method: "PATCH",
+        headers: adminHeaders,
+        body: JSON.stringify({ status: "not_a_real_status" }),
+      }),
+      (error) => error.status === 400 && /Gecersiz paket durumu/.test(error.body.error)
+    );
+
+    const lifecycleCourierState = await request(baseUrl, "/couriers", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "Lifecycle Persistence Courier",
+        username: `lifecycle_courier_${Date.now()}`,
+        password: "Kurye123!",
+        zone: "Erdemli",
+        latitude: 36.604,
+        longitude: 34.323,
+        available: true,
+      }),
+    });
+    assert.ok(lifecycleCourierState.createdCourier?.id);
+    const setupDb = new DatabaseSync(dbFile);
+    try {
+      setupDb.prepare("UPDATE packages SET assigned_courier_id = NULL, assigned_courier_name = NULL, assigned_at = NULL, status = 'awaiting_assignment', assignment_status = 'pending' WHERE assigned_courier_id = ? AND id != ?")
+        .run(lifecycleCourierState.createdCourier.id, packageState.createdPackage.id);
+      setupDb.prepare("UPDATE couriers SET available = 1, status = 'online' WHERE id = ?").run(lifecycleCourierState.createdCourier.id);
+    } finally {
+      setupDb.close();
+    }
+
+    await request(baseUrl, `/api/admin/packages/${packageState.createdPackage.id}/override`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ courierId: lifecycleCourierState.createdCourier.id }),
+    });
+    const assignedPackageRow = readRow(
+      dbFile,
+      "SELECT status, assignment_status, assigned_courier_id, assigned_courier_name FROM packages WHERE id = ?",
+      packageState.createdPackage.id
+    );
+    assert.equal(assignedPackageRow.status, "assigned");
+    assert.equal(assignedPackageRow.assignment_status, "assigned");
+    assert.equal(assignedPackageRow.assigned_courier_id, lifecycleCourierState.createdCourier.id);
+    assert.ok(assignedPackageRow.assigned_courier_name);
+
+    const assignedAdminState = await request(baseUrl, "/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    assert.equal(
+      assignedAdminState.packages.find((pkg) => pkg.id === packageState.createdPackage.id)?.assignedCourierId,
+      lifecycleCourierState.createdCourier.id
+    );
+
+    const lifecycleCourierLogin = await request(baseUrl, "/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({ username: lifecycleCourierState.createdCourier.username, password: "Kurye123!" }),
+    });
+    const lifecycleCourierHeaders = { Authorization: `Bearer ${lifecycleCourierLogin.token}` };
+    const lifecycleCourierWorkspace = await request(baseUrl, "/api/courier/me", {
+      headers: lifecycleCourierHeaders,
+    });
+    assert.equal(
+      lifecycleCourierWorkspace.packages.find((pkg) => pkg.id === packageState.createdPackage.id)?.status,
+      "assigned"
+    );
+
+    await assert.rejects(
+      () => request(baseUrl, `/api/courier/packages/${packageState.createdPackage.id}/status`, {
+        method: "PATCH",
+        headers: lifecycleCourierHeaders,
+        body: JSON.stringify({ status: "not_a_real_status" }),
+      }),
+      (error) => error.status === 400 && /Gecersiz paket durumu/.test(error.body.error)
+    );
+
+    await request(baseUrl, `/api/courier/packages/${packageState.createdPackage.id}/status`, {
+      method: "PATCH",
+      headers: lifecycleCourierHeaders,
+      body: JSON.stringify({ status: "accepted_by_courier" }),
+    });
+    assert.equal(
+      readRow(dbFile, "SELECT status FROM packages WHERE id = ?", packageState.createdPackage.id).status,
+      "accepted_by_courier"
+    );
+
+    await request(baseUrl, `/api/courier/packages/${packageState.createdPackage.id}/status`, {
+      method: "PATCH",
+      headers: lifecycleCourierHeaders,
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    assert.equal(
+      readRow(dbFile, "SELECT status FROM packages WHERE id = ?", packageState.createdPackage.id).status,
+      "on_route"
+    );
+
+    const deliveredCourierWorkspace = await request(baseUrl, `/api/courier/packages/${packageState.createdPackage.id}/status`, {
+      method: "PATCH",
+      headers: lifecycleCourierHeaders,
+      body: JSON.stringify({ status: "delivered", paymentStatus: "cash_collected" }),
+    });
+    const deliveredPackageRow = readRow(
+      dbFile,
+      "SELECT status, assignment_status, payment_status, accepted_at, on_route_at, delivered_at FROM packages WHERE id = ?",
+      packageState.createdPackage.id
+    );
+    assert.equal(deliveredPackageRow.status, "delivered");
+    assert.equal(deliveredPackageRow.assignment_status, "assigned");
+    assert.equal(deliveredPackageRow.payment_status, "cash_collected");
+    assert.ok(deliveredPackageRow.accepted_at);
+    assert.ok(deliveredPackageRow.on_route_at);
+    assert.ok(deliveredPackageRow.delivered_at);
+    assert.ok(deliveredCourierWorkspace.historyPackages.some((pkg) => pkg.id === packageState.createdPackage.id && pkg.status === "delivered"));
+
+    const deliveredAdminState = await request(baseUrl, "/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
+    assert.equal(
+      deliveredAdminState.packages.find((pkg) => pkg.id === packageState.createdPackage.id)?.status,
+      "delivered"
+    );
+
     const secondRestaurantLogin = await request(baseUrl, "/api/restaurant/session", {
       method: "POST",
       body: JSON.stringify({ username: secondRestaurantUsername, password: secondRestaurantPassword }),
@@ -346,6 +469,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       headers: restaurantHeaders,
     });
     assert.ok(reloadedRestaurantState.packages.some((pkg) => pkg.id === packageState.createdPackage.id));
+    assert.equal(
+      reloadedRestaurantState.packages.find((pkg) => pkg.id === packageState.createdPackage.id)?.status,
+      "delivered"
+    );
     assert.ok(!reloadedRestaurantState.packages.some((pkg) => pkg.id === secondPackageState.createdPackage.id));
     const reloadedSecondRestaurantState = await request(baseUrl, "/api/restaurant/bootstrap", {
       headers: secondRestaurantHeaders,

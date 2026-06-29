@@ -204,6 +204,7 @@ const STATUS_TRANSITIONS = {
   [REJECTED_STATUS]: [],
   [CANCELED_STATUS]: [],
 };
+const KNOWN_PACKAGE_STATUSES = new Set(Object.keys(STATUS_TRANSITIONS));
 const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLLING_INTERVAL_MS || process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 30_000);
 const PLATFORM_POLLING_ENABLED = ["1", "true", "yes"].includes(String(process.env.DELIVERA_PLATFORM_POLLING_ENABLED || "").toLowerCase());
 const ASSIGNMENT_DEBUG_LOGS = ["1", "true", "yes"].includes(String(process.env.DELIVERA_ASSIGNMENT_DEBUG || "").toLowerCase());
@@ -1944,6 +1945,11 @@ function normalizeFeederIntegrationDraft(body) {
 
 function normalizeStatus(status) {
   return LEGACY_STATUS_MAP[String(status || "").trim()] || PENDING_STATUS;
+}
+
+function isKnownPackageStatus(status) {
+  const incoming = String(status || "").trim();
+  return Boolean(incoming) && (KNOWN_PACKAGE_STATUSES.has(incoming) || Object.prototype.hasOwnProperty.call(LEGACY_STATUS_MAP, incoming));
 }
 
 function canTransitionStatus(fromStatus, toStatus) {
@@ -6040,6 +6046,20 @@ function internalStatusFromExternal(status) {
   return map[incoming] || normalizeStatus(incoming);
 }
 
+function isKnownExternalPackageStatus(status) {
+  const incoming = trimmed(status).toLowerCase();
+  return [
+    "waiting_assignment",
+    "assigned",
+    "picked_up",
+    "on_the_way",
+    "delivered",
+    "cancelled",
+    "canceled",
+    "failed",
+  ].includes(incoming) || isKnownPackageStatus(incoming);
+}
+
 function externalRestaurantPayload(restaurant) {
   return {
     id: restaurant.id,
@@ -8279,6 +8299,12 @@ async function callPlatformStatusCallback(packageRecord, status, meta = {}) {
       status,
       reason: result?.error || "callback_not_configured",
     });
+    appendPlatformStatusLog(packageRecord.id, {
+      status,
+      message: `platform ${status} callback atlandi: ${result?.error || "callback_not_configured"}`,
+      platform: packageRecord.sourcePlatform,
+      meta: { ...meta, callbackMode: result?.mode || null, callbackStatus: result?.status || null },
+    });
     logPlatformEvent({
       platform: packageRecord.sourcePlatform,
       restaurantId: packageRecord.restaurantId,
@@ -8573,6 +8599,10 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const { json: body } = await readRequestBody(req);
+    if (!isKnownExternalPackageStatus(body.status)) {
+      sendJson(res, 400, { error: "Gecersiz paket durumu." });
+      return;
+    }
     const nextStatus = internalStatusFromExternal(body.status);
     updatePackageLifecycle(target.id, { status: nextStatus }, mapPackageRow(target));
     const updated = getPackageById(target.id);
@@ -10287,8 +10317,8 @@ async function handleApi(req, res, pathname) {
       }
       const confirmedPackage = getPackageById(packageId);
       if (isPlatformBackedOrder) {
-        notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
-        notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
+        await notifyPlatformOrderAccepted(target.source_platform, target.external_order_id || target.external_order_no, session.restaurant_id, confirmedPackage);
+        await notifyPlatformOrderPreparing(target.source_platform, target.external_order_id || target.external_order_no, confirmedPackage);
       }
       logger.info("Assignment triggered after restaurant approval", {
         packageId,
@@ -10359,7 +10389,7 @@ async function handleApi(req, res, pathname) {
       }
       const rejectedPackage = getPackageById(packageId);
       if (isPlatformBackedOrder) {
-        notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
+        await notifyPlatformOrderRejected(target.source_platform, target.external_order_id || target.external_order_no, body.reason, rejectedPackage);
       }
       broadcastLiveEvent({
         type: "platform-order-rejected",
@@ -11328,6 +11358,11 @@ async function handleApi(req, res, pathname) {
     const currentStatus = normalizeStatus(target.status);
     const nextPaymentStatus = body.paymentStatus ? normalizePaymentStatus(body.paymentStatus, target.payment_method) : target.payment_status;
 
+    if (!isKnownPackageStatus(body.status || target.status)) {
+      sendJson(res, 400, { error: "Gecersiz paket durumu." });
+      return;
+    }
+
     if (!COURIER_ALLOWED_STATUSES.has(nextStatus)) {
       sendJson(res, 400, { error: "Kurye bu duruma gecis yapamaz." });
       return;
@@ -11383,7 +11418,7 @@ async function handleApi(req, res, pathname) {
       const deliveredPackage = getPackageById(packageId);
       updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
       if (isPlatformBackedPackage(target)) {
-        notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+        await notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
       }
     }
 
@@ -11872,6 +11907,10 @@ async function handleApi(req, res, pathname) {
     }
 
     const currentStatus = normalizeStatus(target.status);
+    if (!isKnownPackageStatus(body.status || AWAITING_ASSIGNMENT_STATUS)) {
+      sendJson(res, 400, { error: "Gecersiz paket durumu." });
+      return;
+    }
     const nextStatus = normalizeStatus(body.status || AWAITING_ASSIGNMENT_STATUS);
     if (!canTransitionStatus(currentStatus, nextStatus)) {
       sendJson(res, 400, { error: `Gecersiz durum gecisi: ${currentStatus} -> ${nextStatus}` });
@@ -11902,7 +11941,7 @@ async function handleApi(req, res, pathname) {
       const deliveredPackage = getPackageById(statusMatch[1]);
       updatePlatformOrderStatusByPackage(deliveredPackage || target, "completed");
       if (isPlatformBackedPackage(target)) {
-        notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
+        await notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
       }
     }
     writeAuditLog({

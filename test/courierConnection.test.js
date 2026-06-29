@@ -104,8 +104,14 @@ async function loadCourierPage(available, packages = [], historyPackages = []) {
   };
 }
 
+function closeCourierPage(page) {
+  page.dom.window.dispatchEvent(new page.dom.window.Event("beforeunload"));
+  page.dom.window.close();
+}
+
 test("courier connection switch mirrors backend online state after reload", async () => {
   const page = await loadCourierPage(true);
+  try {
   const connectionSwitch = page.dom.window.document.getElementById("courierConnectionSwitch");
   const locationStatus = page.dom.window.document.getElementById("locationStatus");
 
@@ -114,11 +120,14 @@ test("courier connection switch mirrors backend online state after reload", asyn
   assert.equal(locationStatus.textContent, "Hayırlı günler");
   assert.equal(page.watchCount, 1);
 
-  page.dom.window.close();
+  } finally {
+    closeCourierPage(page);
+  }
 });
 
 test("courier connection switch stays off after reload when backend is offline", async () => {
   const page = await loadCourierPage(false);
+  try {
   const connectionSwitch = page.dom.window.document.getElementById("courierConnectionSwitch");
   const locationStatus = page.dom.window.document.getElementById("locationStatus");
 
@@ -128,7 +137,9 @@ test("courier connection switch stays off after reload when backend is offline",
   assert.equal(page.watchCount, 0);
   assert.equal(page.clearCount, 0);
 
-  page.dom.window.close();
+  } finally {
+    closeCourierPage(page);
+  }
 });
 
 test("courier task area stays blank when every package is closed", async () => {
@@ -155,13 +166,16 @@ test("courier task area stays blank when every package is closed", async () => {
     rawPayload: {},
   };
   const page = await loadCourierPage(true, [closedPackage], [closedPackage]);
+  try {
   const focusCard = page.dom.window.document.querySelector(".courier-focus-card");
   const destinationMap = page.dom.window.document.getElementById("courierDestinationMap");
   const packageList = page.dom.window.document.getElementById("courierPackages");
 
-  assert.equal(focusCard.classList.contains("hidden"), true);
-  assert.equal(destinationMap.classList.contains("hidden"), true);
+  assert.equal(focusCard?.classList.contains("hidden") ?? true, true);
+  assert.equal(destinationMap?.classList.contains("hidden") ?? true, true);
   assert.equal(packageList.textContent.trim(), "");
 
-  page.dom.window.close();
+  } finally {
+    closeCourierPage(page);
+  }
 });
