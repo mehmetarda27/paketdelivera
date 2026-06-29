@@ -645,6 +645,38 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS courier_earnings (
+    id TEXT PRIMARY KEY,
+    courier_id TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    delivered_package_count INTEGER NOT NULL DEFAULT 0,
+    per_package_fee REAL NOT NULL DEFAULT 0,
+    bonus_amount REAL NOT NULL DEFAULT 0,
+    deduction_amount REAL NOT NULL DEFAULT 0,
+    total_payable REAL NOT NULL DEFAULT 0,
+    payment_status TEXT NOT NULL DEFAULT 'unpaid',
+    paid_at TEXT,
+    admin_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(courier_id, report_date),
+    FOREIGN KEY (courier_id) REFERENCES couriers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS courier_earning_items (
+    id TEXT PRIMARY KEY,
+    courier_earning_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    restaurant_id TEXT NOT NULL,
+    delivered_at TEXT NOT NULL,
+    package_fee REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(courier_earning_id, package_id),
+    FOREIGN KEY (courier_earning_id) REFERENCES courier_earnings(id),
+    FOREIGN KEY (package_id) REFERENCES packages(id),
+    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+  );
+
   CREATE TABLE IF NOT EXISTS restaurant_settlements (
     id TEXT PRIMARY KEY,
     restaurant_id TEXT NOT NULL,
@@ -731,6 +763,9 @@ if (!courierColumns.includes("last_location_at")) {
 }
 if (!courierColumns.includes("status")) {
   db.exec(`ALTER TABLE couriers ADD COLUMN status TEXT NOT NULL DEFAULT '${COURIER_OFFLINE_STATUS}'`);
+}
+if (!courierColumns.includes("per_package_fee")) {
+  db.exec("ALTER TABLE couriers ADD COLUMN per_package_fee REAL");
 }
 
 const packageColumns = db.prepare("PRAGMA table_info(packages)").all().map((row) => row.name);
@@ -4065,6 +4100,7 @@ function getCouriers(filter = {}) {
     available: Boolean(row.available),
     status: normalizeCourierStatus(row.status, Boolean(row.available)),
     lastLocationAt: row.last_location_at,
+    perPackageFee: row.per_package_fee === null || row.per_package_fee === undefined ? null : Number(row.per_package_fee || 0),
     username: row.username,
     passwordHash: row.password_hash,
     passwordSalt: row.password_salt,
@@ -4087,6 +4123,7 @@ function getCourierById(courierId) {
     available: Boolean(row.available),
     status: normalizeCourierStatus(row.status, Boolean(row.available)),
     lastLocationAt: row.last_location_at,
+    perPackageFee: row.per_package_fee === null || row.per_package_fee === undefined ? null : Number(row.per_package_fee || 0),
     username: row.username,
     passwordHash: row.password_hash,
     passwordSalt: row.password_salt,
@@ -5133,6 +5170,213 @@ function mapCourierDailyReportRow(row) {
 
 function getCourierDailyReports(limit = 50) {
   return db.prepare("SELECT * FROM courier_daily_reports ORDER BY datetime(updated_at) DESC LIMIT ?").all(limit).map(mapCourierDailyReportRow);
+}
+
+function defaultCourierPackageFee(courier) {
+  const customFee = Number(courier?.perPackageFee);
+  if (Number.isFinite(customFee) && customFee > 0) {
+    return normalizeMoney(customFee);
+  }
+  const settings = getSystemSettings();
+  return normalizeMoney(settings.courier_per_package_fee || 0);
+}
+
+function deliveredPackagesForCourierEarnings(courierId, reportDate = dayKey()) {
+  const rows = db.prepare(`
+    SELECT * FROM packages
+    WHERE assigned_courier_id = ?
+      AND status = ?
+      AND substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) = ?
+    ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
+  `).all(courierId, DELIVERED_STATUS, reportDate);
+  return mapPackageRowsWithRestaurants(rows);
+}
+
+function mapCourierEarningItemRow(row, packageRow = null) {
+  const pkg = packageRow || (row.package_id ? getPackageById(row.package_id) : null);
+  return {
+    id: row.id,
+    courierEarningId: row.courier_earning_id,
+    packageId: row.package_id,
+    restaurantId: row.restaurant_id,
+    restaurantName: pkg?.restaurantName || row.restaurant_name || "",
+    deliveredAt: row.delivered_at,
+    packageFee: Number(row.package_fee || 0),
+    package: pkg ? {
+      id: pkg.id,
+      trackingNo: pkg.trackingNo,
+      restaurantId: pkg.restaurantId,
+      restaurantName: pkg.restaurantName,
+      customerName: pkg.recipient,
+      deliveryAddress: pkg.deliveryAddress || pkg.address || pkg.customerAddress,
+      orderAmount: pkg.orderAmount,
+      paymentMethod: pkg.paymentMethod,
+      deliveredAt: pkg.deliveredAt,
+      status: pkg.status,
+      courierNote: pkg.courierCollectionNote || pkg.customerNote || pkg.note || "",
+    } : null,
+    createdAt: row.created_at,
+  };
+}
+
+function getCourierEarningItems(earningId) {
+  const rows = db.prepare("SELECT * FROM courier_earning_items WHERE courier_earning_id = ? ORDER BY datetime(delivered_at) DESC").all(earningId);
+  if (!rows.length) return [];
+  const packageIds = rows.map((row) => row.package_id);
+  const placeholders = packageIds.map(() => "?").join(",");
+  const packageRows = db.prepare(`SELECT * FROM packages WHERE id IN (${placeholders})`).all(...packageIds);
+  const packageMap = new Map(mapPackageRowsWithRestaurants(packageRows).map((pkg) => [pkg.id, pkg]));
+  return rows.map((row) => mapCourierEarningItemRow(row, packageMap.get(row.package_id)));
+}
+
+function mapCourierEarningRow(row, options = {}) {
+  const courier = row.courier_id ? getCourierById(row.courier_id) : null;
+  const items = options.includeItems ? getCourierEarningItems(row.id) : undefined;
+  return {
+    id: row.id,
+    courierId: row.courier_id,
+    courierName: courier?.name || row.courier_name || "Bilinmeyen Kurye",
+    reportDate: row.report_date,
+    deliveredPackageCount: Number(row.delivered_package_count || 0),
+    perPackageFee: Number(row.per_package_fee || 0),
+    bonusAmount: Number(row.bonus_amount || 0),
+    deductionAmount: Number(row.deduction_amount || 0),
+    totalPayable: Number(row.total_payable || 0),
+    paymentStatus: row.payment_status || "unpaid",
+    paidAt: row.paid_at || null,
+    adminNote: row.admin_note || "",
+    items,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function recalculateCourierEarningTotal(count, fee, bonus = 0, deduction = 0) {
+  return normalizeMoney((Number(count || 0) * normalizeMoney(fee)) + normalizeMoney(bonus) - normalizeMoney(deduction));
+}
+
+function syncCourierEarning(courierId, reportDate = dayKey(), options = {}) {
+  const courier = getCourierById(courierId);
+  if (!courier) {
+    throw httpError(404, "Kurye bulunamadi.");
+  }
+  const packages = deliveredPackagesForCourierEarnings(courierId, reportDate);
+  const existing = db.prepare("SELECT * FROM courier_earnings WHERE courier_id = ? AND report_date = ?").get(courierId, reportDate);
+  const stamp = nowIso();
+  const perPackageFee = options.perPackageFee !== undefined && options.perPackageFee !== ""
+    ? normalizeMoney(options.perPackageFee)
+    : normalizeMoney(existing?.per_package_fee || defaultCourierPackageFee(courier));
+  const bonusAmount = options.bonusAmount !== undefined ? normalizeMoney(options.bonusAmount) : normalizeMoney(existing?.bonus_amount || 0);
+  const deductionAmount = options.deductionAmount !== undefined ? normalizeMoney(options.deductionAmount) : normalizeMoney(existing?.deduction_amount || 0);
+  const totalPayable = recalculateCourierEarningTotal(packages.length, perPackageFee, bonusAmount, deductionAmount);
+  const status = existing?.payment_status || "unpaid";
+  const adminNote = options.adminNote !== undefined ? trimmed(options.adminNote) : (existing?.admin_note || "");
+  const earningId = existing?.id || uid("earn");
+
+  if (existing) {
+    if (existing.payment_status === "paid" && !trimmed(options.adminNote)) {
+      throw httpError(400, "Odendi durumundaki hakedisi guncellemek icin admin notu zorunludur.");
+    }
+    db.prepare(`
+      UPDATE courier_earnings
+      SET delivered_package_count = ?, per_package_fee = ?, bonus_amount = ?, deduction_amount = ?, total_payable = ?, admin_note = ?, updated_at = ?
+      WHERE id = ?
+    `).run(packages.length, perPackageFee, bonusAmount, deductionAmount, totalPayable, adminNote, stamp, earningId);
+  } else {
+    db.prepare(`
+      INSERT INTO courier_earnings (
+        id, courier_id, report_date, delivered_package_count, per_package_fee, bonus_amount,
+        deduction_amount, total_payable, payment_status, paid_at, admin_note, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(earningId, courierId, reportDate, packages.length, perPackageFee, bonusAmount, deductionAmount, totalPayable, status, null, adminNote, stamp, stamp);
+  }
+
+  db.prepare("DELETE FROM courier_earning_items WHERE courier_earning_id = ?").run(earningId);
+  const insertItem = db.prepare(`
+    INSERT INTO courier_earning_items (id, courier_earning_id, package_id, restaurant_id, delivered_at, package_fee, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  packages.forEach((pkg) => {
+    insertItem.run(uid("earni"), earningId, pkg.id, pkg.restaurantId, pkg.deliveredAt || pkg.updatedAt || pkg.createdAt, perPackageFee, stamp);
+  });
+
+  return getCourierEarningById(earningId);
+}
+
+function getCourierEarningById(earningId) {
+  const row = db.prepare("SELECT * FROM courier_earnings WHERE id = ?").get(earningId);
+  if (!row) {
+    throw httpError(404, "Hak edis kaydi bulunamadi.");
+  }
+  return mapCourierEarningRow(row, { includeItems: true });
+}
+
+function getCourierEarnings(filters = {}) {
+  const where = [];
+  const params = [];
+  if (filters.date) {
+    where.push("e.report_date = ?");
+    params.push(filters.date);
+  }
+  if (filters.courierId) {
+    where.push("e.courier_id = ?");
+    params.push(filters.courierId);
+  }
+  if (filters.paymentStatus) {
+    where.push("e.payment_status = ?");
+    params.push(filters.paymentStatus);
+  }
+  if (filters.restaurantId) {
+    where.push("EXISTS (SELECT 1 FROM courier_earning_items cei WHERE cei.courier_earning_id = e.id AND cei.restaurant_id = ?)");
+    params.push(filters.restaurantId);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return db.prepare(`
+    SELECT e.*
+    FROM courier_earnings e
+    ${whereSql}
+    ORDER BY datetime(e.report_date) DESC, datetime(e.updated_at) DESC
+    LIMIT 200
+  `).all(...params).map((row) => mapCourierEarningRow(row, { includeItems: true }));
+}
+
+function generateCourierEarnings({ date = dayKey(), courierId = "", perPackageFee, adminNote = "" } = {}) {
+  const couriers = courierId ? [getCourierById(courierId)].filter(Boolean) : getCouriers();
+  if (courierId && !couriers.length) {
+    throw httpError(404, "Kurye bulunamadi.");
+  }
+  return couriers.map((courier) => syncCourierEarning(courier.id, date, { perPackageFee, adminNote }));
+}
+
+function updateCourierEarning(earningId, body = {}) {
+  const current = db.prepare("SELECT * FROM courier_earnings WHERE id = ?").get(earningId);
+  if (!current) {
+    throw httpError(404, "Hak edis kaydi bulunamadi.");
+  }
+  const adminNote = trimmed(body.adminNote ?? current.admin_note);
+  if (current.payment_status === "paid" && !adminNote) {
+    throw httpError(400, "Odendi durumundaki hakedisi guncellemek icin admin notu zorunludur.");
+  }
+  return syncCourierEarning(current.courier_id, current.report_date, {
+    perPackageFee: body.perPackageFee ?? current.per_package_fee,
+    bonusAmount: body.bonusAmount ?? current.bonus_amount,
+    deductionAmount: body.deductionAmount ?? current.deduction_amount,
+    adminNote,
+  });
+}
+
+function markCourierEarningPaid(earningId, body = {}) {
+  const current = db.prepare("SELECT * FROM courier_earnings WHERE id = ?").get(earningId);
+  if (!current) {
+    throw httpError(404, "Hak edis kaydi bulunamadi.");
+  }
+  const stamp = body.paidAt ? new Date(body.paidAt).toISOString() : nowIso();
+  db.prepare(`
+    UPDATE courier_earnings
+    SET payment_status = 'paid', paid_at = ?, admin_note = COALESCE(NULLIF(?, ''), admin_note), updated_at = ?
+    WHERE id = ?
+  `).run(stamp, trimmed(body.adminNote), nowIso(), earningId);
+  return getCourierEarningById(earningId);
 }
 
 function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}) {
@@ -6209,6 +6453,7 @@ function decorateState(filter = {}) {
     }),
     restaurantSettlements: getRestaurantSettlements(50),
     courierDailyReports: getCourierDailyReports(50),
+    courierEarnings: getCourierEarnings({ date: dayKey() }),
     shiftPlans: getShiftPlans(dayKey()),
     shiftPlanSummary: summarizeShiftPlans(dayKey()),
     cashReconciliations: getCashReconciliations(30),
@@ -9736,6 +9981,94 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const adminCourierEarningMatch = pathname.match(/^\/api\/admin\/courier-earnings\/([^/]+)$/);
+  const adminCourierEarningPaidMatch = pathname.match(/^\/api\/admin\/courier-earnings\/([^/]+)\/mark-paid$/);
+
+  if (req.method === "GET" && pathname === "/api/admin/courier-earnings") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      courierEarnings: getCourierEarnings({
+        date: trimmed(url.searchParams.get("date")) || dayKey(),
+        courierId: trimmed(url.searchParams.get("courierId")),
+        restaurantId: trimmed(url.searchParams.get("restaurantId")),
+        paymentStatus: trimmed(url.searchParams.get("paymentStatus")),
+      }),
+    });
+    return;
+  }
+
+  if (req.method === "GET" && adminCourierEarningMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    try {
+      sendJson(res, 200, { ok: true, courierEarning: getCourierEarningById(adminCourierEarningMatch[1]) });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/courier-earnings/generate") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const generated = generateCourierEarnings({
+        date: trimmed(body.date) || dayKey(),
+        courierId: trimmed(body.courierId),
+        perPackageFee: body.perPackageFee,
+        adminNote: body.adminNote,
+      });
+      sendJson(res, 200, { ok: true, courierEarnings: generated, state: decorateState({ req }) });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "PATCH" && adminCourierEarningMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const courierEarning = updateCourierEarning(adminCourierEarningMatch[1], body);
+      sendJson(res, 200, { ok: true, courierEarning, state: decorateState({ req }) });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && adminCourierEarningPaidMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const courierEarning = markCourierEarningPaid(adminCourierEarningPaidMatch[1], body);
+      sendJson(res, 200, { ok: true, courierEarning, state: decorateState({ req }) });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "PUT" && pathname === "/api/admin/settings") {
     const adminSession = getAdminSession(req);
     if (!adminSession) {
@@ -11297,6 +11630,7 @@ async function handleApi(req, res, pathname) {
 
     const { json: body } = await readRequestBody(req);
     const { username, password, name, zone, latitude, longitude, available } = validateCourierDraft(body);
+    const perPackageFee = body.perPackageFee === undefined || body.perPackageFee === "" ? null : normalizeMoney(body.perPackageFee);
 
     if (db.prepare("SELECT id FROM couriers WHERE username = ?").get(username)) {
       logInsertSkipped("couriers", "username_already_exists", req, { username });
@@ -11308,8 +11642,8 @@ async function handleApi(req, res, pathname) {
       const passwordInfo = hashPassword(password);
       const id = uid("cr");
       const insertSql = `
-        INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, per_package_fee, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       const insertParams = [
         id,
@@ -11322,6 +11656,7 @@ async function handleApi(req, res, pathname) {
         username,
         passwordInfo.hash,
         passwordInfo.salt,
+        perPackageFee,
         nowIso(),
       ];
       runInsertWithTrace({
@@ -12815,15 +13150,20 @@ async function handleApi(req, res, pathname) {
     }
     const { json: body } = await readRequestBody(req);
     const { username, password, name, zone } = body;
+    const perPackageFee = body.perPackageFee === undefined
+      ? courier.per_package_fee
+      : body.perPackageFee === ""
+        ? null
+        : normalizeMoney(body.perPackageFee);
     if (username && db.prepare("SELECT id FROM couriers WHERE username = ? AND id != ?").get(username, targetId)) {
       sendJson(res, 400, { error: "Bu kullanici adi baska bir kurye tarafindan kullaniliyor." });
       return;
     }
     if (password) {
       const passwordInfo = hashPassword(password);
-      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ?, password_hash = ?, password_salt = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, passwordInfo.hash, passwordInfo.salt, targetId);
+      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ?, password_hash = ?, password_salt = ?, per_package_fee = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, passwordInfo.hash, passwordInfo.salt, perPackageFee, targetId);
     } else {
-      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, targetId);
+      db.prepare("UPDATE couriers SET name = ?, zone = ?, username = ?, per_package_fee = ? WHERE id = ?").run(name || courier.name, zone || courier.zone, username || courier.username, perPackageFee, targetId);
     }
     writeAuditLog({
       actorRole: "admin",

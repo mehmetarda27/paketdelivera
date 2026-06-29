@@ -73,6 +73,11 @@ const adminRefs = {
   courierIntegrationIdList: document.getElementById("courierIntegrationIdList"),
   auditLogList: document.getElementById("auditLogList"),
   courierDailyReportList: document.getElementById("courierDailyReportList"),
+  courierEarningsFilterForm: document.getElementById("courierEarningsFilterForm"),
+  courierEarningsGenerateButton: document.getElementById("courierEarningsGenerateButton"),
+  courierEarningsCourierFilter: document.getElementById("courierEarningsCourierFilter"),
+  courierEarningsRestaurantFilter: document.getElementById("courierEarningsRestaurantFilter"),
+  courierEarningsList: document.getElementById("courierEarningsList"),
   restaurantAccountingFilterForm: document.getElementById("restaurantAccountingFilterForm"),
   restaurantAccountingList: document.getElementById("restaurantAccountingList"),
   restaurantAccountingDetailPanel: document.getElementById("restaurantAccountingDetailPanel"),
@@ -512,6 +517,9 @@ function renderCourierManagement(couriers) {
       adminRefs.courierEditForm.elements["name"].value = courier.name;
       adminRefs.courierEditForm.elements["username"].value = courier.username;
       adminRefs.courierEditForm.elements["zone"].value = courier.zone;
+      if (adminRefs.courierEditForm.elements["perPackageFee"]) {
+        adminRefs.courierEditForm.elements["perPackageFee"].value = courier.perPackageFee ?? "";
+      }
       adminRefs.courierEditModal.showModal();
     });
 
@@ -1283,6 +1291,144 @@ function renderCourierDailyReports(reports) {
   });
 }
 
+function setCourierEarningFilters(couriers = [], restaurants = []) {
+  if (adminRefs.courierEarningsCourierFilter && !adminRefs.courierEarningsCourierFilter.dataset.ready) {
+    adminRefs.courierEarningsCourierFilter.innerHTML = '<option value="">Tum kuryeler</option>' +
+      couriers.map((courier) => `<option value="${htmlSafe(courier.id)}">${htmlSafe(courier.name)}</option>`).join("");
+    adminRefs.courierEarningsCourierFilter.dataset.ready = "1";
+  }
+  if (adminRefs.courierEarningsRestaurantFilter && !adminRefs.courierEarningsRestaurantFilter.dataset.ready) {
+    adminRefs.courierEarningsRestaurantFilter.innerHTML = '<option value="">Tum restoranlar</option>' +
+      restaurants.map((restaurant) => `<option value="${htmlSafe(restaurant.id)}">${htmlSafe(restaurant.name)}</option>`).join("");
+    adminRefs.courierEarningsRestaurantFilter.dataset.ready = "1";
+  }
+  const dateInput = adminRefs.courierEarningsFilterForm?.querySelector("input[name='date']");
+  if (dateInput && !dateInput.value) {
+    dateInput.value = new Date().toISOString().slice(0, 10);
+  }
+}
+
+function renderCourierEarnings(earnings = []) {
+  if (!adminRefs.courierEarningsList) return;
+  const signature = listRenderSignature(earnings || [], ["id", "courierName", "reportDate", "deliveredPackageCount", "perPackageFee", "bonusAmount", "deductionAmount", "totalPayable", "paymentStatus", "paidAt", "adminNote", "updatedAt"]);
+  if (adminRefs.courierEarningsList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.courierEarningsList.__deliveraRenderSignature = signature;
+  adminRefs.courierEarningsList.innerHTML = "";
+
+  if (!earnings.length) {
+    adminRefs.courierEarningsList.innerHTML = '<div class="empty-state">Secilen filtrelerde kurye hakedisi yok. Hakedisleri Olustur butonu ile teslim edilen paketlerden rapor uretebilirsin.</div>';
+    return;
+  }
+
+  earnings.forEach((earning) => {
+    const isPaid = earning.paymentStatus === "paid";
+    const items = earning.items || [];
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top" style="align-items: flex-start;">
+        <div>
+          <strong>Kurye: ${htmlSafe(earning.courierName || "-")}</strong>
+          <p>Tarih: ${htmlSafe(earning.reportDate || "-")}</p>
+          <p>Teslim edilen paket: ${earning.deliveredPackageCount || 0}</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
+          <span class="soft-badge" style="${isPaid ? 'background:#D1FAE5;color:#059669;border-color:#6EE7B7;' : 'background:#FEF3C7;color:#D97706;border-color:#FCD34D;'}">${isPaid ? "Odendi" : "Odenmedi"}</span>
+          ${earning.paidAt ? `<span class="soft-badge">${formatDate(earning.paidAt)}</span>` : ""}
+        </div>
+      </div>
+      <div class="meta-grid compact-meta-grid" style="margin-top: 12px; grid-template-columns: repeat(5, minmax(120px, 1fr));">
+        <div><span>Paket basi ucret</span><strong>${formatCurrency(earning.perPackageFee || 0)}</strong></div>
+        <div><span>Ek ucret</span><strong>${formatCurrency(earning.bonusAmount || 0)}</strong></div>
+        <div><span>Kesinti</span><strong>${formatCurrency(earning.deductionAmount || 0)}</strong></div>
+        <div><span>Toplam</span><strong>${formatCurrency(earning.totalPayable || 0)}</strong></div>
+        <div><span>Paket</span><strong>${items.length || earning.deliveredPackageCount || 0}</strong></div>
+      </div>
+      ${earning.adminNote ? `<p class="soft-copy" style="margin-top: 10px;">Admin notu: ${htmlSafe(earning.adminNote)}</p>` : ""}
+      <div class="card-actions" style="margin-top: 12px;">
+        <button class="ghost-btn detail-btn" type="button">Detaylari Gor</button>
+        ${isPaid ? "" : '<button class="primary-btn mark-paid-btn" type="button">Odendi Olarak Isaretle</button>'}
+        <button class="ghost-btn edit-btn" type="button">Duzenle</button>
+      </div>
+      <div class="earning-detail hidden" style="margin-top: 12px;">
+        ${items.length ? `
+          <div class="report-table-wrap">
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>Paket ID</th>
+                  <th>Restoran</th>
+                  <th>Musteri</th>
+                  <th>Adres</th>
+                  <th>Tutar</th>
+                  <th>Odeme</th>
+                  <th>Teslim Saati</th>
+                  <th>Durum</th>
+                  <th>Kurye Notu</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items.map((item) => {
+                  const pkg = item.package || {};
+                  return `
+                    <tr>
+                      <td>${htmlSafe(pkg.trackingNo || item.packageId || "-")}</td>
+                      <td>${htmlSafe(pkg.restaurantName || item.restaurantName || "-")}</td>
+                      <td>${htmlSafe(pkg.customerName || "-")}</td>
+                      <td>${htmlSafe(pkg.deliveryAddress || "-")}</td>
+                      <td>${formatCurrency(pkg.orderAmount || 0)}</td>
+                      <td>${htmlSafe(pkg.paymentMethod || "-")}</td>
+                      <td>${pkg.deliveredAt ? formatDate(pkg.deliveredAt) : "-"}</td>
+                      <td>${htmlSafe(pkg.status || "-")}</td>
+                      <td>${htmlSafe(pkg.courierNote || "-")}</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : '<div class="empty-state">Bu hakedise bagli teslim edilmis paket yok.</div>'}
+      </div>
+    `;
+
+    card.querySelector(".detail-btn")?.addEventListener("click", () => {
+      card.querySelector(".earning-detail")?.classList.toggle("hidden");
+    });
+    card.querySelector(".mark-paid-btn")?.addEventListener("click", async () => {
+      const adminNote = window.prompt("Odeme notu", earning.adminNote || "") || "";
+      const data = await api(`/api/admin/courier-earnings/${earning.id}/mark-paid`, {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ adminNote }),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data.state || data);
+      showToast("Kurye hakedisi odendi olarak isaretlendi.");
+    });
+    card.querySelector(".edit-btn")?.addEventListener("click", async () => {
+      const perPackageFee = window.prompt("Paket basi ucret", Number(earning.perPackageFee || 0).toFixed(2));
+      if (perPackageFee === null) return;
+      const bonusAmount = window.prompt("Ek ucret", Number(earning.bonusAmount || 0).toFixed(2));
+      if (bonusAmount === null) return;
+      const deductionAmount = window.prompt("Kesinti", Number(earning.deductionAmount || 0).toFixed(2));
+      if (deductionAmount === null) return;
+      const adminNote = window.prompt("Admin notu", earning.adminNote || "") || "";
+      const data = await api(`/api/admin/courier-earnings/${earning.id}`, {
+        method: "PATCH",
+        headers: adminHeaders(),
+        body: JSON.stringify({ perPackageFee, bonusAmount, deductionAmount, adminNote }),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      hydrateAdmin(data.state || data);
+      showToast("Kurye hakedisi guncellendi.");
+    });
+
+    adminRefs.courierEarningsList.appendChild(card);
+  });
+}
+
 function renderSystemSignals(data) {
   const logs = data.webhookLogs || [];
   const failed = logs.filter((log) => Number(log.responseStatus) >= 400 || log.deadLetteredAt).length;
@@ -1709,12 +1855,13 @@ function hydrateAdmin(data) {
   const nextSignature = JSON.stringify({
     stats: data.stats,
     restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.updatedAt]),
-    couriers: (data.couriers || []).map((item) => [item.id, item.name, item.status, item.available, item.zone, item.updatedAt, item.lastLocationAt]),
+    couriers: (data.couriers || []).map((item) => [item.id, item.name, item.status, item.available, item.zone, item.updatedAt, item.lastLocationAt, item.perPackageFee]),
     packages: (data.packages || []).map((item) => [item.id, item.status, item.assignmentStatus, item.assignedCourierId, item.paymentStatus, item.updatedAt]),
     webhookLogs: (data.webhookLogs || []).map((item) => [item.id, item.status, item.createdAt]),
     unmatchedOrders: (data.unmatchedOrders || []).map((item) => [item.id, item.isResolved, item.updatedAt, item.createdAt]),
     auditLogs: (data.auditLogs || []).map((item) => [item.id, item.createdAt]),
     courierDailyReports: (data.courierDailyReports || []).map((item) => [item.id, item.status, item.updatedAt]),
+    courierEarnings: (data.courierEarnings || []).map((item) => [item.id, item.paymentStatus, item.totalPayable, item.updatedAt]),
     notifications: (data.notifications || []).map((item) => [item.id, item.readAt, item.createdAt]),
     announcements: (data.announcements || []).map((item) => [item.id, item.active, item.updatedAt, item.createdAt]),
     shiftPlans: (data.shiftPlans || []).map((item) => [item.id, item.status, item.updatedAt]),
@@ -1754,6 +1901,8 @@ function hydrateAdmin(data) {
   renderPlatformHealth(data);
   renderAuditLogs(data.auditLogs || []);
   renderCourierDailyReports(data.courierDailyReports || []);
+  setCourierEarningFilters(data.couriers || [], data.restaurants || []);
+  renderCourierEarnings(data.courierEarnings || []);
   renderAdminNotifications(data.notifications || []);
   renderAnnouncements(data.announcements || []);
   renderShiftPlanTools(data.couriers || [], data.shiftPlans || [], data.shiftPlanSummary || []);
@@ -1814,6 +1963,7 @@ adminRefs.courierForm.addEventListener("submit", async (event) => {
     latitude: formData.get("latitude"),
     longitude: formData.get("longitude"),
     available: formData.get("available") === "on",
+    perPackageFee: formData.get("perPackageFee"),
   };
   try {
     const data = await api("/api/admin/couriers", {
@@ -1846,6 +1996,7 @@ if (adminRefs.courierAddForm) {
       latitude: 36.800000,
       longitude: 34.633333,
       available: true,
+      perPackageFee: formData.get("perPackageFee"),
     };
     try {
       const data = await api("/api/admin/couriers", {
@@ -1877,6 +2028,7 @@ if (adminRefs.courierEditForm) {
       username: formData.get("username"),
       password: formData.get("password"),
       zone: formData.get("zone"),
+      perPackageFee: formData.get("perPackageFee"),
     };
     try {
       const data = await api(`/api/admin/couriers/${courierId}`, {
@@ -2088,6 +2240,37 @@ adminRefs.financialSettingsForm?.addEventListener("submit", async (event) => {
   });
   hydrateAdmin(data.state);
   showToast("Finansal ayarlar başarıyla güncellendi.");
+});
+
+adminRefs.courierEarningsFilterForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.courierEarningsFilterForm);
+  const params = new URLSearchParams();
+  if (formData.get("date")) params.set("date", formData.get("date"));
+  if (formData.get("courierId")) params.set("courierId", formData.get("courierId"));
+  if (formData.get("restaurantId")) params.set("restaurantId", formData.get("restaurantId"));
+  if (formData.get("paymentStatus")) params.set("paymentStatus", formData.get("paymentStatus"));
+  const data = await api(`/api/admin/courier-earnings?${params.toString()}`, {
+    headers: adminHeaders(),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  renderCourierEarnings(data.courierEarnings || []);
+});
+
+adminRefs.courierEarningsGenerateButton?.addEventListener("click", async () => {
+  const formData = new FormData(adminRefs.courierEarningsFilterForm);
+  const data = await api("/api/admin/courier-earnings/generate", {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify({
+      date: formData.get("date"),
+      courierId: formData.get("courierId"),
+    }),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  hydrateAdmin(data.state || data);
+  renderCourierEarnings(data.courierEarnings || data.state?.courierEarnings || []);
+  showToast("Kurye hakedisleri teslim edilen paketlerle senkronize edildi.");
 });
 
 adminRefs.restaurantAccountingFilterForm?.addEventListener("submit", async (event) => {
