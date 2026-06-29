@@ -135,6 +135,7 @@ const courierRefs = {
   mapButton: document.getElementById("courierMapButton"),
   stats: document.getElementById("courierStats"),
   dayMetrics: document.getElementById("courierDayMetrics"),
+  dayCloseNote: document.getElementById("courierDayCloseNote"),
   earningsMetrics: document.getElementById("courierEarningsMetrics"),
   shiftMetrics: document.getElementById("courierShiftMetrics"),
   liveBadge: document.getElementById("courierLiveBadge"),
@@ -578,7 +579,7 @@ function packageRenderSignature(pkg) {
 }
 
 function getPackageDraft(pkgId) {
-  return courierState.packageActionDrafts.get(pkgId) || { paymentStatus: "", failureReason: "" };
+  return courierState.packageActionDrafts.get(pkgId) || { paymentStatus: "", failureReason: "", courierCollectionNote: "" };
 }
 
 function setPackageDraft(pkgId, nextDraft) {
@@ -1014,7 +1015,7 @@ function renderPackages(packages) {
     badge.textContent = statusLabel(pkg.status);
     badge.className = `status-badge ${statusClassName(pkg.status)}`;
 
-    const submitStatus = async (status, failureReason = "", paymentStatus = "") => {
+    const submitStatus = async (status, failureReason = "", paymentStatus = "", courierCollectionNote = "") => {
       if (status === "failed" && !failureReason) {
         showToast("Lutfen sorun nedenini sec.", "error");
         return;
@@ -1023,7 +1024,7 @@ function renderPackages(packages) {
         const updatedWorkspace = await api(`/api/courier/packages/${pkg.id}/status`, {
           method: "PATCH",
           headers: authHeaders(courierState.token),
-          body: JSON.stringify({ status, failureReason, paymentStatus }),
+          body: JSON.stringify({ status, failureReason, paymentStatus, courierCollectionNote }),
           retryWithRefresh: refreshCourierAccess,
         });
         courierState.packageActionDrafts.delete(pkg.id);
@@ -1089,12 +1090,26 @@ function renderPackages(packages) {
         '<option value="credit_card">Kredi Kartı</option>',
         '<option value="paid_online">Online</option>',
       ].join("");
-      if (["cash_collected", "credit_card", "paid_online"].includes(selectedPaymentStatus)) {
+      paymentSelect.innerHTML = [
+        '<option value="">Tahsilat durumunu sec</option>',
+        '<option value="cash_collected">Nakit tahsil edildi</option>',
+        '<option value="credit_card_collected">Kart tahsil edildi</option>',
+        '<option value="payment_issue">Tahsilat alinamadi</option>',
+      ].join("");
+      if (["cash_collected", "credit_card_collected", "payment_issue"].includes(selectedPaymentStatus)) {
         paymentSelect.value = selectedPaymentStatus;
       }
       paymentSelect.addEventListener("change", () => {
         selectedPaymentStatus = paymentSelect.value;
         setPackageDraft(pkg.id, { paymentStatus: selectedPaymentStatus });
+      });
+      const noteInput = document.createElement("input");
+      noteInput.className = "status-select courier-action-select";
+      noteInput.type = "text";
+      noteInput.placeholder = "Tahsilat notu";
+      noteInput.value = currentDraft.courierCollectionNote || pkg.courierCollectionNote || "";
+      noteInput.addEventListener("input", () => {
+        setPackageDraft(pkg.id, { courierCollectionNote: noteInput.value });
       });
 
       const deliveredButton = document.createElement("button");
@@ -1106,9 +1121,10 @@ function renderPackages(packages) {
           showToast("Teslim oncesi odeme durumunu sec.", "error");
           return;
         }
-        await submitStatus("delivered", "", selectedPaymentStatus);
+        await submitStatus("delivered", "", selectedPaymentStatus, noteInput.value);
       });
       actions.appendChild(paymentSelect);
+      actions.appendChild(noteInput);
       actions.appendChild(deliveredButton);
     }
 
@@ -1624,10 +1640,11 @@ courierRefs.dayCloseButton?.addEventListener("click", async () => {
   const data = await api("/api/courier/day-close", {
     method: "POST",
     headers: authHeaders(courierState.token),
-    body: "{}",
+    body: JSON.stringify({ courierNote: courierRefs.dayCloseNote?.value || "" }),
     retryWithRefresh: refreshCourierAccess,
   });
   hydrateCourierWorkspace(data);
+  if (courierRefs.dayCloseNote) courierRefs.dayCloseNote.value = "";
   showToast(`Gun sonu raporu olustu. Toplam ciro ${formatCurrency(data.dayCloseReport?.totalAmount)}.`, "success");
 });
 

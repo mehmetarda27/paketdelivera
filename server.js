@@ -179,6 +179,34 @@ const CASH_EXPECTED_PAYMENT_STATUS = "cash_expected";
 const CASH_COLLECTED_PAYMENT_STATUS = "cash_collected";
 const PAYMENT_ISSUE_STATUS = "payment_issue";
 const CREDIT_CARD_PAYMENT_STATUS = "credit_card";
+const CREDIT_CARD_COLLECTED_PAYMENT_STATUS = "credit_card_collected";
+const RESTAURANT_COLLECTED_PAYMENT_STATUS = "restaurant_collected";
+const COLLECTED_PAYMENT_STATUS = "collected";
+const VALID_PAYMENT_METHODS = new Set([
+  "cash_on_delivery",
+  "card_on_delivery",
+  "paid_online",
+  "collected",
+  "restaurant_collected",
+]);
+const VALID_PAYMENT_STATUSES = new Set([
+  UNPAID_PAYMENT_STATUS,
+  PAID_ONLINE_PAYMENT_STATUS,
+  CASH_EXPECTED_PAYMENT_STATUS,
+  CASH_COLLECTED_PAYMENT_STATUS,
+  PAYMENT_ISSUE_STATUS,
+  CREDIT_CARD_PAYMENT_STATUS,
+  CREDIT_CARD_COLLECTED_PAYMENT_STATUS,
+  RESTAURANT_COLLECTED_PAYMENT_STATUS,
+  COLLECTED_PAYMENT_STATUS,
+]);
+const PAYMENT_METHOD_LABELS = {
+  cash_on_delivery: "Nakit tahsil edilecek",
+  card_on_delivery: "Kredi karti tahsil edilecek",
+  paid_online: "Online odendi",
+  collected: "Tahsil edildi",
+  restaurant_collected: "Restoran tahsil etti",
+};
 const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
 const COURIER_BUSY_STATUS = "busy";
@@ -378,6 +406,18 @@ db.exec(`
     assignment_tried_courier_ids_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS customers (
+    id TEXT PRIMARY KEY,
+    restaurant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    address TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(restaurant_id, phone),
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
   );
 
@@ -603,6 +643,28 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS restaurant_settlements (
+    id TEXT PRIMARY KEY,
+    restaurant_id TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    total_packages INTEGER NOT NULL DEFAULT 0,
+    total_cash REAL NOT NULL DEFAULT 0,
+    total_card REAL NOT NULL DEFAULT 0,
+    total_online REAL NOT NULL DEFAULT 0,
+    total_restaurant_collected REAL NOT NULL DEFAULT 0,
+    total_courier_collected REAL NOT NULL DEFAULT 0,
+    service_fee REAL NOT NULL DEFAULT 0,
+    net_payable REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'unpaid',
+    paid_at TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(restaurant_id, start_date, end_date),
+    FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+  );
+
   CREATE TABLE IF NOT EXISTS courier_shifts (
     id TEXT PRIMARY KEY,
     courier_id TEXT NOT NULL,
@@ -743,6 +805,10 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
   db.exec("ALTER TABLE packages ADD COLUMN assignment_tried_courier_ids_json TEXT");
 }
 [
+  ["payment_collected_by", "TEXT"],
+  ["collected_amount", "REAL NOT NULL DEFAULT 0"],
+  ["courier_collection_note", "TEXT"],
+  ["restaurant_customer_id", "TEXT"],
   ["confirmation_id", "TEXT"],
   ["platform_restaurant_id", "TEXT"],
   ["posentegra_id", "TEXT"],
@@ -774,6 +840,11 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
     db.exec(`ALTER TABLE packages ADD COLUMN ${columnName} ${definition}`);
   }
 });
+
+const customerColumns = db.prepare("PRAGMA table_info(customers)").all().map((row) => row.name);
+if (customerColumns.length > 0 && !customerColumns.includes("updated_at")) {
+  db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT");
+}
 
 const webhookLogColumns = db.prepare("PRAGMA table_info(webhook_logs)").all().map((row) => row.name);
 if (!webhookLogColumns.includes("retry_count")) {
@@ -817,6 +888,21 @@ if (courierReportColumns.length > 0) {
   }
   if (!courierReportColumns.includes('credit_card_amount')) {
     db.exec("ALTER TABLE courier_daily_reports ADD COLUMN credit_card_amount REAL NOT NULL DEFAULT 0");
+  }
+  if (!courierReportColumns.includes('collected_total')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN collected_total REAL NOT NULL DEFAULT 0");
+  }
+  if (!courierReportColumns.includes('failed_collection_total')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN failed_collection_total REAL NOT NULL DEFAULT 0");
+  }
+  if (!courierReportColumns.includes('courier_note')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN courier_note TEXT");
+  }
+  if (!courierReportColumns.includes('admin_note')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN admin_note TEXT");
+  }
+  if (!courierReportColumns.includes('approved_at')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN approved_at TEXT");
   }
 }
 
@@ -1496,7 +1582,9 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
   const normalizedSource = normalizePlatformKey(draft.source);
   const isQuickPasteOrder = ["platform_manual", "platform_extension", "platform_extension_auto"].includes(normalizedSource);
   const targetSourcePlatform = draft.sourcePlatform || (isQuickPasteOrder ? "Hizli Yapistir" : "Dis Manuel Paket");
-  const targetPaymentMethod = draft.paymentMethod || "Panel Kaydi";
+  const methodCode = normalizePaymentMethodCode(draft.paymentMethod) || "paid_online";
+  const targetPaymentMethod = PAYMENT_METHOD_LABELS[methodCode] || draft.paymentMethod || "Panel Kaydi";
+  const targetPaymentStatus = draft.paymentStatus || paymentStatusForMethod(methodCode);
 
   return {
     id: uid("pkg"),
@@ -1529,7 +1617,13 @@ function buildRestaurantPackageRecord(restaurantRow, draft = {}, options = {}) {
     eta: "Planlanacak",
     paymentMethod: targetPaymentMethod,
     orderAmount: draft.orderAmount,
-    paymentStatus: normalizePaymentStatus("", targetPaymentMethod),
+    paymentStatus: normalizePaymentStatus(targetPaymentStatus, targetPaymentMethod),
+    paymentCollectedBy: normalizeCollectedBy(targetPaymentStatus),
+    collectedAmount: [PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(normalizePaymentStatus(targetPaymentStatus, targetPaymentMethod))
+      ? normalizeMoney(draft.orderAmount)
+      : 0,
+    courierCollectionNote: "",
+    restaurantCustomerId: draft.restaurantCustomerId || null,
     latitude: restaurantRow.x,
     longitude: restaurantRow.y,
     note: isQuickPasteOrder
@@ -1588,6 +1682,14 @@ function normalizeMoney(value, fallback = 0) {
   }
 
   return Number(normalized.toFixed(2));
+}
+
+function moneyToCents(value) {
+  return Math.round(normalizeMoney(value) * 100);
+}
+
+function centsToMoney(value) {
+  return Number((Number(value || 0) / 100).toFixed(2));
 }
 
 function validateRestaurantDraft(body) {
@@ -1960,7 +2062,7 @@ function canTransitionStatus(fromStatus, toStatus) {
 
 function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   const incoming = trimmed(paymentStatus).toLowerCase();
-  if ([UNPAID_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, CASH_EXPECTED_PAYMENT_STATUS, CASH_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS, CREDIT_CARD_PAYMENT_STATUS].includes(incoming)) {
+  if (VALID_PAYMENT_STATUSES.has(incoming)) {
     return incoming;
   }
 
@@ -1976,6 +2078,69 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   }
 
   return UNPAID_PAYMENT_STATUS;
+}
+
+function normalizePaymentMethodCode(value) {
+  const incoming = trimmed(value).toLowerCase();
+  if (VALID_PAYMENT_METHODS.has(incoming)) {
+    return incoming;
+  }
+  if (incoming.includes("nakit")) return "cash_on_delivery";
+  if (incoming.includes("kart") || incoming.includes("kredi") || incoming.includes("pos")) return "card_on_delivery";
+  if (incoming.includes("online")) return "paid_online";
+  if (incoming.includes("restoran")) return "restaurant_collected";
+  if (incoming.includes("tahsil")) return "collected";
+  if (incoming.includes("panel kaydi") || incoming.includes("panel kaydı") || incoming.includes("platform odeme") || incoming.includes("platform ödeme")) return "paid_online";
+  return "";
+}
+
+function paymentMethodLabel(value) {
+  const code = normalizePaymentMethodCode(value);
+  return code ? PAYMENT_METHOD_LABELS[code] : trimmed(value);
+}
+
+function paymentStatusForMethod(methodCode) {
+  switch (normalizePaymentMethodCode(methodCode)) {
+    case "cash_on_delivery":
+      return CASH_EXPECTED_PAYMENT_STATUS;
+    case "card_on_delivery":
+      return CREDIT_CARD_PAYMENT_STATUS;
+    case "paid_online":
+      return PAID_ONLINE_PAYMENT_STATUS;
+    case "restaurant_collected":
+      return RESTAURANT_COLLECTED_PAYMENT_STATUS;
+    case "collected":
+      return COLLECTED_PAYMENT_STATUS;
+    default:
+      return UNPAID_PAYMENT_STATUS;
+  }
+}
+
+function normalizeCollectedBy(paymentStatus, fallback = "") {
+  const status = normalizePaymentStatus(paymentStatus);
+  if ([CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(status)) {
+    return "courier";
+  }
+  if ([RESTAURANT_COLLECTED_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS].includes(status)) {
+    return "restaurant";
+  }
+  if (status === COLLECTED_PAYMENT_STATUS) {
+    return trimmed(fallback) || "restaurant";
+  }
+  return trimmed(fallback);
+}
+
+function validatePaymentDraft({ paymentMethod, paymentStatus, orderAmount }) {
+  const methodCode = normalizePaymentMethodCode(paymentMethod);
+  if (!methodCode) {
+    return { error: "Gecerli bir odeme tipi secilmelidir.", methodCode: "", paymentStatus: "" };
+  }
+  const amount = normalizeMoney(orderAmount);
+  if (["cash_on_delivery", "card_on_delivery"].includes(methodCode) && amount <= 0) {
+    return { error: "Kapida tahsilat icin paket tutari 0'dan buyuk olmalidir.", methodCode, paymentStatus: "" };
+  }
+  const status = paymentStatus ? normalizePaymentStatus(paymentStatus, PAYMENT_METHOD_LABELS[methodCode]) : paymentStatusForMethod(methodCode);
+  return { error: "", methodCode, paymentStatus: status };
 }
 
 function suggestedRestaurantPrepMinutes(zone, state = null) {
@@ -3927,8 +4092,13 @@ function getPackages(filter = {}) {
     zone: row.zone,
     eta: row.eta,
     paymentMethod: row.payment_method,
+    paymentMethodCode: normalizePaymentMethodCode(row.payment_method),
     orderAmount: Number(row.order_amount || 0),
     paymentStatus: normalizePaymentStatus(row.payment_status, row.payment_method),
+    paymentCollectedBy: row.payment_collected_by || normalizeCollectedBy(row.payment_status),
+    collectedAmount: Number(row.collected_amount || 0),
+    courierCollectionNote: row.courier_collection_note || "",
+    restaurantCustomerId: row.restaurant_customer_id || "",
     latitude: row.x,
     longitude: row.y,
     note: row.note,
@@ -4053,8 +4223,13 @@ function mapPackageRow(row, restaurantMap = new Map()) {
     zone: row.zone,
     eta: row.eta,
     paymentMethod: row.payment_method,
+    paymentMethodCode: normalizePaymentMethodCode(row.payment_method),
     orderAmount: Number(row.order_amount || 0),
     paymentStatus: normalizePaymentStatus(row.payment_status, row.payment_method),
+    paymentCollectedBy: row.payment_collected_by || normalizeCollectedBy(row.payment_status),
+    collectedAmount: Number(row.collected_amount || 0),
+    courierCollectionNote: row.courier_collection_note || "",
+    restaurantCustomerId: row.restaurant_customer_id || "",
     latitude: row.x,
     longitude: row.y,
     note: row.note,
@@ -4102,6 +4277,245 @@ function getCourierPackages(courierId, pagination = null) {
   );
 
   return rows.map((row) => mapPackageRow(row, restaurantMap));
+}
+
+function normalizePhone(value) {
+  return trimmed(value).replace(/[^\d]/g, "").replace(/^90(?=5)/, "");
+}
+
+function mapCustomerRow(row) {
+  return {
+    id: row.id,
+    restaurantId: row.restaurant_id,
+    name: row.name,
+    phone: row.phone,
+    address: row.address,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+  };
+}
+
+function getRestaurantCustomers(restaurantId, search = "") {
+  const normalizedSearch = normalizePhone(search);
+  if (normalizedSearch) {
+    return db.prepare(`
+      SELECT * FROM customers
+      WHERE restaurant_id = ? AND phone LIKE ?
+      ORDER BY datetime(updated_at) DESC
+      LIMIT 10
+    `).all(restaurantId, `%${normalizedSearch}%`).map(mapCustomerRow);
+  }
+  return db.prepare(`
+    SELECT * FROM customers
+    WHERE restaurant_id = ?
+    ORDER BY datetime(updated_at) DESC
+    LIMIT 50
+  `).all(restaurantId).map(mapCustomerRow);
+}
+
+function upsertRestaurantCustomer(restaurantId, payload = {}) {
+  const name = trimmed(payload.name || payload.customerName);
+  const phone = normalizePhone(payload.phone);
+  const address = trimmed(payload.address || payload.customerAddress || payload.deliveryAddress);
+  if (!phone) {
+    return null;
+  }
+  if (!name || !address) {
+    throw httpError(400, "Musteri kaydi icin ad, telefon ve adres zorunludur.");
+  }
+  const existing = db.prepare("SELECT * FROM customers WHERE restaurant_id = ? AND phone = ?").get(restaurantId, phone);
+  const stamp = nowIso();
+  if (existing) {
+    db.prepare("UPDATE customers SET name = ?, address = ?, updated_at = ? WHERE id = ?").run(name, address, stamp, existing.id);
+    return mapCustomerRow(db.prepare("SELECT * FROM customers WHERE id = ?").get(existing.id));
+  }
+  const id = uid("cust");
+  db.prepare(`
+    INSERT INTO customers (id, restaurant_id, name, phone, address, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, restaurantId, name, phone, address, stamp, stamp);
+  return mapCustomerRow(db.prepare("SELECT * FROM customers WHERE id = ?").get(id));
+}
+
+function packagesForAccounting({ restaurantId = "", startDate = "", endDate = "" } = {}) {
+  const where = ["status = ?"];
+  const params = [DELIVERED_STATUS];
+  if (restaurantId) {
+    where.push("restaurant_id = ?");
+    params.push(restaurantId);
+  }
+  if (startDate) {
+    where.push("substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) >= ?");
+    params.push(startDate);
+  }
+  if (endDate) {
+    where.push("substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) <= ?");
+    params.push(endDate);
+  }
+  return db.prepare(`SELECT * FROM packages WHERE ${where.join(" AND ")} ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC`).all(...params).map((row) => mapPackageRow(row));
+}
+
+function accountingBucketForPackage(pkg) {
+  const status = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
+  const methodCode = normalizePaymentMethodCode(pkg.paymentMethod);
+  if ([CASH_COLLECTED_PAYMENT_STATUS, CASH_EXPECTED_PAYMENT_STATUS].includes(status) || methodCode === "cash_on_delivery") return "cash";
+  if ([CREDIT_CARD_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(status) || methodCode === "card_on_delivery") return "card";
+  if (status === PAID_ONLINE_PAYMENT_STATUS || methodCode === "paid_online") return "online";
+  if (status === RESTAURANT_COLLECTED_PAYMENT_STATUS || methodCode === "restaurant_collected") return "restaurant";
+  if (status === COLLECTED_PAYMENT_STATUS || methodCode === "collected") return "restaurant";
+  return "unknown";
+}
+
+function summarizeRestaurantAccounting(packages, settings = getSystemSettings()) {
+  const feeCents = moneyToCents(settings.courier_per_package_fee || 0);
+  const totals = packages.reduce((summary, pkg) => {
+    const amountCents = moneyToCents(pkg.orderAmount);
+    const bucket = accountingBucketForPackage(pkg);
+    summary.totalPackages += 1;
+    if (bucket === "cash") summary.totalCashCents += amountCents;
+    if (bucket === "card") summary.totalCardCents += amountCents;
+    if (bucket === "online") summary.totalOnlineCents += amountCents;
+    if (bucket === "restaurant") summary.totalRestaurantCollectedCents += amountCents;
+    if (["cash", "card"].includes(bucket)) summary.totalCourierCollectedCents += amountCents;
+    return summary;
+  }, {
+    totalPackages: 0,
+    totalCashCents: 0,
+    totalCardCents: 0,
+    totalOnlineCents: 0,
+    totalRestaurantCollectedCents: 0,
+    totalCourierCollectedCents: 0,
+  });
+  const serviceFeeCents = totals.totalPackages * feeCents;
+  const netPayableCents = Math.max(0, totals.totalOnlineCents + totals.totalRestaurantCollectedCents - serviceFeeCents);
+  return {
+    totalPackages: totals.totalPackages,
+    totalCash: centsToMoney(totals.totalCashCents),
+    totalCard: centsToMoney(totals.totalCardCents),
+    totalOnline: centsToMoney(totals.totalOnlineCents),
+    totalRestaurantCollected: centsToMoney(totals.totalRestaurantCollectedCents),
+    totalCourierCollected: centsToMoney(totals.totalCourierCollectedCents),
+    serviceFee: centsToMoney(serviceFeeCents),
+    netPayable: centsToMoney(netPayableCents),
+  };
+}
+
+function buildRestaurantAccounting({ startDate = dayKey(), endDate = dayKey() } = {}) {
+  const restaurants = getRestaurants();
+  return restaurants.map((restaurant) => {
+    const packages = packagesForAccounting({ restaurantId: restaurant.id, startDate, endDate });
+    return {
+      restaurantId: restaurant.id,
+      restaurantName: restaurant.name,
+      startDate,
+      endDate,
+      ...summarizeRestaurantAccounting(packages),
+      packages,
+    };
+  });
+}
+
+function mapSettlementRow(row) {
+  return {
+    id: row.id,
+    restaurantId: row.restaurant_id,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    totalPackages: Number(row.total_packages || 0),
+    totalCash: Number(row.total_cash || 0),
+    totalCard: Number(row.total_card || 0),
+    totalOnline: Number(row.total_online || 0),
+    totalRestaurantCollected: Number(row.total_restaurant_collected || 0),
+    totalCourierCollected: Number(row.total_courier_collected || 0),
+    serviceFee: Number(row.service_fee || 0),
+    netPayable: Number(row.net_payable || 0),
+    status: row.status,
+    paidAt: row.paid_at || null,
+    note: row.note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getRestaurantSettlements(limit = 50) {
+  return db.prepare(`
+    SELECT * FROM restaurant_settlements
+    ORDER BY datetime(updated_at) DESC
+    LIMIT ?
+  `).all(limit).map(mapSettlementRow);
+}
+
+function upsertRestaurantSettlement(restaurantId, startDate, endDate, payload = {}) {
+  const restaurant = db.prepare("SELECT * FROM restaurants WHERE id = ?").get(restaurantId);
+  if (!restaurant) {
+    throw httpError(404, "Restoran bulunamadi.");
+  }
+  const packages = packagesForAccounting({ restaurantId, startDate, endDate });
+  const summary = summarizeRestaurantAccounting(packages);
+  const existing = db.prepare("SELECT * FROM restaurant_settlements WHERE restaurant_id = ? AND start_date = ? AND end_date = ?").get(restaurantId, startDate, endDate);
+  const stamp = nowIso();
+  const status = trimmed(payload.status) || existing?.status || "unpaid";
+  const paidAt = status === "paid" ? (trimmed(payload.paidAt) || existing?.paid_at || stamp) : null;
+  const note = trimmed(payload.note) || existing?.note || "";
+  if (existing) {
+    db.prepare(`
+      UPDATE restaurant_settlements
+      SET total_packages = ?, total_cash = ?, total_card = ?, total_online = ?, total_restaurant_collected = ?,
+          total_courier_collected = ?, service_fee = ?, net_payable = ?, status = ?, paid_at = ?, note = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      summary.totalPackages,
+      summary.totalCash,
+      summary.totalCard,
+      summary.totalOnline,
+      summary.totalRestaurantCollected,
+      summary.totalCourierCollected,
+      summary.serviceFee,
+      summary.netPayable,
+      status,
+      paidAt,
+      note,
+      stamp,
+      existing.id
+    );
+    return mapSettlementRow(db.prepare("SELECT * FROM restaurant_settlements WHERE id = ?").get(existing.id));
+  }
+  const id = uid("settlement");
+  db.prepare(`
+    INSERT INTO restaurant_settlements (
+      id, restaurant_id, start_date, end_date, total_packages, total_cash, total_card, total_online,
+      total_restaurant_collected, total_courier_collected, service_fee, net_payable, status, paid_at, note, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    restaurantId,
+    startDate,
+    endDate,
+    summary.totalPackages,
+    summary.totalCash,
+    summary.totalCard,
+    summary.totalOnline,
+    summary.totalRestaurantCollected,
+    summary.totalCourierCollected,
+    summary.serviceFee,
+    summary.netPayable,
+    status,
+    paidAt,
+    note,
+    stamp,
+    stamp
+  );
+  return mapSettlementRow(db.prepare("SELECT * FROM restaurant_settlements WHERE id = ?").get(id));
+}
+
+function upsertSettlementsForApprovedReport(report) {
+  const packageIds = parseJson(report.package_ids_json, []);
+  if (!packageIds.length) {
+    return [];
+  }
+  const placeholders = packageIds.map(() => "?").join(",");
+  const restaurantIds = db.prepare(`SELECT DISTINCT restaurant_id FROM packages WHERE id IN (${placeholders})`).all(...packageIds).map((row) => row.restaurant_id);
+  return restaurantIds.map((restaurantId) => upsertRestaurantSettlement(restaurantId, report.report_date, report.report_date));
 }
 
 function mapPackageRowsWithRestaurants(rows) {
@@ -4458,10 +4872,10 @@ function paymentAccountingBucket(pkg) {
   if (paymentStatus === CASH_COLLECTED_PAYMENT_STATUS || paymentStatus === CASH_EXPECTED_PAYMENT_STATUS || paymentMethod.includes("nakit")) {
     return "cash";
   }
-  if (paymentStatus === CREDIT_CARD_PAYMENT_STATUS || (!paymentMethod.includes("online") && (paymentMethod.includes("kart") || paymentMethod.includes("kredi") || paymentMethod.includes("pos")))) {
+  if ([CREDIT_CARD_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(paymentStatus) || (!paymentMethod.includes("online") && (paymentMethod.includes("kart") || paymentMethod.includes("kredi") || paymentMethod.includes("pos")))) {
     return "card";
   }
-  if (paymentStatus === PAID_ONLINE_PAYMENT_STATUS || paymentMethod.includes("online")) {
+  if ([PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(paymentStatus) || paymentMethod.includes("online")) {
     return "online";
   }
   return "unknown";
@@ -4482,6 +4896,12 @@ function summarizeCourierDay(packages) {
     if (bucket === "card") {
       summary.creditCardAmount += amount;
     }
+    if ([CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod))) {
+      summary.collectedTotal += amount;
+    }
+    if (normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod) === PAYMENT_ISSUE_STATUS) {
+      summary.failedCollectionTotal += amount;
+    }
     summary.packageIds.push(pkg.id);
     return summary;
   }, {
@@ -4490,6 +4910,8 @@ function summarizeCourierDay(packages) {
     paidOnlineAmount: 0,
     cashCollectedAmount: 0,
     creditCardAmount: 0,
+    collectedTotal: 0,
+    failedCollectionTotal: 0,
     packageIds: [],
   });
 }
@@ -4506,7 +4928,12 @@ function mapCourierDailyReportRow(row) {
     paidOnlineAmount: Number(row.paid_online_amount || 0),
     cashCollectedAmount: Number(row.cash_collected_amount || 0),
     creditCardAmount: Number(row.credit_card_amount || 0),
+    collectedTotal: Number(row.collected_total || 0),
+    failedCollectionTotal: Number(row.failed_collection_total || 0),
     status: row.status || 'pending_approval',
+    courierNote: row.courier_note || "",
+    adminNote: row.admin_note || "",
+    approvedAt: row.approved_at || null,
     packageIds: parseJson(row.package_ids_json, []),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -4517,7 +4944,7 @@ function getCourierDailyReports(limit = 50) {
   return db.prepare("SELECT * FROM courier_daily_reports ORDER BY datetime(updated_at) DESC LIMIT ?").all(limit).map(mapCourierDailyReportRow);
 }
 
-function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
+function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}) {
   const courier = getCourierById(courierId);
   if (!courier) {
     throw httpError(404, "Kurye bulunamadi.");
@@ -4532,7 +4959,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
     db.prepare(`
       UPDATE courier_daily_reports
       SET courier_name = ?, zone = ?, delivered_count = ?, total_amount = ?, paid_online_amount = ?, cash_collected_amount = ?, credit_card_amount = ?,
-          status = 'pending_approval', package_ids_json = ?, updated_at = ?
+          collected_total = ?, failed_collection_total = ?, courier_note = ?, status = 'pending_approval', package_ids_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
       courier.name,
@@ -4542,6 +4969,9 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
       Number(summary.creditCardAmount.toFixed(2)),
+      Number(summary.collectedTotal.toFixed(2)),
+      Number(summary.failedCollectionTotal.toFixed(2)),
+      trimmed(options.courierNote) || existing.courier_note || "",
       json(summary.packageIds),
       stamp,
       existing.id
@@ -4550,8 +4980,8 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
     db.prepare(`
       INSERT INTO courier_daily_reports (
         id, courier_id, courier_name, zone, report_date, delivered_count, total_amount, paid_online_amount,
-        cash_collected_amount, credit_card_amount, package_ids_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cash_collected_amount, credit_card_amount, collected_total, failed_collection_total, courier_note, package_ids_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       uid("cdr"),
       courierId,
@@ -4563,6 +4993,9 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey()) {
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
       Number(summary.creditCardAmount.toFixed(2)),
+      Number(summary.collectedTotal.toFixed(2)),
+      Number(summary.failedCollectionTotal.toFixed(2)),
+      trimmed(options.courierNote),
       json(summary.packageIds),
       stamp,
       stamp
@@ -5576,6 +6009,12 @@ function decorateState(filter = {}) {
     unmatchedOrders: getUnmatchedOrders(100),
     couriers,
     packages,
+    customers: filter.restaurantId ? getRestaurantCustomers(filter.restaurantId) : [],
+    restaurantAccounting: buildRestaurantAccounting({
+      startDate: trimmed(filter.accountingStartDate) || dayKey(),
+      endDate: trimmed(filter.accountingEndDate) || dayKey(),
+    }),
+    restaurantSettlements: getRestaurantSettlements(50),
     courierDailyReports: getCourierDailyReports(50),
     shiftPlans: getShiftPlans(dayKey()),
     shiftPlanSummary: summarizeShiftPlans(dayKey()),
@@ -7363,10 +7802,11 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
   const insertSql = `
     INSERT INTO packages (
       id, tracking_no, restaurant_id, source, delivery_address, package_type, source_platform, platform_restaurant_id, posentegra_id, external_order_no, external_order_id,
-      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
+      recipient, phone, address, zone, eta, payment_method, order_amount, payment_status, payment_collected_by, collected_amount, courier_collection_note, restaurant_customer_id,
+      x, y, customer_lat, customer_lng, customer_address, note, customer_note, items_json, raw_payload_json, status, assignment_status,
       assigned_courier_id, assigned_courier_name, assigned_at, accepted_at, on_route_at, delivered_at, failed_at,
       distance_km, assignment_reason, failure_reason, last_assignment_attempt_at, last_assignment_error, assignment_tried_courier_ids_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     pkg.id,
@@ -7388,6 +7828,10 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     pkg.paymentMethod,
     normalizeMoney(pkg.orderAmount),
     pkg.paymentStatus,
+    pkg.paymentCollectedBy || normalizeCollectedBy(pkg.paymentStatus),
+    normalizeMoney(pkg.collectedAmount),
+    pkg.courierCollectionNote || null,
+    pkg.restaurantCustomerId || null,
     pkg.latitude,
     pkg.longitude,
     pkg.customerLatitude ?? null,
@@ -7491,16 +7935,22 @@ function lifecycleColumnsForStatus(status, current = {}) {
 function updatePackageLifecycle(packageId, updates, current = {}) {
   const status = normalizeStatus(updates.status || current.status);
   const lifecycle = lifecycleColumnsForStatus(status, current);
+  const paymentStatus = normalizePaymentStatus(updates.paymentStatus || current.paymentStatus, updates.paymentMethod || current.paymentMethod);
+  const collectedAmount = updates.collectedAmount !== undefined
+    ? normalizeMoney(updates.collectedAmount)
+    : ([CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(paymentStatus)
+      ? normalizeMoney(current.orderAmount)
+      : normalizeMoney(current.collectedAmount || 0));
   db.prepare(`
     UPDATE packages
     SET status = ?, assignment_status = ?, payment_status = ?, failure_reason = ?, assigned_courier_id = ?, assigned_courier_name = ?,
         assigned_at = ?, accepted_at = ?, on_route_at = ?, delivered_at = ?, failed_at = ?, last_assignment_attempt_at = ?,
-        last_assignment_error = ?, updated_at = ?
+        last_assignment_error = ?, payment_collected_by = ?, collected_amount = ?, courier_collection_note = ?, updated_at = ?
     WHERE id = ?
   `).run(
     status,
     updates.assignmentStatus || lifecycle.assignmentStatus,
-    normalizePaymentStatus(updates.paymentStatus || current.paymentStatus, updates.paymentMethod || current.paymentMethod),
+    paymentStatus,
     updates.failureReason ?? current.failureReason ?? null,
     updates.assignedCourierId ?? current.assignedCourierId ?? null,
     updates.assignedCourierName ?? current.assignedCourierName ?? null,
@@ -7511,6 +7961,9 @@ function updatePackageLifecycle(packageId, updates, current = {}) {
     updates.failedAt ?? lifecycle.failedAt,
     updates.lastAssignmentAttemptAt ?? current.lastAssignmentAttemptAt ?? null,
     updates.lastAssignmentError ?? current.lastAssignmentError ?? null,
+    updates.paymentCollectedBy ?? normalizeCollectedBy(paymentStatus, current.paymentCollectedBy),
+    collectedAmount,
+    updates.courierCollectionNote ?? current.courierCollectionNote ?? null,
     nowIso(),
     packageId
   );
@@ -9608,6 +10061,39 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/restaurant/customers") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      customers: getRestaurantCustomers(session.restaurant_id, url.searchParams.get("phone") || url.searchParams.get("search") || ""),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/customers") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const customer = upsertRestaurantCustomer(session.restaurant_id, body);
+    if (!customer?.id) {
+      sendJson(res, 400, { error: "Telefon numarasi zorunludur." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      customer,
+      state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, req }),
+    });
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/restaurant/platform-accounts") {
     const session = getRestaurantSession(req);
     if (!session) {
@@ -10093,19 +10579,49 @@ async function handleApi(req, res, pathname) {
       customerName: trimmed(body.customer_name ?? body.customerName),
       phone: trimmed(body.phone),
       customerAddress: trimmed(body.customer_address ?? body.customerAddress ?? body.delivery_address ?? body.deliveryAddress),
-      paymentMethod: trimmed(body.payment_method ?? body.paymentMethod),
+      paymentMethod: trimmed(body.payment_method ?? body.paymentMethod) || "paid_online",
+      paymentStatus: trimmed(body.payment_status ?? body.paymentStatus),
+      restaurantCustomerId: trimmed(body.restaurantCustomerId ?? body.restaurant_customer_id),
       customerNote: trimmed(body.customer_note ?? body.customerNote),
       source: trimmed(body.source),
       sourcePlatform: trimmed(body.source_platform ?? body.sourcePlatform),
       rawText: trimmed(body.raw_text ?? body.rawText),
       requestedStatus: trimmed(body.status),
     };
+    const paymentDraft = validatePaymentDraft(draft);
+    if (paymentDraft.error) {
+      logInsertSkipped("packages", "payment_validation_failed", req, { error: paymentDraft.error });
+      sendJson(res, 400, { error: paymentDraft.error });
+      return;
+    }
+    draft.paymentMethod = PAYMENT_METHOD_LABELS[paymentDraft.methodCode];
+    draft.paymentStatus = paymentDraft.paymentStatus;
     const errors = validatePackageDraft(draft);
 
     if (errors.length > 0) {
       logInsertSkipped("packages", "validation_failed", req, { errors });
       sendJson(res, 400, { error: errors.join(" ") });
       return;
+    }
+
+    const canCreateCustomer = normalizePhone(draft.phone) && trimmed(draft.customerName) && trimmed(draft.customerAddress || draft.deliveryAddress);
+    const customer = draft.restaurantCustomerId
+      ? db.prepare("SELECT * FROM customers WHERE id = ? AND restaurant_id = ?").get(draft.restaurantCustomerId, session.restaurant_id)
+      : (canCreateCustomer ? upsertRestaurantCustomer(session.restaurant_id, {
+        name: draft.customerName,
+        phone: draft.phone,
+        address: draft.customerAddress || draft.deliveryAddress,
+      }) : null);
+    if (draft.restaurantCustomerId && !customer) {
+      sendJson(res, 400, { error: "Secilen musteri bu restorana ait degil." });
+      return;
+    }
+    if (customer) {
+      draft.restaurantCustomerId = customer.id;
+      draft.customerName = draft.customerName || customer.name;
+      draft.phone = normalizePhone(draft.phone) || customer.phone;
+      draft.customerAddress = draft.customerAddress || customer.address;
+      draft.deliveryAddress = draft.deliveryAddress || customer.address;
     }
 
     const pkg = buildRestaurantPackageRecord(restaurantRow, draft);
@@ -11357,6 +11873,7 @@ async function handleApi(req, res, pathname) {
     const nextStatus = normalizeStatus(body.status || target.status);
     const currentStatus = normalizeStatus(target.status);
     const nextPaymentStatus = body.paymentStatus ? normalizePaymentStatus(body.paymentStatus, target.payment_method) : target.payment_status;
+    const collectionNote = trimmed(body.courierCollectionNote ?? body.collectionNote ?? body.note);
 
     if (!isKnownPackageStatus(body.status || target.status)) {
       sendJson(res, 400, { error: "Gecersiz paket durumu." });
@@ -11387,6 +11904,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
+    if (nextStatus === DELIVERED_STATUS && !VALID_PAYMENT_STATUSES.has(nextPaymentStatus)) {
+      sendJson(res, 400, { error: "Gecersiz odeme/tahsilat durumu." });
+      return;
+    }
+
     try {
       await syncPosentegraStatusChangeOrThrow(target, nextStatus, req);
     } catch (error) {
@@ -11398,9 +11920,16 @@ async function handleApi(req, res, pathname) {
       status: nextStatus,
       failureReason: nextStatus === FAILED_STATUS ? failureReason : "",
       paymentStatus: nextPaymentStatus,
+      paymentCollectedBy: normalizeCollectedBy(nextPaymentStatus, target.payment_collected_by),
+      collectedAmount: nextPaymentStatus === PAYMENT_ISSUE_STATUS ? 0 : target.order_amount,
+      courierCollectionNote: collectionNote,
     }, {
       status: target.status,
       paymentStatus: target.payment_status,
+      paymentCollectedBy: target.payment_collected_by,
+      collectedAmount: target.collected_amount,
+      courierCollectionNote: target.courier_collection_note,
+      orderAmount: target.order_amount,
       failureReason: target.failure_reason,
       assignedCourierId: target.assigned_courier_id,
       assignedCourierName: target.assigned_courier_name,
@@ -11451,7 +11980,10 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const summary = upsertCourierDailyReport(session.courier_id, dayKey());
+    const { json: body } = await readRequestBody(req);
+    const summary = upsertCourierDailyReport(session.courier_id, dayKey(), {
+      courierNote: body.courierNote ?? body.note,
+    });
     upsertCashReconciliation(session.courier_id, dayKey(), summary);
     closeCourierShift(session.courier_id);
     const workspace = buildCourierWorkspace(session.courier_id);
@@ -11635,6 +12167,150 @@ async function handleApi(req, res, pathname) {
       createdAnnouncement,
       auditLogs: getAuditLogs(20),
     });
+    return;
+  }
+
+  const enhancedDayCloseApproveMatch = pathname.match(/^\/api\/admin\/day-close\/([^\/]+)\/approve$/);
+  if (req.method === "POST" && enhancedDayCloseApproveMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const reportId = enhancedDayCloseApproveMatch[1];
+    const stamp = nowIso();
+    const result = db.prepare("UPDATE courier_daily_reports SET status = 'approved', admin_note = ?, approved_at = ?, updated_at = ? WHERE id = ?").run(trimmed(body.adminNote), stamp, stamp, reportId);
+    if (!result.changes) {
+      sendJson(res, 404, { error: "Kurye gun sonu raporu bulunamadi." });
+      return;
+    }
+    const report = db.prepare("SELECT * FROM courier_daily_reports WHERE id = ?").get(reportId);
+    const settlements = upsertSettlementsForApprovedReport(report);
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_day_close_approved",
+      details: { reportId, settlementCount: settlements.length },
+    });
+    broadcastLiveEvent({ type: "workspace-update", message: "Kurye gun sonu raporu onaylandi." });
+    sendJson(res, 200, { success: true, ...decorateState({ req }), auditLogs: getAuditLogs(20) });
+    return;
+  }
+
+  const adminDayCloseRejectMatch = pathname.match(/^\/api\/admin\/day-close\/([^\/]+)\/reject$/);
+  if (req.method === "POST" && adminDayCloseRejectMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const reason = trimmed(body.adminNote || body.reason);
+    if (!reason) {
+      sendJson(res, 400, { error: "Red sebebi zorunludur." });
+      return;
+    }
+    const result = db.prepare("UPDATE courier_daily_reports SET status = 'rejected', admin_note = ?, updated_at = ? WHERE id = ?").run(reason, nowIso(), adminDayCloseRejectMatch[1]);
+    if (!result.changes) {
+      sendJson(res, 404, { error: "Kurye gun sonu raporu bulunamadi." });
+      return;
+    }
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_day_close_rejected",
+      details: { reportId: adminDayCloseRejectMatch[1], reason },
+    });
+    broadcastLiveEvent({ type: "workspace-update", message: "Kurye gun sonu raporu reddedildi." });
+    sendJson(res, 200, { success: true, ...decorateState({ req }), auditLogs: getAuditLogs(20) });
+    return;
+  }
+
+  const adminDayCloseEditMatch = pathname.match(/^\/api\/admin\/day-close\/([^\/]+)$/);
+  if (req.method === "PATCH" && adminDayCloseEditMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const report = db.prepare("SELECT * FROM courier_daily_reports WHERE id = ?").get(adminDayCloseEditMatch[1]);
+    if (!report) {
+      sendJson(res, 404, { error: "Kurye gun sonu raporu bulunamadi." });
+      return;
+    }
+    if (report.status === "approved") {
+      sendJson(res, 400, { error: "Onaylanan gun sonu raporu kilitlidir." });
+      return;
+    }
+    db.prepare(`
+      UPDATE courier_daily_reports
+      SET cash_collected_amount = ?, credit_card_amount = ?, paid_online_amount = ?, collected_total = ?, failed_collection_total = ?, admin_note = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      normalizeMoney(body.cashTotal ?? body.cashCollectedAmount ?? report.cash_collected_amount),
+      normalizeMoney(body.cardTotal ?? body.creditCardAmount ?? report.credit_card_amount),
+      normalizeMoney(body.onlineTotal ?? body.paidOnlineAmount ?? report.paid_online_amount),
+      normalizeMoney(body.collectedTotal ?? report.collected_total),
+      normalizeMoney(body.failedCollectionTotal ?? report.failed_collection_total),
+      trimmed(body.adminNote ?? report.admin_note),
+      nowIso(),
+      report.id
+    );
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "courier_day_close_edited",
+      details: { reportId: report.id },
+    });
+    sendJson(res, 200, { success: true, ...decorateState({ req }), auditLogs: getAuditLogs(20) });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/accounting/restaurants") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const startDate = trimmed(url.searchParams.get("startDate")) || dayKey();
+    const endDate = trimmed(url.searchParams.get("endDate")) || startDate;
+    sendJson(res, 200, {
+      ok: true,
+      restaurantAccounting: buildRestaurantAccounting({ startDate, endDate }),
+      restaurantSettlements: getRestaurantSettlements(50),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/settlements") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const restaurantId = trimmed(body.restaurantId);
+    const startDate = trimmed(body.startDate);
+    const endDate = trimmed(body.endDate);
+    if (!restaurantId || !startDate || !endDate) {
+      sendJson(res, 400, { error: "Restoran ve tarih araligi zorunludur." });
+      return;
+    }
+    const settlement = upsertRestaurantSettlement(restaurantId, startDate, endDate, {
+      status: body.status || "paid",
+      paidAt: body.paidAt,
+      note: body.note,
+    });
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "restaurant_settlement_updated",
+      restaurantId,
+      details: { settlementId: settlement.id, status: settlement.status },
+    });
+    sendJson(res, 200, { ok: true, settlement, ...decorateState({ req }), auditLogs: getAuditLogs(20) });
     return;
   }
 

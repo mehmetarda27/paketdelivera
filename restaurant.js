@@ -35,6 +35,10 @@ const restaurantRefs = {
   manualPlatformOrderForm: document.getElementById("manualPlatformOrderForm"),
   packageForm: document.getElementById("packageForm"),
   packageRestaurantId: document.getElementById("packageRestaurantId"),
+  restaurantCustomerId: document.getElementById("restaurantCustomerId"),
+  customerPhoneSearch: document.getElementById("customerPhoneSearch"),
+  customerSearchHint: document.getElementById("customerSearchHint"),
+  packagePaymentMethod: document.getElementById("packagePaymentMethod"),
   platformSelect: document.getElementById("platformSelect"),
   manualPlatformSelect: document.getElementById("manualPlatformSelect"),
   restaurantList: document.getElementById("restaurantList"),
@@ -1810,6 +1814,40 @@ restaurantRefs.logoutButton?.addEventListener("click", () => {
   });
 });
 
+let customerSearchTimer = null;
+restaurantRefs.customerPhoneSearch?.addEventListener("input", () => {
+  clearTimeout(customerSearchTimer);
+  const phone = restaurantRefs.customerPhoneSearch.value.trim();
+  if (restaurantRefs.restaurantCustomerId) {
+    restaurantRefs.restaurantCustomerId.value = "";
+  }
+  if (!phone || phone.replace(/\D/g, "").length < 5) {
+    if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Telefon yazinca kayitli musteri aranir.";
+    return;
+  }
+  customerSearchTimer = setTimeout(async () => {
+    try {
+      const data = await api(`/api/restaurant/customers?phone=${encodeURIComponent(phone)}`, {
+        headers: restaurantAuthHeaders(),
+        retryWithRefresh: refreshRestaurantAccess,
+      });
+      const customer = data.customers?.[0];
+      if (!customer) {
+        if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Kayitli musteri bulunamadi; bilgileri girersen yeni kayit acilir.";
+        return;
+      }
+      const elements = restaurantRefs.packageForm.elements;
+      if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = customer.id;
+      if (elements["customerName"]) elements["customerName"].value = customer.name || "";
+      if (elements["phone"]) elements["phone"].value = customer.phone || "";
+      if (elements["deliveryAddress"]) elements["deliveryAddress"].value = customer.address || "";
+      if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = `${customer.name} bulundu; adres forma dolduruldu.`;
+    } catch (error) {
+      if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = error.message || "Musteri aramasi basarisiz.";
+    }
+  }, 350);
+});
+
 restaurantRefs.packageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -1832,7 +1870,8 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
     customerName: formData.get("customerName"),
     phone: formData.get("phone"),
     customerNote: formData.get("customerNote"),
-    paymentMethod: "Panel Kaydi",
+    paymentMethod: formData.get("paymentMethod"),
+    restaurantCustomerId: formData.get("restaurantCustomerId"),
   };
 
   const file = restaurantRefs.packageImageInput?.files?.[0] || null;
@@ -1862,6 +1901,8 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
       throw new Error("API paketin veritabanina yazildigini dogrulayan createdPackage cevabi dondurmedi.");
     }
     restaurantRefs.packageForm.reset();
+    if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = "";
+    if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Telefon yazinca kayitli musteri aranir.";
     if (restaurantRefs.packageImagePreview) {
       restaurantRefs.packageImagePreview.style.display = "none";
       restaurantRefs.packageImagePreview.src = "";

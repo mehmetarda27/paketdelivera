@@ -32,8 +32,11 @@ const PAYMENT_STATUS_LABELS = {
   unpaid: "\u00d6deme Bekliyor",
   paid_online: "Online",
   cash_expected: "Nakit Bekleniyor",
-  cash_collected: "Nakit",
-  credit_card: "Kredi Kart\u0131",
+  cash_collected: "Nakit Tahsil Edildi",
+  credit_card: "Kart Bekleniyor",
+  credit_card_collected: "Kart Tahsil Edildi",
+  restaurant_collected: "Restoran Tahsil Etti",
+  collected: "Tahsil Edildi",
   payment_issue: "\u00d6deme Sorunu",
 };
 

@@ -303,9 +303,15 @@
             <button id="mainQuickPasteParseButton" class="primary-btn" type="button" style="align-self: flex-start;">Metni Ayıkla ve Formu Doldur</button>
           </div>
           <form id="packageForm" class="form-grid">
+            <input id="restaurantCustomerId" name="restaurantCustomerId" type="hidden">
             <label>
               Restoran ID
               <input id="packageRestaurantId" name="restaurantId" type="text" placeholder="Restoran girişi ile dolar" required readonly>
+            </label>
+            <label>
+              Kayitli Musteri Telefon
+              <input id="customerPhoneSearch" name="customerPhoneSearch" type="tel" placeholder="05xx xxx xx xx">
+              <small id="customerSearchHint" class="soft-copy">Telefon yazinca kayitli musteri aranir.</small>
             </label>
             <label class="full-width">
               Teslimat Adresi
@@ -326,6 +332,16 @@
             <label>
               Paket Tutarı
               <input name="orderAmount" type="number" step="0.01" min="0.01" placeholder="250.00" required>
+            </label>
+            <label>
+              Odeme Tipi
+              <select name="paymentMethod" id="packagePaymentMethod" required>
+                <option value="cash_on_delivery">Nakit tahsil edilecek</option>
+                <option value="card_on_delivery">Kredi karti tahsil edilecek</option>
+                <option value="paid_online">Online odendi</option>
+                <option value="collected">Tahsil edildi</option>
+                <option value="restaurant_collected">Restoran tahsil etti</option>
+              </select>
             </label>
             <label class="full-width">
               Not

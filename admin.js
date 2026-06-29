@@ -71,6 +71,8 @@ const adminRefs = {
   courierIntegrationIdList: document.getElementById("courierIntegrationIdList"),
   auditLogList: document.getElementById("auditLogList"),
   courierDailyReportList: document.getElementById("courierDailyReportList"),
+  restaurantAccountingFilterForm: document.getElementById("restaurantAccountingFilterForm"),
+  restaurantAccountingList: document.getElementById("restaurantAccountingList"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
   template: document.getElementById("adminPackageTemplate"),
@@ -1179,7 +1181,7 @@ function renderCourierDailyReports(reports) {
             ${isPending ? 'Onay Bekliyor' : 'Onaylandı'}
           </span>
           <span class="soft-badge" style="font-size: 0.75rem;">${formatDate(report.updatedAt)}</span>
-          ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${report.id}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button>` : ''}
+          ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${report.id}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button><button class="ghost-btn small-btn edit-btn" data-id="${report.id}">Duzenle</button><button class="ghost-btn small-btn reject-btn" data-id="${report.id}">Reddet</button>` : ''}
         </div>
       </div>
       <div class="meta-grid compact-meta-grid" style="margin-top: 12px; border-top: 1px solid #E2E8F0; padding-top: 12px; grid-template-columns: repeat(4, 1fr);">
@@ -1200,6 +1202,7 @@ function renderCourierDailyReports(reports) {
           <strong>${report.packageIds.length}</strong>
         </div>
       </div>
+      ${report.courierNote || report.adminNote ? `<p class="soft-copy" style="margin-top: 10px;">Kurye notu: ${htmlSafe(report.courierNote || "-")} | Admin: ${htmlSafe(report.adminNote || "-")}</p>` : ""}
     `;
 
     if (isPending) {
@@ -1219,6 +1222,27 @@ function renderCourierDailyReports(reports) {
                 btn.textContent = "Onayla";
                 btn.disabled = false;
             }
+        });
+        card.querySelector('.reject-btn')?.addEventListener('click', async () => {
+          const reason = window.prompt("Red sebebi", report.adminNote || "");
+          if (!reason) return;
+          const res = await api(`/api/admin/day-close/${report.id}/reject`, {
+            method: "POST",
+            headers: authHeaders(adminState.token),
+            body: JSON.stringify({ adminNote: reason }),
+          });
+          hydrateAdmin(res);
+          showToast("Gun sonu reddedildi.", "warning");
+        });
+        card.querySelector('.edit-btn')?.addEventListener('click', async () => {
+          const adminNote = window.prompt("Admin notu", report.adminNote || "") || "";
+          const res = await api(`/api/admin/day-close/${report.id}`, {
+            method: "PATCH",
+            headers: authHeaders(adminState.token),
+            body: JSON.stringify({ adminNote }),
+          });
+          hydrateAdmin(res);
+          showToast("Gun sonu raporu guncellendi.");
         });
     }
 
@@ -1520,6 +1544,68 @@ function renderCashReconciliations(items) {
   });
 }
 
+function renderRestaurantAccounting(items = [], settlements = []) {
+  if (!adminRefs.restaurantAccountingList) return;
+  const signature = listRenderSignature(items, ["restaurantId", "startDate", "endDate", "totalPackages", "totalCash", "totalCard", "totalOnline", "totalRestaurantCollected", "totalCourierCollected", "serviceFee", "netPayable"]);
+  if (adminRefs.restaurantAccountingList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  adminRefs.restaurantAccountingList.__deliveraRenderSignature = signature;
+  adminRefs.restaurantAccountingList.innerHTML = "";
+  if (!items.length) {
+    adminRefs.restaurantAccountingList.innerHTML = '<div class="empty-state">Secilen aralikta restoran hak edis kaydi yok.</div>';
+    return;
+  }
+  items.forEach((item) => {
+    const settlement = settlements.find((entry) => entry.restaurantId === item.restaurantId && entry.startDate === item.startDate && entry.endDate === item.endDate);
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-card-head">
+        <div>
+          <strong>${htmlSafe(item.restaurantName || item.restaurantId)}</strong>
+          <p>${htmlSafe(item.startDate)} - ${htmlSafe(item.endDate)} | ${item.totalPackages || 0} paket</p>
+        </div>
+        <span class="soft-badge">${settlement?.status === "paid" ? "Odendi" : "Odenmedi"}</span>
+      </div>
+      <div class="mini-stat-list">
+        <article class="mini-stat-card"><span>Nakit</span><strong>${formatCurrency(item.totalCash)}</strong></article>
+        <article class="mini-stat-card"><span>Kart</span><strong>${formatCurrency(item.totalCard)}</strong></article>
+        <article class="mini-stat-card"><span>Online</span><strong>${formatCurrency(item.totalOnline)}</strong></article>
+        <article class="mini-stat-card"><span>Restoran Tahsil</span><strong>${formatCurrency(item.totalRestaurantCollected)}</strong></article>
+        <article class="mini-stat-card"><span>Kurye Uzerinde</span><strong>${formatCurrency(item.totalCourierCollected)}</strong></article>
+        <article class="mini-stat-card"><span>Hizmet Bedeli</span><strong>${formatCurrency(item.serviceFee)}</strong></article>
+        <article class="mini-stat-card"><span>Net Odenecek</span><strong>${formatCurrency(item.netPayable)}</strong></article>
+      </div>
+      <details>
+        <summary>Paket detaylari</summary>
+        <div class="stack-list compact-stack-list">
+          ${(item.packages || []).map((pkg) => `<div class="stack-card"><strong>${htmlSafe(pkg.trackingNo || pkg.id)}</strong><p>${htmlSafe(pkg.recipient || "-")} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</p></div>`).join("") || '<div class="empty-state">Paket yok.</div>'}
+        </div>
+      </details>
+      <div class="card-actions">
+        <button class="primary-btn settlement-paid-btn" type="button">Odendi Isaretle</button>
+      </div>
+    `;
+    card.querySelector(".settlement-paid-btn")?.addEventListener("click", async () => {
+      const data = await api("/api/admin/settlements", {
+        method: "POST",
+        headers: adminHeaders(),
+        retryWithRefresh: refreshAdminAccess,
+        body: JSON.stringify({
+          restaurantId: item.restaurantId,
+          startDate: item.startDate,
+          endDate: item.endDate,
+          status: "paid",
+        }),
+      });
+      hydrateAdmin(data);
+      showToast("Restoran hak edisi odendi olarak isaretlendi.");
+    });
+    adminRefs.restaurantAccountingList.appendChild(card);
+  });
+}
+
 function hydrateAdmin(data) {
   adminState.data = data;
   setAdminLoggedIn(true);
@@ -1550,6 +1636,7 @@ function hydrateAdmin(data) {
   renderAnnouncements(data.announcements || []);
   renderShiftPlanTools(data.couriers || [], data.shiftPlans || [], data.shiftPlanSummary || []);
   renderCashReconciliations(data.cashReconciliations || []);
+  renderRestaurantAccounting(data.restaurantAccounting || [], data.restaurantSettlements || []);
   
   if (data.systemSettings && adminRefs.financialSettingsForm) {
     const feeInput = adminRefs.financialSettingsForm.querySelector("input[name='courier_per_package_fee']");
@@ -1879,6 +1966,19 @@ adminRefs.financialSettingsForm?.addEventListener("submit", async (event) => {
   });
   hydrateAdmin(data.state);
   showToast("Finansal ayarlar başarıyla güncellendi.");
+});
+
+adminRefs.restaurantAccountingFilterForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(adminRefs.restaurantAccountingFilterForm);
+  const params = new URLSearchParams();
+  if (formData.get("startDate")) params.set("startDate", formData.get("startDate"));
+  if (formData.get("endDate")) params.set("endDate", formData.get("endDate"));
+  const data = await api(`/api/admin/accounting/restaurants?${params.toString()}`, {
+    headers: adminHeaders(),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  renderRestaurantAccounting(data.restaurantAccounting || [], data.restaurantSettlements || []);
 });
 
 adminRefs.searchInput.addEventListener("input", () => {

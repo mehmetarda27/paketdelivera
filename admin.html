@@ -88,6 +88,10 @@
               <i data-lucide="clipboard-check" class="link-icon"></i>
               Kurye Gün Sonu
             </div>
+            <div class="tree-link" data-section="adminWorkspace_financial_accounting">
+              <i data-lucide="receipt-text" class="link-icon"></i>
+              Restoran Muhasebe
+            </div>
             <div class="tree-link" data-section="adminWorkspace_financial_settings">
               <i data-lucide="coins" class="link-icon"></i>
               Finansal Yönetim
@@ -639,6 +643,29 @@
       </section>
         </div>
         
+        <div id="adminWorkspace_financial_accounting" class="content-section">
+          <section class="glass-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow accent-teal">Restoran Muhasebe</p>
+                <h3>Hak edis ve tahsilat ozeti</h3>
+              </div>
+            </div>
+            <form id="restaurantAccountingFilterForm" class="form-grid">
+              <label>
+                Baslangic
+                <input name="startDate" type="date">
+              </label>
+              <label>
+                Bitis
+                <input name="endDate" type="date">
+              </label>
+              <button class="primary-btn full-width" type="submit">Filtrele</button>
+            </form>
+            <div id="restaurantAccountingList" class="stack-list"></div>
+          </section>
+        </div>
+
         <div id="adminWorkspace_financial_settings" class="content-section">
           <section class="dashboard-grid">
             <article class="glass-panel" style="grid-column: 1 / -1; max-width: 600px; margin: 0 auto;">
