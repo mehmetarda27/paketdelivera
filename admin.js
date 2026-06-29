@@ -75,6 +75,7 @@ const adminRefs = {
   courierDailyReportList: document.getElementById("courierDailyReportList"),
   restaurantAccountingFilterForm: document.getElementById("restaurantAccountingFilterForm"),
   restaurantAccountingList: document.getElementById("restaurantAccountingList"),
+  restaurantAccountingDetailPanel: document.getElementById("restaurantAccountingDetailPanel"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
   template: document.getElementById("adminPackageTemplate"),
@@ -1177,7 +1178,7 @@ function renderAuditLogs(logs) {
 }
 
 function renderCourierDailyReports(reports) {
-  const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "status", "updatedAt"]);
+  const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "restaurantCollectedAmount", "failedCollectionTotal", "status", "updatedAt"]);
   if (adminRefs.courierDailyReportList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1208,7 +1209,7 @@ function renderCourierDailyReports(reports) {
           ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${report.id}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button><button class="ghost-btn small-btn edit-btn" data-id="${report.id}">Duzenle</button><button class="ghost-btn small-btn reject-btn" data-id="${report.id}">Reddet</button>` : ''}
         </div>
       </div>
-      <div class="meta-grid compact-meta-grid" style="margin-top: 12px; border-top: 1px solid #E2E8F0; padding-top: 12px; grid-template-columns: repeat(4, 1fr);">
+      <div class="meta-grid compact-meta-grid" style="margin-top: 12px; border-top: 1px solid #E2E8F0; padding-top: 12px; grid-template-columns: repeat(6, 1fr);">
         <div>
           <span>Online</span>
           <strong>${formatCurrency(report.paidOnlineAmount)}</strong>
@@ -1220,6 +1221,14 @@ function renderCourierDailyReports(reports) {
         <div>
           <span>Nakit</span>
           <strong>${formatCurrency(report.cashCollectedAmount)}</strong>
+        </div>
+        <div>
+          <span>Restoran Tahsil</span>
+          <strong>${formatCurrency(report.restaurantCollectedAmount || 0)}</strong>
+        </div>
+        <div>
+          <span>Tahsil Edilemedi</span>
+          <strong>${formatCurrency(report.failedCollectionTotal || 0)}</strong>
         </div>
         <div>
           <span>Paket</span>
@@ -1583,7 +1592,7 @@ function renderRestaurantAccounting(items = [], settlements = []) {
   items.forEach((item) => {
     const settlement = settlements.find((entry) => entry.restaurantId === item.restaurantId && entry.startDate === item.startDate && entry.endDate === item.endDate);
     const card = document.createElement("article");
-    card.className = "stack-card";
+    card.className = "stack-card accounting-summary-card";
     card.innerHTML = `
       <div class="stack-card-head">
         <div>
@@ -1601,18 +1610,16 @@ function renderRestaurantAccounting(items = [], settlements = []) {
         <article class="mini-stat-card"><span>Hizmet Bedeli</span><strong>${formatCurrency(item.serviceFee)}</strong></article>
         <article class="mini-stat-card"><span>Net Odenecek</span><strong>${formatCurrency(item.netPayable)}</strong></article>
       </div>
-      <details>
-        <summary>Paket detaylari</summary>
-        <div class="stack-list compact-stack-list">
-          ${(item.packages || []).map((pkg) => `<div class="stack-card"><strong>${htmlSafe(pkg.trackingNo || pkg.id)}</strong><p>${htmlSafe(pkg.recipient || "-")} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</p></div>`).join("") || '<div class="empty-state">Paket yok.</div>'}
-        </div>
-      </details>
       <div class="card-actions">
+        <button class="ghost-btn accounting-detail-btn" type="button">Detaylari Gor</button>
         <button class="primary-btn settlement-paid-btn" type="button">Odendi Isaretle</button>
       </div>
     `;
+    card.querySelector(".accounting-detail-btn")?.addEventListener("click", async () => {
+      await loadRestaurantAccountingDetails(item);
+    });
     card.querySelector(".settlement-paid-btn")?.addEventListener("click", async () => {
-      const data = await api("/api/admin/settlements", {
+      const data = await api(`/api/admin/accounting/restaurants/${encodeURIComponent(item.restaurantId)}/mark-paid`, {
         method: "POST",
         headers: adminHeaders(),
         retryWithRefresh: refreshAdminAccess,
@@ -1627,6 +1634,74 @@ function renderRestaurantAccounting(items = [], settlements = []) {
       showToast("Restoran hak edisi odendi olarak isaretlendi.");
     });
     adminRefs.restaurantAccountingList.appendChild(card);
+  });
+}
+
+async function loadRestaurantAccountingDetails(item) {
+  if (!adminRefs.restaurantAccountingDetailPanel) {
+    return;
+  }
+  const params = new URLSearchParams({
+    startDate: item.startDate,
+    endDate: item.endDate,
+  });
+  const data = await api(`/api/admin/accounting/restaurants/${encodeURIComponent(item.restaurantId)}/details?${params.toString()}`, {
+    headers: adminHeaders(),
+    retryWithRefresh: refreshAdminAccess,
+  });
+  renderRestaurantAccountingDetails(item, data.details);
+}
+
+function renderRestaurantAccountingDetails(item, details) {
+  if (!adminRefs.restaurantAccountingDetailPanel) {
+    return;
+  }
+  const rows = details?.packages || [];
+  adminRefs.restaurantAccountingDetailPanel.innerHTML = `
+    <article class="stack-card accounting-detail-card">
+      <div class="stack-card-head">
+        <div>
+          <strong>${htmlSafe(item.restaurantName || item.restaurantId)} Detaylari</strong>
+          <p>${htmlSafe(item.startDate)} - ${htmlSafe(item.endDate)} | ${rows.length} paket</p>
+        </div>
+        <button class="ghost-btn accounting-detail-close" type="button">Kapat</button>
+      </div>
+      <div class="report-table-wrap">
+        <table class="report-table">
+          <thead>
+            <tr>
+              <th>Paket no</th>
+              <th>Tarih</th>
+              <th>Musteri</th>
+              <th>Kurye</th>
+              <th>Tutar</th>
+              <th>Odeme</th>
+              <th>Tahsil eden</th>
+              <th>Durum</th>
+              <th>Not</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((pkg) => `
+              <tr>
+                <td>${htmlSafe(pkg.trackingNo || pkg.id)}</td>
+                <td>${pkg.date ? formatDate(pkg.date) : "-"}</td>
+                <td>${htmlSafe(pkg.customer || "-")}</td>
+                <td>${htmlSafe(pkg.courier || "-")}</td>
+                <td>${formatCurrency(pkg.amount)}</td>
+                <td>${htmlSafe(pkg.paymentMethod || "-")} / ${paymentStatusLabel(pkg.paymentStatus)}</td>
+                <td>${htmlSafe(pkg.paymentCollectedBy || "-")}</td>
+                <td>${statusLabel(pkg.status)}</td>
+                <td>${htmlSafe(pkg.note || "-")}</td>
+              </tr>
+            `).join("") || '<tr><td colspan="9">Paket yok.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+  adminRefs.restaurantAccountingDetailPanel.querySelector(".accounting-detail-close")?.addEventListener("click", () => {
+    adminRefs.restaurantAccountingDetailPanel.innerHTML = "";
   });
 }
 

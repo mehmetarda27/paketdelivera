@@ -68,6 +68,10 @@
             <i data-lucide="chevron-right" class="tree-icon chevron" style="margin-left: auto;"></i>
           </div>
           <div class="tree-children">
+            <div class="tree-link" data-section="restaurantWorkspace_customers">
+              <i data-lucide="users" class="link-icon"></i>
+              Musteriler
+            </div>
             <div class="tree-link" data-section="restaurantWorkspace_integrations">
               <i data-lucide="share-2" class="link-icon"></i>
               Bağlantı & Hesaplar
@@ -341,6 +345,7 @@
                 <option value="paid_online">Online odendi</option>
                 <option value="collected">Tahsil edildi</option>
                 <option value="restaurant_collected">Restoran tahsil etti</option>
+                <option value="payment_issue">Tahsil edilemedi</option>
               </select>
             </label>
             <label class="full-width">
@@ -395,6 +400,51 @@
         </form>
       </section>
             </div>
+          </section>
+        </div>
+
+        <div id="restaurantWorkspace_customers" class="content-section">
+          <section class="dashboard-grid">
+            <article class="glass-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-coral">Musteriler</p>
+                  <h3>Kayitli Musteri Defteri</h3>
+                </div>
+              </div>
+              <form id="restaurantCustomerForm" class="form-grid">
+                <label>
+                  Musteri Adi
+                  <input name="name" type="text" placeholder="Ad Soyad" required>
+                </label>
+                <label>
+                  Telefon
+                  <input name="phone" type="tel" placeholder="05xx xxx xx xx" required>
+                </label>
+                <label class="full-width">
+                  Adres
+                  <textarea name="address" rows="3" placeholder="Teslimat adresi" required></textarea>
+                </label>
+                <label class="full-width">
+                  Not
+                  <textarea name="note" rows="2" placeholder="Apartman, tercih, dikkat notu"></textarea>
+                </label>
+                <button class="primary-btn full-width" type="submit">Musteriyi Kaydet</button>
+              </form>
+            </article>
+            <article class="glass-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow accent-coral">Arama</p>
+                  <h3>Telefonla Musteri Bul</h3>
+                </div>
+              </div>
+              <label class="full-width">
+                Telefon / Arama
+                <input id="restaurantCustomerListSearch" type="search" placeholder="Telefon veya isim ara">
+              </label>
+              <div id="restaurantCustomerList" class="stack-list"></div>
+            </article>
           </section>
         </div>
 

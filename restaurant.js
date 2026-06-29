@@ -40,6 +40,9 @@ const restaurantRefs = {
   restaurantCustomerId: document.getElementById("restaurantCustomerId"),
   customerPhoneSearch: document.getElementById("customerPhoneSearch"),
   customerSearchHint: document.getElementById("customerSearchHint"),
+  customerForm: document.getElementById("restaurantCustomerForm"),
+  customerList: document.getElementById("restaurantCustomerList"),
+  customerListSearch: document.getElementById("restaurantCustomerListSearch"),
   packagePaymentMethod: document.getElementById("packagePaymentMethod"),
   platformSelect: document.getElementById("platformSelect"),
   manualPlatformSelect: document.getElementById("manualPlatformSelect"),
@@ -134,6 +137,14 @@ function safeSetText(element, value) {
     return;
   }
   element.textContent = value;
+}
+
+function restaurantHtmlSafe(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function persistRestaurantAccessInfo(payload = {}) {
@@ -1441,11 +1452,66 @@ function renderRestaurantNotifications(notifications) {
   renderNotificationCenter(restaurantRefs.notificationCenter, notifications || [], "Restoran icin bildirim yok.");
 }
 
+function renderRestaurantCustomers(customers = []) {
+  if (!restaurantRefs.customerList) {
+    return;
+  }
+  const query = (restaurantRefs.customerListSearch?.value || "").trim().toLowerCase();
+  const filtered = (customers || []).filter((customer) => {
+    if (!query) return true;
+    return [customer.name, customer.phone, customer.address, customer.note]
+      .some((value) => String(value || "").toLowerCase().includes(query));
+  });
+  const signature = `${query}|${listRenderSignature(filtered, ["id", "name", "phone", "address", "note", "orderCount", "lastOrderAt", "updatedAt"])}`;
+  if (restaurantRefs.customerList.__deliveraRenderSignature === signature) {
+    return;
+  }
+  restaurantRefs.customerList.__deliveraRenderSignature = signature;
+  restaurantRefs.customerList.innerHTML = "";
+  if (!filtered.length) {
+    restaurantRefs.customerList.innerHTML = '<div class="empty-state">Kayitli musteri bulunamadi.</div>';
+    return;
+  }
+  filtered.forEach((customer) => {
+    const card = document.createElement("article");
+    card.className = "stack-card";
+    card.innerHTML = `
+      <div class="stack-top">
+        <div>
+          <strong>${restaurantHtmlSafe(customer.name || "-")}</strong>
+          <p>${restaurantHtmlSafe(customer.phone || "-")}</p>
+          <p>${restaurantHtmlSafe(customer.address || "-")}</p>
+          ${customer.note ? `<p>${restaurantHtmlSafe(customer.note)}</p>` : ""}
+        </div>
+        <span class="soft-badge">${customer.orderCount || 0} siparis</span>
+      </div>
+      <p class="soft-copy">Son siparis: ${customer.lastOrderAt ? formatDate(customer.lastOrderAt) : "-"}</p>
+      <div class="card-actions">
+        <button class="ghost-btn use-customer-btn" type="button">Manuel Pakete Aktar</button>
+      </div>
+    `;
+    card.querySelector(".use-customer-btn")?.addEventListener("click", () => {
+      const elements = restaurantRefs.packageForm?.elements;
+      if (!elements) return;
+      if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = customer.id;
+      if (restaurantRefs.customerPhoneSearch) restaurantRefs.customerPhoneSearch.value = customer.phone || "";
+      if (elements["customerName"]) elements["customerName"].value = customer.name || "";
+      if (elements["phone"]) elements["phone"].value = customer.phone || "";
+      if (elements["deliveryAddress"]) elements["deliveryAddress"].value = customer.address || "";
+      if (elements["customerNote"] && customer.note) elements["customerNote"].value = customer.note;
+      setActiveWorkspaceSection("restaurantWorkspace_manual");
+      showToast("Musteri bilgileri manuel paket formuna aktarildi.");
+    });
+    restaurantRefs.customerList.appendChild(card);
+  });
+}
+
 function hydrateRestaurant(data, explicitIntegration = null) {
   const nextSignature = JSON.stringify({
     restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.updatedAt]),
     platformAccounts: (data.platformAccounts || []).map((item) => [item.id, item.active, item.connectionStatus, item.lastSyncAt, item.updatedAt]),
     packages: (data.packages || []).map((item) => [item.id, item.status, item.assignmentStatus, item.assignedCourierId, item.paymentStatus, item.updatedAt]),
+    customers: (data.customers || []).map((item) => [item.id, item.name, item.phone, item.address, item.note, item.orderCount, item.lastOrderAt, item.updatedAt]),
     notifications: (data.notifications || []).map((item) => [item.id, item.readAt, item.createdAt]),
     performance: data.restaurantPerformance,
     wizard: data.integrationWizard,
@@ -1505,6 +1571,7 @@ function hydrateRestaurant(data, explicitIntegration = null) {
   renderActiveOrders(data);
   renderOrderHistory(data.packages);
   renderRestaurantNotifications(data.notifications || []);
+  renderRestaurantCustomers(data.customers || []);
   setIntegrationInfo(data, explicitIntegration);
   setPlatformSetup(data);
 }
@@ -1859,6 +1926,51 @@ restaurantRefs.logoutButton?.addEventListener("click", () => {
 });
 
 let customerSearchTimer = null;
+let customerListSearchTimer = null;
+
+restaurantRefs.customerListSearch?.addEventListener("input", () => {
+  clearTimeout(customerListSearchTimer);
+  customerListSearchTimer = setTimeout(() => {
+    renderRestaurantCustomers(restaurantState.data?.customers || []);
+  }, 120);
+});
+
+restaurantRefs.customerForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!restaurantState.token) {
+    showToast("Musteri kaydetmek icin restoran girisi gerekli.", "error");
+    return;
+  }
+  const currentRestaurantId = restaurantState.data?.restaurants?.[0]?.id;
+  if (!currentRestaurantId) {
+    showToast("Aktif restoran bulunamadi.", "error");
+    return;
+  }
+  const formData = new FormData(restaurantRefs.customerForm);
+  try {
+    const data = await api(`/api/restaurants/${encodeURIComponent(currentRestaurantId)}/customers`, {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+      body: JSON.stringify({
+        name: formData.get("name"),
+        phone: formData.get("phone"),
+        address: formData.get("address"),
+        note: formData.get("note"),
+      }),
+    });
+    restaurantRefs.customerForm.reset();
+    if (data.state) {
+      hydrateRestaurant(data.state);
+    } else {
+      await loadRestaurantWorkspace({ silent: true, force: true });
+    }
+    showToast("Musteri kaydedildi.");
+  } catch (error) {
+    showToast(error.message || "Musteri kaydedilemedi.", "error");
+  }
+});
+
 restaurantRefs.customerPhoneSearch?.addEventListener("input", () => {
   clearTimeout(customerSearchTimer);
   const phone = restaurantRefs.customerPhoneSearch.value.trim();

@@ -188,6 +188,7 @@ const VALID_PAYMENT_METHODS = new Set([
   "paid_online",
   "collected",
   "restaurant_collected",
+  "payment_issue",
 ]);
 const VALID_PAYMENT_STATUSES = new Set([
   UNPAID_PAYMENT_STATUS,
@@ -206,6 +207,7 @@ const PAYMENT_METHOD_LABELS = {
   paid_online: "Online odendi",
   collected: "Tahsil edildi",
   restaurant_collected: "Restoran tahsil etti",
+  payment_issue: "Tahsil edilemedi",
 };
 const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
@@ -809,6 +811,7 @@ if (!packageColumns.includes("assignment_tried_courier_ids_json")) {
   ["collected_amount", "REAL NOT NULL DEFAULT 0"],
   ["courier_collection_note", "TEXT"],
   ["restaurant_customer_id", "TEXT"],
+  ["customer_id", "TEXT"],
   ["confirmation_id", "TEXT"],
   ["platform_restaurant_id", "TEXT"],
   ["posentegra_id", "TEXT"],
@@ -845,6 +848,16 @@ const customerColumns = db.prepare("PRAGMA table_info(customers)").all().map((ro
 if (customerColumns.length > 0 && !customerColumns.includes("updated_at")) {
   db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT");
 }
+[
+  ["note", "TEXT"],
+  ["order_count", "INTEGER NOT NULL DEFAULT 0"],
+  ["last_order_at", "TEXT"],
+  ["is_active", "INTEGER NOT NULL DEFAULT 1"],
+].forEach(([columnName, definition]) => {
+  if (customerColumns.length > 0 && !customerColumns.includes(columnName)) {
+    db.exec(`ALTER TABLE customers ADD COLUMN ${columnName} ${definition}`);
+  }
+});
 
 const webhookLogColumns = db.prepare("PRAGMA table_info(webhook_logs)").all().map((row) => row.name);
 if (!webhookLogColumns.includes("retry_count")) {
@@ -894,6 +907,9 @@ if (courierReportColumns.length > 0) {
   }
   if (!courierReportColumns.includes('failed_collection_total')) {
     db.exec("ALTER TABLE courier_daily_reports ADD COLUMN failed_collection_total REAL NOT NULL DEFAULT 0");
+  }
+  if (!courierReportColumns.includes('restaurant_collected_amount')) {
+    db.exec("ALTER TABLE courier_daily_reports ADD COLUMN restaurant_collected_amount REAL NOT NULL DEFAULT 0");
   }
   if (!courierReportColumns.includes('courier_note')) {
     db.exec("ALTER TABLE courier_daily_reports ADD COLUMN courier_note TEXT");
@@ -1676,7 +1692,15 @@ function normalizeMoney(value, fallback = 0) {
     return fallback;
   }
 
-  const normalized = Number(String(value).replace(",", "."));
+  let raw = String(value).trim().replace(/[^\d,.-]/g, "");
+  if (raw.includes(",") && raw.includes(".")) {
+    raw = raw.lastIndexOf(",") > raw.lastIndexOf(".")
+      ? raw.replace(/\./g, "").replace(",", ".")
+      : raw.replace(/,/g, "");
+  } else if (raw.includes(",")) {
+    raw = raw.replace(",", ".");
+  }
+  const normalized = Number(raw);
   if (Number.isNaN(normalized) || normalized < 0) {
     return fallback;
   }
@@ -2076,6 +2100,9 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   if (loweredMethod.includes("kart") || loweredMethod.includes("kredi") || loweredMethod.includes("pos")) {
     return CREDIT_CARD_PAYMENT_STATUS;
   }
+  if (loweredMethod.includes("edilemedi") || loweredMethod.includes("alinamadi") || loweredMethod.includes("alınamadı") || loweredMethod.includes("payment_issue")) {
+    return PAYMENT_ISSUE_STATUS;
+  }
 
   return UNPAID_PAYMENT_STATUS;
 }
@@ -2089,6 +2116,7 @@ function normalizePaymentMethodCode(value) {
   if (incoming.includes("kart") || incoming.includes("kredi") || incoming.includes("pos")) return "card_on_delivery";
   if (incoming.includes("online")) return "paid_online";
   if (incoming.includes("restoran")) return "restaurant_collected";
+  if (incoming.includes("edilemedi") || incoming.includes("alinamadi") || incoming.includes("alınamadı") || incoming.includes("payment_issue")) return "payment_issue";
   if (incoming.includes("tahsil")) return "collected";
   if (incoming.includes("panel kaydi") || incoming.includes("panel kaydı") || incoming.includes("platform odeme") || incoming.includes("platform ödeme")) return "paid_online";
   return "";
@@ -2111,6 +2139,8 @@ function paymentStatusForMethod(methodCode) {
       return RESTAURANT_COLLECTED_PAYMENT_STATUS;
     case "collected":
       return COLLECTED_PAYMENT_STATUS;
+    case "payment_issue":
+      return PAYMENT_ISSUE_STATUS;
     default:
       return UNPAID_PAYMENT_STATUS;
   }
@@ -4147,7 +4177,8 @@ function getPackages(filter = {}) {
     paymentCollectedBy: row.payment_collected_by || normalizeCollectedBy(row.payment_status),
     collectedAmount: Number(row.collected_amount || 0),
     courierCollectionNote: row.courier_collection_note || "",
-    restaurantCustomerId: row.restaurant_customer_id || "",
+    customerId: row.customer_id || row.restaurant_customer_id || "",
+    restaurantCustomerId: row.restaurant_customer_id || row.customer_id || "",
     latitude: row.x,
     longitude: row.y,
     note: row.note,
@@ -4280,7 +4311,8 @@ function mapPackageRow(row, restaurantMap = new Map(), platformOrder) {
     paymentCollectedBy: row.payment_collected_by || normalizeCollectedBy(row.payment_status),
     collectedAmount: Number(row.collected_amount || 0),
     courierCollectionNote: row.courier_collection_note || "",
-    restaurantCustomerId: row.restaurant_customer_id || "",
+    customerId: row.customer_id || row.restaurant_customer_id || "",
+    restaurantCustomerId: row.restaurant_customer_id || row.customer_id || "",
     latitude: row.x,
     longitude: row.y,
     note: row.note,
@@ -4342,6 +4374,10 @@ function mapCustomerRow(row) {
     name: row.name,
     phone: row.phone,
     address: row.address,
+    note: row.note || "",
+    orderCount: Number(row.order_count || 0),
+    lastOrderAt: row.last_order_at || null,
+    isActive: row.is_active === undefined || row.is_active === null ? true : Boolean(row.is_active),
     createdAt: row.created_at,
     updatedAt: row.updated_at || row.created_at,
   };
@@ -4352,14 +4388,14 @@ function getRestaurantCustomers(restaurantId, search = "") {
   if (normalizedSearch) {
     return db.prepare(`
       SELECT * FROM customers
-      WHERE restaurant_id = ? AND phone LIKE ?
+      WHERE restaurant_id = ? AND is_active != 0 AND phone LIKE ?
       ORDER BY datetime(updated_at) DESC
       LIMIT 10
     `).all(restaurantId, `%${normalizedSearch}%`).map(mapCustomerRow);
   }
   return db.prepare(`
     SELECT * FROM customers
-    WHERE restaurant_id = ?
+    WHERE restaurant_id = ? AND is_active != 0
     ORDER BY datetime(updated_at) DESC
     LIMIT 50
   `).all(restaurantId).map(mapCustomerRow);
@@ -4369,6 +4405,7 @@ function upsertRestaurantCustomer(restaurantId, payload = {}) {
   const name = trimmed(payload.name || payload.customerName);
   const phone = normalizePhone(payload.phone);
   const address = trimmed(payload.address || payload.customerAddress || payload.deliveryAddress);
+  const note = trimmed(payload.note || payload.customerNote);
   if (!phone) {
     return null;
   }
@@ -4378,15 +4415,55 @@ function upsertRestaurantCustomer(restaurantId, payload = {}) {
   const existing = db.prepare("SELECT * FROM customers WHERE restaurant_id = ? AND phone = ?").get(restaurantId, phone);
   const stamp = nowIso();
   if (existing) {
-    db.prepare("UPDATE customers SET name = ?, address = ?, updated_at = ? WHERE id = ?").run(name, address, stamp, existing.id);
+    db.prepare("UPDATE customers SET name = ?, address = ?, note = ?, is_active = 1, updated_at = ? WHERE id = ?").run(name, address, note || existing.note || "", stamp, existing.id);
     return mapCustomerRow(db.prepare("SELECT * FROM customers WHERE id = ?").get(existing.id));
   }
   const id = uid("cust");
   db.prepare(`
-    INSERT INTO customers (id, restaurant_id, name, phone, address, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, restaurantId, name, phone, address, stamp, stamp);
+    INSERT INTO customers (id, restaurant_id, name, phone, address, note, order_count, is_active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+  `).run(id, restaurantId, name, phone, address, note, stamp, stamp);
   return mapCustomerRow(db.prepare("SELECT * FROM customers WHERE id = ?").get(id));
+}
+
+function updateRestaurantCustomer(customerId, restaurantId, payload = {}) {
+  const existing = db.prepare("SELECT * FROM customers WHERE id = ? AND restaurant_id = ?").get(customerId, restaurantId);
+  if (!existing) {
+    throw httpError(404, "Musteri bulunamadi.");
+  }
+  const name = trimmed(payload.name ?? existing.name);
+  const phone = normalizePhone(payload.phone ?? existing.phone);
+  const address = trimmed(payload.address ?? existing.address);
+  const note = trimmed(payload.note ?? existing.note ?? "");
+  if (!name || !phone || !address) {
+    throw httpError(400, "Musteri adi, telefon ve adres zorunludur.");
+  }
+  db.prepare(`
+    UPDATE customers
+    SET name = ?, phone = ?, address = ?, note = ?, is_active = ?, updated_at = ?
+    WHERE id = ? AND restaurant_id = ?
+  `).run(name, phone, address, note, payload.isActive === false ? 0 : 1, nowIso(), customerId, restaurantId);
+  return mapCustomerRow(db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId));
+}
+
+function softDeleteRestaurantCustomer(customerId, restaurantId) {
+  const result = db.prepare("UPDATE customers SET is_active = 0, updated_at = ? WHERE id = ? AND restaurant_id = ?").run(nowIso(), customerId, restaurantId);
+  if (!result.changes) {
+    throw httpError(404, "Musteri bulunamadi.");
+  }
+}
+
+function touchRestaurantCustomerOrder(customerId, restaurantId, stamp = nowIso()) {
+  if (!customerId) {
+    return;
+  }
+  db.prepare(`
+    UPDATE customers
+    SET order_count = COALESCE(order_count, 0) + 1,
+        last_order_at = ?,
+        updated_at = ?
+    WHERE id = ? AND restaurant_id = ?
+  `).run(stamp, stamp, customerId, restaurantId);
 }
 
 function packagesForAccounting({ restaurantId = "", startDate = "", endDate = "" } = {}) {
@@ -4441,7 +4518,7 @@ function summarizeRestaurantAccounting(packages, settings = getSystemSettings())
     totalCourierCollectedCents: 0,
   });
   const serviceFeeCents = totals.totalPackages * feeCents;
-  const netPayableCents = Math.max(0, totals.totalOnlineCents + totals.totalRestaurantCollectedCents - serviceFeeCents);
+  const netPayableCents = Math.max(0, totals.totalCourierCollectedCents - serviceFeeCents);
   return {
     totalPackages: totals.totalPackages,
     totalCash: centsToMoney(totals.totalCashCents),
@@ -4467,6 +4544,53 @@ function buildRestaurantAccounting({ startDate = dayKey(), endDate = dayKey() } 
       packages,
     };
   });
+}
+
+function buildRestaurantAccountingDetails(restaurantId, filters = {}) {
+  const startDate = trimmed(filters.startDate) || dayKey();
+  const endDate = trimmed(filters.endDate) || startDate;
+  const settlement = db.prepare("SELECT * FROM restaurant_settlements WHERE restaurant_id = ? AND start_date = ? AND end_date = ?").get(restaurantId, startDate, endDate);
+  const paymentMethod = normalizePaymentMethodCode(filters.paymentMethod || "");
+  const paymentStatus = trimmed(filters.paymentStatus || filters.collectionStatus);
+  const courierId = trimmed(filters.courierId);
+  const paidFilter = trimmed(filters.paidStatus || filters.settlementStatus);
+  let packages = packagesForAccounting({ restaurantId, startDate, endDate });
+  if (paymentMethod) {
+    packages = packages.filter((pkg) => pkg.paymentMethodCode === paymentMethod);
+  }
+  if (paymentStatus) {
+    packages = packages.filter((pkg) => normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod) === normalizePaymentStatus(paymentStatus, pkg.paymentMethod));
+  }
+  if (courierId) {
+    packages = packages.filter((pkg) => pkg.assignedCourierId === courierId);
+  }
+  if (paidFilter === "paid" && settlement?.status !== "paid") {
+    packages = [];
+  }
+  if (paidFilter === "unpaid" && settlement?.status === "paid") {
+    packages = [];
+  }
+  return {
+    restaurantId,
+    startDate,
+    endDate,
+    settlement: settlement ? mapSettlementRow(settlement) : null,
+    summary: summarizeRestaurantAccounting(packages),
+    packages: packages.map((pkg) => ({
+      id: pkg.id,
+      trackingNo: pkg.trackingNo,
+      date: pkg.deliveredAt || pkg.updatedAt || pkg.createdAt,
+      customer: pkg.recipient,
+      courier: pkg.assignedCourierName || "",
+      courierId: pkg.assignedCourierId || "",
+      amount: pkg.orderAmount,
+      paymentMethod: pkg.paymentMethod,
+      paymentStatus: pkg.paymentStatus,
+      paymentCollectedBy: pkg.paymentCollectedBy,
+      status: pkg.status,
+      note: pkg.courierCollectionNote || pkg.customerNote || pkg.note || "",
+    })),
+  };
 }
 
 function mapSettlementRow(row) {
@@ -4931,7 +5055,13 @@ function paymentAccountingBucket(pkg) {
   if ([CREDIT_CARD_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(paymentStatus) || (!paymentMethod.includes("online") && (paymentMethod.includes("kart") || paymentMethod.includes("kredi") || paymentMethod.includes("pos")))) {
     return "card";
   }
-  if ([PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(paymentStatus) || paymentMethod.includes("online")) {
+  if (paymentStatus === RESTAURANT_COLLECTED_PAYMENT_STATUS || paymentMethod.includes("restoran")) {
+    return "restaurant";
+  }
+  if (paymentStatus === COLLECTED_PAYMENT_STATUS) {
+    return normalizeCollectedBy(paymentStatus, pkg.paymentCollectedBy) === "courier" ? "cash" : "restaurant";
+  }
+  if (paymentStatus === PAID_ONLINE_PAYMENT_STATUS || paymentMethod.includes("online")) {
     return "online";
   }
   return "unknown";
@@ -4945,6 +5075,9 @@ function summarizeCourierDay(packages) {
     summary.totalAmount += amount;
     if (bucket === "online") {
       summary.paidOnlineAmount += amount;
+    }
+    if (bucket === "restaurant") {
+      summary.restaurantCollectedAmount += amount;
     }
     if (bucket === "cash") {
       summary.cashCollectedAmount += amount;
@@ -4966,6 +5099,7 @@ function summarizeCourierDay(packages) {
     paidOnlineAmount: 0,
     cashCollectedAmount: 0,
     creditCardAmount: 0,
+    restaurantCollectedAmount: 0,
     collectedTotal: 0,
     failedCollectionTotal: 0,
     packageIds: [],
@@ -4984,6 +5118,7 @@ function mapCourierDailyReportRow(row) {
     paidOnlineAmount: Number(row.paid_online_amount || 0),
     cashCollectedAmount: Number(row.cash_collected_amount || 0),
     creditCardAmount: Number(row.credit_card_amount || 0),
+    restaurantCollectedAmount: Number(row.restaurant_collected_amount || 0),
     collectedTotal: Number(row.collected_total || 0),
     failedCollectionTotal: Number(row.failed_collection_total || 0),
     status: row.status || 'pending_approval',
@@ -5015,7 +5150,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}
     db.prepare(`
       UPDATE courier_daily_reports
       SET courier_name = ?, zone = ?, delivered_count = ?, total_amount = ?, paid_online_amount = ?, cash_collected_amount = ?, credit_card_amount = ?,
-          collected_total = ?, failed_collection_total = ?, courier_note = ?, status = 'pending_approval', package_ids_json = ?, updated_at = ?
+          restaurant_collected_amount = ?, collected_total = ?, failed_collection_total = ?, courier_note = ?, status = 'pending_approval', package_ids_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
       courier.name,
@@ -5025,6 +5160,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
       Number(summary.creditCardAmount.toFixed(2)),
+      Number(summary.restaurantCollectedAmount.toFixed(2)),
       Number(summary.collectedTotal.toFixed(2)),
       Number(summary.failedCollectionTotal.toFixed(2)),
       trimmed(options.courierNote) || existing.courier_note || "",
@@ -5036,8 +5172,8 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}
     db.prepare(`
       INSERT INTO courier_daily_reports (
         id, courier_id, courier_name, zone, report_date, delivered_count, total_amount, paid_online_amount,
-        cash_collected_amount, credit_card_amount, collected_total, failed_collection_total, courier_note, package_ids_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cash_collected_amount, credit_card_amount, restaurant_collected_amount, collected_total, failed_collection_total, courier_note, package_ids_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       uid("cdr"),
       courierId,
@@ -5049,6 +5185,7 @@ function upsertCourierDailyReport(courierId, reportDate = dayKey(), options = {}
       Number(summary.paidOnlineAmount.toFixed(2)),
       Number(summary.cashCollectedAmount.toFixed(2)),
       Number(summary.creditCardAmount.toFixed(2)),
+      Number(summary.restaurantCollectedAmount.toFixed(2)),
       Number(summary.collectedTotal.toFixed(2)),
       Number(summary.failedCollectionTotal.toFixed(2)),
       trimmed(options.courierNote),
@@ -7922,6 +8059,9 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     insertedId: pkg.id,
     requestId: trace.requestId || null,
   });
+  if (pkg.restaurantCustomerId) {
+    db.prepare("UPDATE packages SET customer_id = ? WHERE id = ?").run(pkg.restaurantCustomerId, pkg.id);
+  }
   const verified = db.prepare("SELECT id, restaurant_id, platform_restaurant_id, posentegra_id, external_order_id FROM packages WHERE id = ?").get(pkg.id);
   if (!verified?.posentegra_id) {
     logger.error("package_posentegra_id_db_verify_failed", {
@@ -9020,6 +9160,8 @@ if (!existingAdmin) {
 
 async function handleApi(req, res, pathname) {
   const originalPathname = pathname;
+  const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const url = requestUrl;
   if (req.method === "POST") {
     const createAliases = {
       "/restaurants": "/api/admin/restaurants",
@@ -10117,10 +10259,17 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  if (req.method === "GET" && pathname === "/api/restaurant/customers") {
+  const restaurantCustomersMatch = pathname.match(/^\/api\/restaurants\/([^/]+)\/customers(?:\/search)?$/);
+  const restaurantCustomerItemMatch = pathname.match(/^\/api\/customers\/([^/]+)$/);
+
+  if (req.method === "GET" && (pathname === "/api/restaurant/customers" || restaurantCustomersMatch)) {
     const session = getRestaurantSession(req);
     if (!session) {
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    if (restaurantCustomersMatch && restaurantCustomersMatch[1] !== session.restaurant_id) {
+      sendJson(res, 403, { error: "Bu restoranin musterilerine erisim yetkin yok." });
       return;
     }
     sendJson(res, 200, {
@@ -10130,10 +10279,14 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  if (req.method === "POST" && pathname === "/api/restaurant/customers") {
+  if (req.method === "POST" && (pathname === "/api/restaurant/customers" || restaurantCustomersMatch)) {
     const session = getRestaurantSession(req);
     if (!session) {
       sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    if (restaurantCustomersMatch && restaurantCustomersMatch[1] !== session.restaurant_id) {
+      sendJson(res, 403, { error: "Bu restoran icin musteri ekleme yetkin yok." });
       return;
     }
     const { json: body } = await readRequestBody(req);
@@ -10147,6 +10300,36 @@ async function handleApi(req, res, pathname) {
       customer,
       state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, req }),
     });
+    return;
+  }
+
+  if ((req.method === "PATCH" || req.method === "DELETE") && restaurantCustomerItemMatch) {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    try {
+      if (req.method === "DELETE") {
+        softDeleteRestaurantCustomer(restaurantCustomerItemMatch[1], session.restaurant_id);
+        sendJson(res, 200, {
+          ok: true,
+          customers: getRestaurantCustomers(session.restaurant_id),
+          state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, req }),
+        });
+        return;
+      }
+      const { json: body } = await readRequestBody(req);
+      const customer = updateRestaurantCustomer(restaurantCustomerItemMatch[1], session.restaurant_id, body);
+      sendJson(res, 200, {
+        ok: true,
+        customer,
+        customers: getRestaurantCustomers(session.restaurant_id),
+        state: decorateState({ restaurantId: session.restaurant_id, includeRestaurantSecrets: true, req }),
+      });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
     return;
   }
 
@@ -10697,6 +10880,7 @@ async function handleApi(req, res, pathname) {
 
     dbFacade.transaction(() => {
       createPackageRecord(pkg, pkg.packageType, { requestId: req.requestId });
+      touchRestaurantCustomerOrder(pkg.restaurantCustomerId, session.restaurant_id, pkg.createdAt);
       assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
       writeAuditLog({
         actorRole: "restaurant",
@@ -10817,6 +11001,7 @@ async function handleApi(req, res, pathname) {
     }
 
     createPackageRecord(pkg, pkg.packageType, { requestId: req.requestId });
+    touchRestaurantCustomerOrder(pkg.restaurantCustomerId, session.restaurant_id, pkg.createdAt);
     assertPersistedRecord("packages", pkg.id, "package_created", req.requestId);
     rebalancePackages();
 
@@ -12030,7 +12215,7 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  if (req.method === "POST" && pathname === "/api/courier/day-close") {
+  if (req.method === "POST" && (pathname === "/api/courier/day-close" || pathname === "/api/courier/day-end")) {
     const session = getCourierSession(req);
     if (!session) {
       sendJson(res, 401, { error: "Oturum bulunamadi." });
@@ -12065,6 +12250,26 @@ async function handleApi(req, res, pathname) {
       courierDailyReports: getCourierDailyReports(50),
     });
     return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/courier-day-end-reports") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, reports: getCourierDailyReports(200) });
+    return;
+  }
+
+  const adminCourierDayEndApproveMatch = pathname.match(/^\/api\/admin\/courier-day-end-reports\/([^/]+)\/approve$/);
+  if (req.method === "POST" && adminCourierDayEndApproveMatch) {
+    pathname = `/api/admin/day-close/${adminCourierDayEndApproveMatch[1]}/approve`;
+  }
+
+  const adminCourierDayEndRejectMatch = pathname.match(/^\/api\/admin\/courier-day-end-reports\/([^/]+)\/reject$/);
+  if (req.method === "POST" && adminCourierDayEndRejectMatch) {
+    pathname = `/api/admin/day-close/${adminCourierDayEndRejectMatch[1]}/reject`;
   }
 
   if (req.method === "POST" && pathname === "/api/admin/shift-plans") {
@@ -12338,6 +12543,70 @@ async function handleApi(req, res, pathname) {
       restaurantAccounting: buildRestaurantAccounting({ startDate, endDate }),
       restaurantSettlements: getRestaurantSettlements(50),
     });
+    return;
+  }
+
+  const adminAccountingDetailsMatch = pathname.match(/^\/api\/admin\/accounting\/restaurants\/([^/]+)\/details$/);
+  if (req.method === "GET" && adminAccountingDetailsMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const restaurantId = adminAccountingDetailsMatch[1];
+    const restaurant = db.prepare("SELECT id FROM restaurants WHERE id = ?").get(restaurantId);
+    if (!restaurant) {
+      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      details: buildRestaurantAccountingDetails(restaurantId, {
+        startDate: url.searchParams.get("startDate"),
+        endDate: url.searchParams.get("endDate"),
+        paymentMethod: url.searchParams.get("paymentMethod"),
+        paymentStatus: url.searchParams.get("paymentStatus"),
+        collectionStatus: url.searchParams.get("collectionStatus"),
+        courierId: url.searchParams.get("courierId"),
+        paidStatus: url.searchParams.get("paidStatus"),
+      }),
+    });
+    return;
+  }
+
+  const adminAccountingMarkPaidMatch = pathname.match(/^\/api\/admin\/accounting\/restaurants\/([^/]+)\/mark-paid$/);
+  if (req.method === "POST" && adminAccountingMarkPaidMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    const startDate = trimmed(body.startDate) || dayKey();
+    const endDate = trimmed(body.endDate) || startDate;
+    const settlement = upsertRestaurantSettlement(adminAccountingMarkPaidMatch[1], startDate, endDate, {
+      status: "paid",
+      paidAt: body.paidAt,
+      note: body.note,
+    });
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "restaurant_settlement_marked_paid",
+      restaurantId: adminAccountingMarkPaidMatch[1],
+      details: { settlementId: settlement.id, startDate, endDate },
+    });
+    sendJson(res, 200, { ok: true, settlement, ...decorateState({ req }), auditLogs: getAuditLogs(20) });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/settlements") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { ok: true, settlements: getRestaurantSettlements(200) });
     return;
   }
 
