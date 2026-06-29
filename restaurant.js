@@ -27,6 +27,56 @@ const restaurantState = {
   activeWorkspaceCard: "restaurant-integration-wizard",
 };
 
+function mountManualCustomerPanel() {
+  const manualSection = document.getElementById("restaurantWorkspace_manual");
+  const rightColumn = manualSection?.querySelector(".dashboard-grid > div");
+  if (!rightColumn) return;
+
+  document.getElementById("manualPlatformOrderForm")?.closest(".glass-panel")?.remove();
+  document.getElementById("restaurantWorkspace_customers")?.remove();
+
+  rightColumn.insertAdjacentHTML("beforeend", `
+    <section class="glass-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow accent-coral">Musteriler</p>
+          <h3>Kayitli Musteriler</h3>
+        </div>
+        <button id="restaurantCustomerNewButton" class="ghost-btn" type="button">Yeni Musteri</button>
+      </div>
+      <label class="full-width">
+        Telefon / Isim
+        <input id="restaurantCustomerListSearch" type="search" placeholder="Telefon veya isim ara">
+      </label>
+      <div id="restaurantCustomerMissing" class="empty-state hidden"></div>
+      <div id="restaurantCustomerList" class="stack-list"></div>
+      <div id="restaurantCustomerHistory" class="stack-list"></div>
+      <form id="restaurantCustomerForm" class="form-grid hidden">
+        <input id="restaurantCustomerEditId" name="id" type="hidden">
+        <label class="full-width">
+          Musteri Adi
+          <input name="name" type="text" placeholder="Ad Soyad" required>
+        </label>
+        <label class="full-width">
+          Telefon
+          <input name="phone" type="tel" placeholder="05xx xxx xx xx" required>
+        </label>
+        <label class="full-width">
+          Adres
+          <textarea name="address" rows="3" placeholder="Teslimat adresi" required></textarea>
+        </label>
+        <label class="full-width">
+          Not
+          <textarea name="note" rows="2" placeholder="Apartman, tercih, dikkat notu"></textarea>
+        </label>
+        <button class="primary-btn full-width" type="submit">Musteriyi Kaydet</button>
+      </form>
+    </section>
+  `);
+}
+
+mountManualCustomerPanel();
+
 const restaurantRefs = {
   summary: document.getElementById("restaurantSummary"),
   accessForm: document.getElementById("restaurantAccessForm"),
@@ -41,8 +91,12 @@ const restaurantRefs = {
   customerPhoneSearch: document.getElementById("customerPhoneSearch"),
   customerSearchHint: document.getElementById("customerSearchHint"),
   customerForm: document.getElementById("restaurantCustomerForm"),
+  customerEditId: document.getElementById("restaurantCustomerEditId"),
   customerList: document.getElementById("restaurantCustomerList"),
   customerListSearch: document.getElementById("restaurantCustomerListSearch"),
+  customerNewButton: document.getElementById("restaurantCustomerNewButton"),
+  customerMissing: document.getElementById("restaurantCustomerMissing"),
+  customerHistory: document.getElementById("restaurantCustomerHistory"),
   packagePaymentMethod: document.getElementById("packagePaymentMethod"),
   platformSelect: document.getElementById("platformSelect"),
   manualPlatformSelect: document.getElementById("manualPlatformSelect"),
@@ -1452,17 +1506,130 @@ function renderRestaurantNotifications(notifications) {
   renderNotificationCenter(restaurantRefs.notificationCenter, notifications || [], "Restoran icin bildirim yok.");
 }
 
+function normalizeRestaurantPhone(value = "") {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function fillPackageFormFromCustomer(customer) {
+  const elements = restaurantRefs.packageForm?.elements;
+  if (!elements || !customer) return;
+  if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = customer.id || "";
+  if (restaurantRefs.customerPhoneSearch) restaurantRefs.customerPhoneSearch.value = customer.phone || "";
+  if (elements["customerName"]) elements["customerName"].value = customer.name || "";
+  if (elements["phone"]) elements["phone"].value = customer.phone || "";
+  if (elements["deliveryAddress"]) elements["deliveryAddress"].value = customer.address || "";
+  if (elements["customerNote"]) elements["customerNote"].value = customer.note || elements["customerNote"].value || "";
+  if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = `${customer.name || "Musteri"} secildi; paket formu dolduruldu.`;
+}
+
+function renderSelectedCustomerHistory(customer) {
+  if (!restaurantRefs.customerHistory) return;
+  restaurantRefs.customerHistory.innerHTML = "";
+  if (!customer?.id) {
+    restaurantRefs.customerHistory.classList.add("hidden");
+    return;
+  }
+  const customerPhone = normalizeRestaurantPhone(customer.phone);
+  const orders = (restaurantState.data?.packages || [])
+    .filter((item) => {
+      const itemCustomerId = item.restaurantCustomerId || item.customerId || item.customer?.id;
+      if (itemCustomerId && itemCustomerId === customer.id) return true;
+      return customerPhone && normalizeRestaurantPhone(item.phone || item.customerPhone) === customerPhone;
+    })
+    .sort((a, b) => new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0))
+    .slice(0, 5);
+
+  restaurantRefs.customerHistory.classList.remove("hidden");
+  if (!orders.length) {
+    restaurantRefs.customerHistory.innerHTML = '<div class="empty-state">Secilen musterinin siparis gecmisi henuz yok.</div>';
+    return;
+  }
+
+  restaurantRefs.customerHistory.innerHTML = `
+    <div class="stack-card">
+      <div class="stack-top">
+        <div>
+          <strong>${restaurantHtmlSafe(customer.name || "Secilen musteri")}</strong>
+          <p>Siparis gecmisi</p>
+        </div>
+        <span class="soft-badge">${orders.length} kayit</span>
+      </div>
+      ${orders.map((order) => `
+        <p class="soft-copy">
+          ${restaurantHtmlSafe(order.trackingNumber || order.id || "-")} -
+          ${restaurantHtmlSafe(order.status || "-")} -
+          ${formatCurrency(order.orderAmount || order.amount || order.totalPrice || 0)}
+        </p>
+      `).join("")}
+    </div>
+  `;
+}
+
+function showCustomerForm(customer = null) {
+  if (!restaurantRefs.customerForm) return;
+  const form = restaurantRefs.customerForm;
+  const elements = form.elements;
+  const packageElements = restaurantRefs.packageForm?.elements;
+  const phoneSeed = restaurantRefs.customerPhoneSearch?.value || restaurantRefs.customerListSearch?.value || packageElements?.["phone"]?.value || "";
+  form.classList.remove("hidden");
+  elements["id"].value = customer?.id || "";
+  elements["name"].value = customer?.name || packageElements?.["customerName"]?.value || "";
+  elements["phone"].value = customer?.phone || phoneSeed;
+  elements["address"].value = customer?.address || packageElements?.["deliveryAddress"]?.value || "";
+  elements["note"].value = customer?.note || packageElements?.["customerNote"]?.value || "";
+  elements["name"].focus();
+}
+
+function hideCustomerMissing() {
+  if (!restaurantRefs.customerMissing) return;
+  restaurantRefs.customerMissing.classList.add("hidden");
+  restaurantRefs.customerMissing.innerHTML = "";
+}
+
+function renderCustomerMissing(query) {
+  if (!restaurantRefs.customerMissing) return;
+  const phone = query || restaurantRefs.customerPhoneSearch?.value || "";
+  const digits = normalizeRestaurantPhone(phone);
+  if (digits.length < 5) {
+    hideCustomerMissing();
+    return;
+  }
+  restaurantRefs.customerMissing.classList.remove("hidden");
+  restaurantRefs.customerMissing.innerHTML = `
+    <p>Bu numara kayitli degil, yeni musteri olarak ekle.</p>
+    <button class="ghost-btn missing-customer-add-btn" type="button">Yeni Musteri Olarak Ekle</button>
+  `;
+  restaurantRefs.customerMissing.querySelector(".missing-customer-add-btn")?.addEventListener("click", () => {
+    showCustomerForm({ phone });
+  });
+}
+
+function selectRestaurantCustomer(customer) {
+  if (!customer) return;
+  fillPackageFormFromCustomer(customer);
+  renderSelectedCustomerHistory(customer);
+  renderRestaurantCustomers(restaurantState.data?.customers || []);
+  setActiveWorkspaceSection("restaurantWorkspace_manual");
+  showToast("Musteri bilgileri manuel paket formuna aktarildi.");
+}
+
 function renderRestaurantCustomers(customers = []) {
   if (!restaurantRefs.customerList) {
     return;
   }
   const query = (restaurantRefs.customerListSearch?.value || "").trim().toLowerCase();
+  const selectedId = restaurantRefs.restaurantCustomerId?.value || "";
   const filtered = (customers || []).filter((customer) => {
     if (!query) return true;
     return [customer.name, customer.phone, customer.address, customer.note]
       .some((value) => String(value || "").toLowerCase().includes(query));
   });
-  const signature = `${query}|${listRenderSignature(filtered, ["id", "name", "phone", "address", "note", "orderCount", "lastOrderAt", "updatedAt"])}`;
+  if (filtered.length) {
+    hideCustomerMissing();
+  } else {
+    renderCustomerMissing(query);
+  }
+  const signature = `${query}|${selectedId}|${listRenderSignature(filtered, ["id", "name", "phone", "address", "note", "orderCount", "lastOrderAt", "updatedAt"])}`;
   if (restaurantRefs.customerList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1475,6 +1642,9 @@ function renderRestaurantCustomers(customers = []) {
   filtered.forEach((customer) => {
     const card = document.createElement("article");
     card.className = "stack-card";
+    if (selectedId && customer.id === selectedId) {
+      card.classList.add("selected");
+    }
     card.innerHTML = `
       <div class="stack-top">
         <div>
@@ -1487,20 +1657,34 @@ function renderRestaurantCustomers(customers = []) {
       </div>
       <p class="soft-copy">Son siparis: ${customer.lastOrderAt ? formatDate(customer.lastOrderAt) : "-"}</p>
       <div class="card-actions">
-        <button class="ghost-btn use-customer-btn" type="button">Manuel Pakete Aktar</button>
+        <button class="ghost-btn use-customer-btn" type="button">Musteri Sec</button>
+        <button class="ghost-btn edit-customer-btn" type="button">Duzenle</button>
+        <button class="ghost-btn delete-customer-btn" type="button">Sil / Pasife Al</button>
       </div>
     `;
-    card.querySelector(".use-customer-btn")?.addEventListener("click", () => {
-      const elements = restaurantRefs.packageForm?.elements;
-      if (!elements) return;
-      if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = customer.id;
-      if (restaurantRefs.customerPhoneSearch) restaurantRefs.customerPhoneSearch.value = customer.phone || "";
-      if (elements["customerName"]) elements["customerName"].value = customer.name || "";
-      if (elements["phone"]) elements["phone"].value = customer.phone || "";
-      if (elements["deliveryAddress"]) elements["deliveryAddress"].value = customer.address || "";
-      if (elements["customerNote"] && customer.note) elements["customerNote"].value = customer.note;
-      setActiveWorkspaceSection("restaurantWorkspace_manual");
-      showToast("Musteri bilgileri manuel paket formuna aktarildi.");
+    card.querySelector(".use-customer-btn")?.addEventListener("click", () => selectRestaurantCustomer(customer));
+    card.querySelector(".edit-customer-btn")?.addEventListener("click", () => showCustomerForm(customer));
+    card.querySelector(".delete-customer-btn")?.addEventListener("click", async () => {
+      if (!confirm(`${customer.name || customer.phone || "Musteri"} pasife alinsin mi?`)) return;
+      try {
+        const data = await api(`/api/customers/${encodeURIComponent(customer.id)}`, {
+          method: "DELETE",
+          headers: restaurantAuthHeaders(),
+          retryWithRefresh: refreshRestaurantAccess,
+        });
+        if (restaurantRefs.restaurantCustomerId?.value === customer.id) {
+          restaurantRefs.restaurantCustomerId.value = "";
+          renderSelectedCustomerHistory(null);
+        }
+        if (data.state) {
+          hydrateRestaurant(data.state);
+        } else {
+          await loadRestaurantWorkspace({ silent: true, force: true });
+        }
+        showToast("Musteri pasife alindi.");
+      } catch (error) {
+        showToast(error.message || "Musteri pasife alinamadi.", "error");
+      }
     });
     restaurantRefs.customerList.appendChild(card);
   });
@@ -1935,6 +2119,10 @@ restaurantRefs.customerListSearch?.addEventListener("input", () => {
   }, 120);
 });
 
+restaurantRefs.customerNewButton?.addEventListener("click", () => {
+  showCustomerForm();
+});
+
 restaurantRefs.customerForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!restaurantState.token) {
@@ -1947,9 +2135,13 @@ restaurantRefs.customerForm?.addEventListener("submit", async (event) => {
     return;
   }
   const formData = new FormData(restaurantRefs.customerForm);
+  const customerId = formData.get("id");
+  const isEdit = Boolean(customerId);
   try {
-    const data = await api(`/api/restaurants/${encodeURIComponent(currentRestaurantId)}/customers`, {
-      method: "POST",
+    const data = await api(isEdit
+      ? `/api/customers/${encodeURIComponent(customerId)}`
+      : `/api/restaurants/${encodeURIComponent(currentRestaurantId)}/customers`, {
+      method: isEdit ? "PATCH" : "POST",
       headers: restaurantAuthHeaders(),
       retryWithRefresh: refreshRestaurantAccess,
       body: JSON.stringify({
@@ -1960,12 +2152,21 @@ restaurantRefs.customerForm?.addEventListener("submit", async (event) => {
       }),
     });
     restaurantRefs.customerForm.reset();
+    restaurantRefs.customerForm.classList.add("hidden");
     if (data.state) {
       hydrateRestaurant(data.state);
     } else {
       await loadRestaurantWorkspace({ silent: true, force: true });
     }
-    showToast("Musteri kaydedildi.");
+    const savedPhone = normalizeRestaurantPhone(formData.get("phone"));
+    const savedCustomer = data.customer || (data.state?.customers || []).find((item) =>
+      (customerId && item.id === customerId) || normalizeRestaurantPhone(item.phone) === savedPhone
+    );
+    if (savedCustomer) {
+      fillPackageFormFromCustomer(savedCustomer);
+      renderSelectedCustomerHistory(savedCustomer);
+    }
+    showToast(isEdit ? "Musteri guncellendi." : "Musteri kaydedildi.");
   } catch (error) {
     showToast(error.message || "Musteri kaydedilemedi.", "error");
   }
@@ -1977,8 +2178,13 @@ restaurantRefs.customerPhoneSearch?.addEventListener("input", () => {
   if (restaurantRefs.restaurantCustomerId) {
     restaurantRefs.restaurantCustomerId.value = "";
   }
+  if (restaurantRefs.customerListSearch) {
+    restaurantRefs.customerListSearch.value = phone;
+  }
+  renderRestaurantCustomers(restaurantState.data?.customers || []);
   if (!phone || phone.replace(/\D/g, "").length < 5) {
     if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Telefon yazinca kayitli musteri aranir.";
+    hideCustomerMissing();
     return;
   }
   customerSearchTimer = setTimeout(async () => {
@@ -1990,14 +2196,11 @@ restaurantRefs.customerPhoneSearch?.addEventListener("input", () => {
       const customer = data.customers?.[0];
       if (!customer) {
         if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Kayitli musteri bulunamadi; bilgileri girersen yeni kayit acilir.";
+        renderCustomerMissing(phone);
         return;
       }
-      const elements = restaurantRefs.packageForm.elements;
-      if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = customer.id;
-      if (elements["customerName"]) elements["customerName"].value = customer.name || "";
-      if (elements["phone"]) elements["phone"].value = customer.phone || "";
-      if (elements["deliveryAddress"]) elements["deliveryAddress"].value = customer.address || "";
-      if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = `${customer.name} bulundu; adres forma dolduruldu.`;
+      if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = `${customer.name || "Musteri"} bulundu; sag listeden tek tikla sec.`;
+      renderRestaurantCustomers(data.customers || []);
     } catch (error) {
       if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = error.message || "Musteri aramasi basarisiz.";
     }
@@ -2058,7 +2261,10 @@ restaurantRefs.packageForm.addEventListener("submit", async (event) => {
     }
     restaurantRefs.packageForm.reset();
     if (restaurantRefs.restaurantCustomerId) restaurantRefs.restaurantCustomerId.value = "";
+    if (restaurantRefs.customerListSearch) restaurantRefs.customerListSearch.value = "";
     if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Telefon yazinca kayitli musteri aranir.";
+    hideCustomerMissing();
+    renderSelectedCustomerHistory(null);
     if (restaurantRefs.packageImagePreview) {
       restaurantRefs.packageImagePreview.style.display = "none";
       restaurantRefs.packageImagePreview.src = "";
