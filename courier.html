@@ -57,6 +57,26 @@
           <span id="courierLiveBadge" class="soft-badge" style="margin-top: 12px; display: inline-block;">Canlı akış bekleniyor</span>
         </div>
 
+        <div id="courierOfferOverlay" class="courier-offer-overlay hidden" aria-hidden="true">
+          <article class="courier-offer-card glass-panel dark-panel" role="dialog" aria-modal="true" aria-labelledby="courierOfferTitle">
+            <div class="courier-offer-kicker">Yeni Paket Talebi</div>
+            <div class="courier-offer-head">
+              <div>
+                <p class="eyebrow accent-gold">Hemen karar ver</p>
+                <h2 id="courierOfferTitle">Yeni Paket Talebi</h2>
+                <p id="courierOfferSubtitle" class="soft-copy">Paket bilgileri yukleniyor.</p>
+              </div>
+              <span id="courierOfferCode" class="soft-badge">Paket</span>
+            </div>
+            <div id="courierOfferDetails" class="courier-offer-details"></div>
+            <p id="courierOfferError" class="courier-offer-error hidden"></p>
+            <div class="courier-offer-actions">
+              <button id="courierOfferAccept" class="courier-offer-btn courier-offer-accept" type="button">Paketi Kabul Et</button>
+              <button id="courierOfferReject" class="courier-offer-btn courier-offer-reject" type="button">Paketi Reddet</button>
+            </div>
+          </article>
+        </div>
+
         <div class="courier-focus-card glass-panel dark-panel accent-border" style="margin-top: 16px; text-align: center; padding: 24px;">
           <p class="eyebrow accent-gold">Sıradaki İş</p>
           <strong id="courierFocusTitle" style="font-size: 1.6rem; display: block; margin: 12px 0;">Aktif görev bekleniyor.</strong>

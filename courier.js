@@ -26,6 +26,8 @@ const courierState = {
   connectionBusy: false,
   focusPackage: null,
   activeProfileSection: "",
+  offerPackageId: "",
+  offerBusy: false,
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -132,6 +134,14 @@ const courierRefs = {
   focusLabel: document.querySelector(".courier-focus-card .eyebrow"),
   focusTitle: document.getElementById("courierFocusTitle"),
   focusText: document.getElementById("courierFocusText"),
+  offerOverlay: document.getElementById("courierOfferOverlay"),
+  offerTitle: document.getElementById("courierOfferTitle"),
+  offerSubtitle: document.getElementById("courierOfferSubtitle"),
+  offerCode: document.getElementById("courierOfferCode"),
+  offerDetails: document.getElementById("courierOfferDetails"),
+  offerError: document.getElementById("courierOfferError"),
+  offerAccept: document.getElementById("courierOfferAccept"),
+  offerReject: document.getElementById("courierOfferReject"),
   missionMeta: document.getElementById("courierMissionMeta"),
   destinationMap: document.getElementById("courierDestinationMap"),
   mapTitle: document.getElementById("courierMapTitle"),
@@ -564,6 +574,120 @@ function processIncomingPackageNotifications(packages) {
   });
 
   courierState.lastPackageSnapshot = nextSnapshot;
+}
+
+function packageCodeForCourier(pkg) {
+  return presentCourierText(pkg?.trackingNo || pkg?.externalOrderNo || pkg?.platformOrderId || pkg?.id, "Paket kodu yok");
+}
+
+function setCourierOfferBusy(isBusy, action = "") {
+  courierState.offerBusy = isBusy;
+  [courierRefs.offerAccept, courierRefs.offerReject].forEach((button) => {
+    if (button) button.disabled = isBusy;
+  });
+  if (courierRefs.offerAccept) {
+    courierRefs.offerAccept.textContent = isBusy && action === "accept" ? "Kabul ediliyor..." : "Paketi Kabul Et";
+  }
+  if (courierRefs.offerReject) {
+    courierRefs.offerReject.textContent = isBusy && action === "reject" ? "Reddediliyor..." : "Paketi Reddet";
+  }
+}
+
+function setCourierOfferError(message = "") {
+  if (!courierRefs.offerError) return;
+  courierRefs.offerError.textContent = message;
+  courierRefs.offerError.classList.toggle("hidden", !message);
+}
+
+function setCourierOfferVisible(isVisible) {
+  courierRefs.offerOverlay?.classList.toggle("hidden", !isVisible);
+  courierRefs.offerOverlay?.setAttribute("aria-hidden", isVisible ? "false" : "true");
+  document.body.classList.toggle("courier-offer-open", isVisible);
+}
+
+function hideCourierOffer() {
+  courierState.offerPackageId = "";
+  setCourierOfferBusy(false);
+  setCourierOfferError("");
+  setCourierOfferVisible(false);
+}
+
+function renderCourierOffer(courier, packages = []) {
+  const assignedPackages = packages
+    .filter((pkg) => pkg.status === "assigned" && isActiveCourierPackage(pkg))
+    .sort((left, right) => new Date(left.assignedAt || left.createdAt || 0) - new Date(right.assignedAt || right.createdAt || 0));
+  const offerPackage = assignedPackages[0] || null;
+
+  if (!offerPackage || !courier?.available) {
+    if (!courierState.offerBusy) {
+      hideCourierOffer();
+    }
+    return;
+  }
+
+  courierState.offerPackageId = offerPackage.id;
+  const deliveryAddress = presentCourierText(offerPackage.deliveryAddress || offerPackage.address || offerPackage.customerAddress, "Adres yok");
+  const note = presentCourierText(offerPackage.customerNote || offerPackage.note, "");
+  const distanceText = Number.isFinite(Number(offerPackage.distanceKm))
+    ? `${Number(offerPackage.distanceKm).toFixed(1)} km`
+    : presentCourierText(offerPackage.eta, "Mesafe hesaplanmadi");
+
+  if (courierRefs.offerTitle) courierRefs.offerTitle.textContent = "Yeni Paket Talebi";
+  if (courierRefs.offerSubtitle) courierRefs.offerSubtitle.textContent = `${presentCourierText(offerPackage.restaurantName, "Restoran")} cikisli paket`;
+  if (courierRefs.offerCode) courierRefs.offerCode.textContent = packageCodeForCourier(offerPackage);
+  if (courierRefs.offerDetails) {
+    courierRefs.offerDetails.innerHTML = [
+      ["Paket kodu", packageCodeForCourier(offerPackage)],
+      ["Restoran", presentCourierText(offerPackage.restaurantName, "Restoran yok")],
+      ["Musteri", presentCourierText(offerPackage.recipient, "Musteri yok")],
+      ["Teslimat adresi", deliveryAddress, "wide"],
+      ["Tahmini ucret", presentCourierAmount(offerPackage.orderAmount)],
+      ["Tahmini mesafe", distanceText],
+      ["Odeme tipi", presentCourierPayment(offerPackage)],
+      ...(note ? [["Siparis notu", note, "wide"]] : []),
+    ].map(([label, value, wide]) => `
+      <div class="${wide ? "courier-offer-detail-wide" : ""}">
+        <span>${escapeCourierHtml(label)}</span>
+        <strong>${escapeCourierHtml(value)}</strong>
+      </div>
+    `).join("");
+  }
+  setCourierOfferError("");
+  setCourierOfferVisible(true);
+}
+
+async function submitCourierOfferAction(action) {
+  if (courierState.offerBusy) return;
+  const packageId = courierState.offerPackageId;
+  if (!packageId) return;
+  if (!courierState.data?.courier?.available) {
+    setCourierOfferError("Offline durumdasin. Paketi almak icin once online ol.");
+    showToast("Offline durumdasin. Once baglan.", "error");
+    return;
+  }
+
+  setCourierOfferBusy(true, action);
+  setCourierOfferError("");
+  try {
+    const endpoint = action === "accept"
+      ? `/api/courier/packages/${encodeURIComponent(packageId)}/status`
+      : `/api/courier/packages/${encodeURIComponent(packageId)}/reject`;
+    const updatedWorkspace = await api(endpoint, {
+      method: action === "accept" ? "PATCH" : "POST",
+      headers: authHeaders(courierState.token),
+      body: action === "accept" ? JSON.stringify({ status: "accepted_by_courier" }) : "{}",
+      retryWithRefresh: refreshCourierAccess,
+    });
+    hideCourierOffer();
+    hydrateCourierWorkspace(updatedWorkspace);
+    setActiveWorkspaceSection("courierWorkspace_active_missions");
+    showToast(action === "accept" ? "Paket kabul edildi." : "Paket reddedildi, yeni kurye aranıyor.");
+  } catch (error) {
+    setCourierOfferError(error.message || "Islem tamamlanamadi.");
+    showToast(error.message || "Islem tamamlanamadi.", "error");
+  } finally {
+    setCourierOfferBusy(false);
+  }
 }
 
 function packageRenderSignature(pkg) {
@@ -1359,6 +1483,7 @@ function hydrateCourierWorkspace(data) {
   if (courierState.lastHydrateSignature === nextSignature) {
     courierState.data = data;
     setLoggedIn(true);
+    renderCourierOffer(data.courier, data.packages);
     return;
   }
   courierState.lastHydrateSignature = nextSignature;
@@ -1382,6 +1507,7 @@ function hydrateCourierWorkspace(data) {
   restoreCourierConnectionFromWorkspace(data.courier);
   setShiftGreetingStatus(data.courier.available);
   syncConnectionSwitch(data.courier);
+  renderCourierOffer(data.courier, data.packages);
   renderCourierStats(data.courier, data.packages);
   renderCourierDayMetrics(data.dayMetrics);
   renderCourierEarnings(data.earningsSummary);
@@ -1410,6 +1536,14 @@ courierRefs.historyMore?.addEventListener("click", () => {
   if (courierState.data) {
     renderCourierHistory(courierState.data.packages || [], courierState.data.historyPackages || null);
   }
+});
+
+courierRefs.offerAccept?.addEventListener("click", () => {
+  submitCourierOfferAction("accept");
+});
+
+courierRefs.offerReject?.addEventListener("click", () => {
+  submitCourierOfferAction("reject");
 });
 
 courierRefs.mapButton?.addEventListener("click", () => {

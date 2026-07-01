@@ -5970,13 +5970,15 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
     return false;
   }
 
+  const excludedCourierIds = normalizeIdList([
+    ...(pkg.assignmentTriedCourierIds || []),
+    ...(offerExpired && pkg.assignedCourierId ? [pkg.assignedCourierId] : []),
+  ]);
   const ranked = rankEligibleCouriers(
     state,
     pkg,
     occupiedCourierLoads,
-    offerExpired
-      ? { excludedCourierIds: normalizeIdList([...(pkg.assignmentTriedCourierIds || []), pkg.assignedCourierId]) }
-      : {}
+    excludedCourierIds.length ? { excludedCourierIds } : {}
   );
   if (ranked.length === 0) {
     const failure = evaluateAssignmentFailure(state, pkg);
@@ -12545,6 +12547,75 @@ async function handleApi(req, res, pathname) {
       courierId: session.courier_id,
       restaurantId: target.restaurant_id,
       message: `Paket durumu ${nextStatus} oldu.`,
+    });
+    sendJson(res, 200, workspace || { courier: null, packages: [] });
+    return;
+  }
+
+  const courierPackageRejectMatch = pathname.match(/^\/api\/courier\/packages\/([^/]+)\/reject$/);
+  if (req.method === "POST" && courierPackageRejectMatch) {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Oturum bulunamadi." });
+      return;
+    }
+
+    const retryAfter = await applyRateLimit(req, "courierStatus", RATE_LIMITS.courierStatus);
+    if (retryAfter !== null) {
+      res.setHeader("Retry-After", String(retryAfter));
+      sendJson(res, 429, { error: "Paket islem limiti asildi." });
+      return;
+    }
+
+    const packageId = courierPackageRejectMatch[1];
+    const target = db.prepare("SELECT * FROM packages WHERE id = ? AND assigned_courier_id = ?").get(packageId, session.courier_id);
+    if (!target) {
+      sendJson(res, 404, { error: "Paket bulunamadi." });
+      return;
+    }
+
+    if (normalizeStatus(target.status) !== ASSIGNED_STATUS) {
+      sendJson(res, 400, { error: "Bu paket artik teklif durumunda degil." });
+      return;
+    }
+
+    clearAssignmentRetry(packageId);
+    appendTriedCourier(packageId, session.courier_id);
+    const stamp = nowIso();
+    db.prepare(`
+      UPDATE packages
+      SET status = ?, assignment_status = ?, assigned_courier_id = NULL, assigned_courier_name = NULL,
+          assigned_at = NULL, distance_km = NULL, assignment_reason = ?, last_assignment_attempt_at = ?,
+          last_assignment_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      AWAITING_ASSIGNMENT_STATUS,
+      "pending",
+      `${target.assigned_courier_name || "Kurye"} paketi reddetti; yeniden atama bekleniyor.`,
+      stamp,
+      "kurye reddetti",
+      stamp,
+      packageId
+    );
+
+    rebalancePackages();
+    const workspace = buildCourierWorkspace(session.courier_id);
+    writeAuditLog({
+      actorRole: "courier",
+      actorId: session.courier_id,
+      action: "courier_package_rejected",
+      packageId,
+      restaurantId: target.restaurant_id,
+      details: {
+        from: ASSIGNED_STATUS,
+        to: AWAITING_ASSIGNMENT_STATUS,
+      },
+    });
+    broadcastLiveEvent({
+      type: "assignment-waiting",
+      courierId: session.courier_id,
+      restaurantId: target.restaurant_id,
+      message: `${target.tracking_no || target.id} paketi kurye tarafindan reddedildi, yeniden atama araniyor.`,
     });
     sendJson(res, 200, workspace || { courier: null, packages: [] });
     return;
