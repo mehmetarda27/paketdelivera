@@ -10423,32 +10423,59 @@ async function handleApi(req, res, pathname) {
     const sinceClause = isPostgres
       ? "COALESCE(NULLIF(delivered_at::text, '')::timestamp, NULLIF(updated_at::text, '')::timestamp, NULLIF(created_at::text, '')::timestamp) >= NOW() - INTERVAL '6 months'"
       : "COALESCE(delivered_at, updated_at, created_at) >= date('now', '-6 months')";
-    const paymentExpr = "LOWER(COALESCE(payment_method, '') || ' ' || COALESCE(payment_status, ''))";
-
     const sql = `
       SELECT 
         ${reportDateExpr} as date,
+        id,
+        tracking_no,
         COALESCE(assigned_courier_name, 'Bilinmiyor') as courier_name,
-        SUM(COALESCE(order_amount, 0)) as total_revenue,
-        SUM(CASE WHEN ${paymentExpr} LIKE '%cash%' OR ${paymentExpr} LIKE '%nakit%' THEN COALESCE(order_amount, 0) ELSE 0 END) as cash_revenue,
-        SUM(CASE WHEN ${paymentExpr} LIKE '%card%' OR ${paymentExpr} LIKE '%kart%' OR ${paymentExpr} LIKE '%kredi%' THEN COALESCE(order_amount, 0) ELSE 0 END) as card_revenue,
-        SUM(CASE WHEN ${paymentExpr} LIKE '%online%' OR ${paymentExpr} LIKE '%paid_online%' THEN COALESCE(order_amount, 0) ELSE 0 END) as online_revenue,
-        COUNT(id) as package_count
+        order_amount,
+        payment_method,
+        payment_status
       FROM packages
       WHERE restaurant_id = ? 
         AND status = 'delivered'
         AND ${sinceClause}
-      GROUP BY ${reportDateExpr}, COALESCE(assigned_courier_name, 'Bilinmiyor')
       ORDER BY date DESC, courier_name ASC
     `;
-    const rows = db.prepare(sql).all(session.restaurant_id).map((row) => ({
-      ...row,
-      package_count: Number(row.package_count || 0),
-      cash_revenue: Number(row.cash_revenue || 0),
-      card_revenue: Number(row.card_revenue || 0),
-      online_revenue: Number(row.online_revenue || 0),
-      total_revenue: Number(row.total_revenue || 0),
-    }));
+    const packageRows = db.prepare(sql).all(session.restaurant_id);
+    const seenPackages = new Set();
+    const reportMap = new Map();
+    for (const pkg of packageRows) {
+      const uniqueKey = pkg.id || pkg.tracking_no;
+      if (!uniqueKey || seenPackages.has(uniqueKey)) continue;
+      seenPackages.add(uniqueKey);
+
+      const date = pkg.date || "";
+      const courierName = pkg.courier_name || "Bilinmiyor";
+      const mapKey = `${date}::${courierName}`;
+      if (!reportMap.has(mapKey)) {
+        reportMap.set(mapKey, {
+          date,
+          courier_name: courierName,
+          package_count: 0,
+          cash_revenue: 0,
+          card_revenue: 0,
+          online_revenue: 0,
+          total_revenue: 0,
+        });
+      }
+      const row = reportMap.get(mapKey);
+      const amount = normalizeMoney(pkg.order_amount);
+      const paymentText = `${pkg.payment_method || ""} ${pkg.payment_status || ""}`.toLowerCase();
+      row.package_count += 1;
+      row.total_revenue = normalizeMoney(row.total_revenue + amount);
+      if (paymentText.includes("cash") || paymentText.includes("nakit")) {
+        row.cash_revenue = normalizeMoney(row.cash_revenue + amount);
+      } else if (paymentText.includes("card") || paymentText.includes("kart") || paymentText.includes("kredi")) {
+        row.card_revenue = normalizeMoney(row.card_revenue + amount);
+      } else {
+        row.online_revenue = normalizeMoney(row.online_revenue + amount);
+      }
+    }
+    const rows = Array.from(reportMap.values()).sort((a, b) => (
+      String(b.date).localeCompare(String(a.date)) || String(a.courier_name).localeCompare(String(b.courier_name), "tr")
+    ));
     sendJson(res, 200, { ok: true, reports: rows });
     return;
   }
@@ -10462,6 +10489,7 @@ async function handleApi(req, res, pathname) {
 
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const dateParam = requestUrl.searchParams.get("date");
+    const courierParam = requestUrl.searchParams.get("courier");
     if (!dateParam) {
       sendJson(res, 400, { error: "Tarih parametresi gereklidir. Örnek: ?date=2026-06-19" });
       return;
@@ -10472,6 +10500,16 @@ async function handleApi(req, res, pathname) {
     const reportDateExpr = isPostgres
       ? "TO_CHAR(COALESCE(NULLIF(delivered_at::text, '')::timestamp, NULLIF(updated_at::text, '')::timestamp, NULLIF(created_at::text, '')::timestamp), 'YYYY-MM-DD')"
       : "DATE(COALESCE(delivered_at, updated_at, created_at), 'localtime')";
+    const whereParts = [
+      "restaurant_id = ?",
+      "status = 'delivered'",
+      `${reportDateExpr} = ?`,
+    ];
+    const params = [session.restaurant_id, dateParam];
+    if (courierParam) {
+      whereParts.push("COALESCE(assigned_courier_name, 'Bilinmiyor') = ?");
+      params.push(courierParam);
+    }
 
     const detailSql = `
       SELECT
@@ -10483,12 +10521,28 @@ async function handleApi(req, res, pathname) {
         distance_km,
         note, customer_note, status
       FROM packages
-      WHERE restaurant_id = ?
-        AND status = 'delivered'
-        AND ${reportDateExpr} = ?
+      WHERE ${whereParts.join("\n        AND ")}
       ORDER BY COALESCE(delivered_at, updated_at, created_at) ASC
     `;
-    const packages = db.prepare(detailSql).all(session.restaurant_id, dateParam);
+    const rawPackages = db.prepare(detailSql).all(...params);
+    const seenDetailPackages = new Set();
+    const packages = [];
+    for (const pkg of rawPackages) {
+      const uniqueKey = pkg.id || pkg.tracking_no;
+      if (!uniqueKey || seenDetailPackages.has(uniqueKey)) continue;
+      seenDetailPackages.add(uniqueKey);
+      packages.push({ ...pkg, order_amount: normalizeMoney(pkg.order_amount) });
+    }
+
+    for (const pkg of packages) {
+      pkg.audit_history = db.prepare(`
+        SELECT action, details_json, created_at
+        FROM audit_logs
+        WHERE package_id = ?
+        ORDER BY id ASC
+        LIMIT 6
+      `).all(pkg.id);
+    }
 
     // Özet hesapla
     let total_revenue = 0;
@@ -10498,7 +10552,7 @@ async function handleApi(req, res, pathname) {
     const courierMap = {};
 
     for (const pkg of packages) {
-      const amt = Number(pkg.order_amount) || 0;
+      const amt = normalizeMoney(pkg.order_amount);
       total_revenue += amt;
       const paymentText = `${pkg.payment_method || ""} ${pkg.payment_status || ""}`.toLowerCase();
 
@@ -10515,7 +10569,7 @@ async function handleApi(req, res, pathname) {
         courierMap[courierName] = { name: courierName, package_count: 0, total_revenue: 0 };
       }
       courierMap[courierName].package_count += 1;
-      courierMap[courierName].total_revenue += amt;
+      courierMap[courierName].total_revenue = normalizeMoney(courierMap[courierName].total_revenue + amt);
     }
 
     const couriers = Object.values(courierMap).sort((a, b) => b.package_count - a.package_count);
@@ -10525,10 +10579,10 @@ async function handleApi(req, res, pathname) {
       date: dateParam,
       summary: {
         total_packages: packages.length,
-        total_revenue,
-        cash_revenue,
-        card_revenue,
-        online_revenue
+        total_revenue: normalizeMoney(total_revenue),
+        cash_revenue: normalizeMoney(cash_revenue),
+        card_revenue: normalizeMoney(card_revenue),
+        online_revenue: normalizeMoney(online_revenue)
       },
       couriers,
       packages

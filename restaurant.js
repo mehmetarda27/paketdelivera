@@ -260,6 +260,14 @@ const restaurantRefs = {
   integrationWizardSteps: document.getElementById("integrationWizardSteps"),
   reportTableBody: document.getElementById("restaurantReportTableBody"),
   printReportButton: document.getElementById("printReportButton"),
+  reportDetailSection: document.getElementById("reportDetailSection"),
+  reportDetailTitle: document.getElementById("reportDetailTitle"),
+  reportDetailSubtitle: document.getElementById("reportDetailSubtitle"),
+  reportCourierSummary: document.getElementById("reportCourierSummary"),
+  reportDetailTableBody: document.getElementById("reportDetailTableBody"),
+  exportReportExcel: document.getElementById("exportReportExcel"),
+  exportDetailExcel: document.getElementById("exportDetailExcel"),
+  closeReportDetail: document.getElementById("closeReportDetail"),
   integrationWizardWebhook: document.getElementById("integrationWizardWebhook"),
   integrationWizardStatus: document.getElementById("integrationWizardStatus"),
   copyWebhookButton: document.getElementById("copyWebhookButton"),
@@ -2587,6 +2595,7 @@ window.addEventListener("beforeunload", stopRestaurantWorkspacePolling);
 let _lastReportData = null;
 let _lastDetailData = null;
 let _lastDetailDate = null;
+let _lastDetailCourier = "";
 
 const _reportDetailRefs = {
   section: restaurantRefs.reportDetailSection,
@@ -2622,6 +2631,14 @@ function reportEscapeCsv(value = "") {
   return String(value ?? "").replace(/;/g, ",").replace(/\r?\n/g, " ");
 }
 
+function reportXmlSafe(value = "") {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function syncReportTableHeaders() {
   const summaryTable = restaurantRefs.reportTableBody?.closest("table");
   const detailTable = _reportDetailRefs.detailBody?.closest("table");
@@ -2646,30 +2663,116 @@ function syncReportTableHeaders() {
       <tr>
         <th>Paket Kodu</th>
         <th>Müşteri</th>
+        <th>Telefon</th>
         <th>Adres</th>
         <th style="text-align:right;">Tutar</th>
         <th>Ödeme Tipi</th>
         <th>Kurye</th>
         <th>Teslim Saati</th>
         <th>Durum</th>
+        <th>İşlem Geçmişi</th>
       </tr>
     `;
   }
 }
 
+function reportColumnName(index) {
+  let name = "";
+  let n = index + 1;
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function reportCrc32(bytes) {
+  let crc = -1;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function reportUint16(value) {
+  return [value & 255, (value >>> 8) & 255];
+}
+
+function reportUint32(value) {
+  return [value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255];
+}
+
+function reportZipStore(files) {
+  const encoder = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const dataBytes = encoder.encode(file.content);
+    const crc = reportCrc32(dataBytes);
+    const local = new Uint8Array([
+      ...reportUint32(0x04034b50), ...reportUint16(20), ...reportUint16(0), ...reportUint16(0),
+      ...reportUint16(0), ...reportUint16(0), ...reportUint32(crc), ...reportUint32(dataBytes.length),
+      ...reportUint32(dataBytes.length), ...reportUint16(nameBytes.length), ...reportUint16(0),
+    ]);
+    chunks.push(local, nameBytes, dataBytes);
+    central.push({ nameBytes, crc, size: dataBytes.length, offset });
+    offset += local.length + nameBytes.length + dataBytes.length;
+  }
+  const centralOffset = offset;
+  for (const entry of central) {
+    const header = new Uint8Array([
+      ...reportUint32(0x02014b50), ...reportUint16(20), ...reportUint16(20), ...reportUint16(0),
+      ...reportUint16(0), ...reportUint16(0), ...reportUint16(0), ...reportUint32(entry.crc),
+      ...reportUint32(entry.size), ...reportUint32(entry.size), ...reportUint16(entry.nameBytes.length),
+      ...reportUint16(0), ...reportUint16(0), ...reportUint16(0), ...reportUint16(0), ...reportUint32(0),
+      ...reportUint32(entry.offset),
+    ]);
+    chunks.push(header, entry.nameBytes);
+    offset += header.length + entry.nameBytes.length;
+  }
+  const centralSize = offset - centralOffset;
+  chunks.push(new Uint8Array([
+    ...reportUint32(0x06054b50), ...reportUint16(0), ...reportUint16(0), ...reportUint16(central.length),
+    ...reportUint16(central.length), ...reportUint32(centralSize), ...reportUint32(centralOffset), ...reportUint16(0),
+  ]));
+  return new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 function exportToExcel(rows, filename) {
-  // BOM for Turkish character support in Excel
-  const BOM = "\uFEFF";
-  const csv = rows.map((r) => r.map(reportEscapeCsv).join(";")).join("\r\n");
-  const blob = new Blob([BOM + csv], { type: "text/csv;charset=utf-8;" });
+  const sheetRows = rows.map((row, rowIndex) => {
+    const cells = row.map((value, colIndex) => {
+      const ref = `${reportColumnName(colIndex)}${rowIndex + 1}`;
+      const isNumber = typeof value === "number" && Number.isFinite(value);
+      if (isNumber) return `<c r="${ref}"><v>${value}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t>${reportXmlSafe(value)}</t></is></c>`;
+    }).join("");
+    return `<row r="${rowIndex + 1}">${cells}</row>`;
+  }).join("");
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`;
+  const files = [
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Gün Sonu Raporu" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>` },
+    { name: "xl/worksheets/sheet1.xml", content: sheet },
+  ];
+  const blob = reportZipStore(files);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.download = filename.replace(/\.csv$/i, ".xlsx");
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
 
 // ── Summary Report Loader (click-to-detail rows) ────────────────────
@@ -2711,7 +2814,7 @@ async function loadRestaurantReports() {
         <td style="text-align:right;">${_formatTRY(r.online_revenue)}</td>
         <td style="text-align:right;font-weight:700;">${_formatTRY(r.total_revenue)}</td>
         <td style="text-align:right;">
-          <button class="ghost-btn report-detail-btn" type="button" data-report-date="${restaurantHtmlSafe(r.date)}">Detay</button>
+          <button class="ghost-btn report-detail-btn" type="button" data-report-date="${restaurantHtmlSafe(r.date)}" data-report-courier="${restaurantHtmlSafe(r.courier_name || "Bilinmiyor")}">Detay</button>
         </td>
       </tr>`
       )
@@ -2721,7 +2824,7 @@ async function loadRestaurantReports() {
 
     restaurantRefs.reportTableBody.querySelectorAll(".report-detail-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
-        loadReportDetail(btn.dataset.reportDate);
+        loadReportDetail(btn.dataset.reportDate, btn.dataset.reportCourier);
       });
     });
   } catch (err) {
@@ -2732,22 +2835,25 @@ async function loadRestaurantReports() {
 }
 
 // ── Daily Detail Loader ──────────────────────────────────────────────
-async function loadReportDetail(date) {
+async function loadReportDetail(date, courierName = "") {
   if (!_reportDetailRefs.section) return;
 
   syncReportTableHeaders();
   _lastDetailDate = date;
+  _lastDetailCourier = courierName || "";
   _reportDetailRefs.section.style.display = "block";
-  _reportDetailRefs.title.textContent = date + " - Günlük Detay";
+  _reportDetailRefs.title.textContent = `${date} - ${courierName || "Tüm Kuryeler"} Detay`;
   _reportDetailRefs.subtitle.textContent = "Yükleniyor...";
   _reportDetailRefs.courierSummary.innerHTML = "";
   _reportDetailRefs.detailBody.innerHTML =
-    '<tr><td colspan="8" style="text-align:center;">Detay yükleniyor...</td></tr>';
+    '<tr><td colspan="10" style="text-align:center;">Detay yükleniyor...</td></tr>';
 
   _reportDetailRefs.section.scrollIntoView({ behavior: "smooth", block: "start" });
 
   try {
-    const data = await api("/api/restaurant/reports/daily-detail?date=" + date, {
+    const params = new URLSearchParams({ date });
+    if (courierName) params.set("courier", courierName);
+    const data = await api("/api/restaurant/reports/daily-detail?" + params.toString(), {
       method: "GET",
       headers: restaurantAuthHeaders(),
       retryWithRefresh: refreshRestaurantAccess,
@@ -2772,7 +2878,7 @@ async function loadReportDetail(date) {
 
     if (!data.packages || data.packages.length === 0) {
       _reportDetailRefs.detailBody.innerHTML =
-        '<tr><td colspan="8" style="text-align:center;">Kayıt bulunamadı.</td></tr>';
+        '<tr><td colspan="10" style="text-align:center;">Kayıt bulunamadı.</td></tr>';
       return;
     }
 
@@ -2780,17 +2886,22 @@ async function loadReportDetail(date) {
       .map((pkg) => {
         const address = pkg.delivery_address || pkg.customer_address || pkg.address || "-";
         const status = typeof statusLabel === "function" ? statusLabel(pkg.status) : pkg.status || "-";
+        const history = Array.isArray(pkg.audit_history) && pkg.audit_history.length
+          ? pkg.audit_history.map((item) => `${item.action || "İşlem"} ${reportDeliveredTime(item)}`).join(" | ")
+          : "-";
 
         return `
         <tr>
           <td><span class="report-code">${restaurantHtmlSafe(pkg.tracking_no || pkg.id)}</span></td>
           <td>${restaurantHtmlSafe(pkg.recipient || "-")}</td>
+          <td>${restaurantHtmlSafe(pkg.phone || "-")}</td>
           <td class="report-address">${restaurantHtmlSafe(address)}</td>
           <td style="text-align:right;font-weight:600;">${_formatTRY(pkg.order_amount)}</td>
           <td>${restaurantHtmlSafe(reportPaymentType(pkg))}</td>
           <td><strong>${restaurantHtmlSafe(pkg.assigned_courier_name || "-")}</strong></td>
           <td>${restaurantHtmlSafe(reportDeliveredTime(pkg))}</td>
           <td><span class="status-badge ${statusClassName(pkg.status)}">${restaurantHtmlSafe(status)}</span></td>
+          <td class="report-history">${restaurantHtmlSafe(history)}</td>
         </tr>`;
       })
       .join("");
@@ -2799,7 +2910,7 @@ async function loadReportDetail(date) {
   } catch (err) {
     console.error("loadReportDetail error", err);
     _reportDetailRefs.detailBody.innerHTML =
-      '<tr><td colspan="8" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
+      '<tr><td colspan="10" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
     _reportDetailRefs.subtitle.textContent = "Hata oluştu.";
   }
 }
@@ -2814,7 +2925,11 @@ if (reportsTab) {
 
 if (restaurantRefs.printReportButton) {
   restaurantRefs.printReportButton.addEventListener("click", () => {
+    document.body.classList.add("report-print-mode");
     window.print();
+    window.setTimeout(() => {
+      document.body.classList.remove("report-print-mode");
+    }, 500);
   });
 }
 
@@ -2826,31 +2941,42 @@ if (_reportDetailRefs.closeBtn) {
 
 if (_reportDetailRefs.exportSummaryBtn) {
   _reportDetailRefs.exportSummaryBtn.addEventListener("click", async () => {
-    if (!_lastReportData || !_lastReportData.reports) return;
-    const rows = [
-      ["Özet"],
-      ["Tarih", "Kurye", "Paket Sayısı", "Nakit Toplam", "Kredi Kartı Toplam", "Online Ödeme Toplam", "Toplam Ciro"],
-    ];
-    for (const r of _lastReportData.reports) {
-      rows.push([
-        r.date,
-        r.courier_name || "Bilinmiyor",
-        r.package_count,
-        r.cash_revenue,
-        r.card_revenue,
-        r.online_revenue,
-        r.total_revenue,
-      ]);
-    }
+    const button = _reportDetailRefs.exportSummaryBtn;
+    const originalText = button.innerHTML;
+    try {
+      if (!_lastReportData || !_lastReportData.reports) {
+        await loadRestaurantReports();
+      }
+      if (!_lastReportData || !_lastReportData.reports || _lastReportData.reports.length === 0) {
+        showToast("Excel için rapor verisi bulunamadı.", "error");
+        return;
+      }
+      button.disabled = true;
+      button.innerHTML = "Hazırlanıyor...";
+      const rows = [
+        ["Özet"],
+        ["Tarih", "Kurye", "Paket Sayısı", "Nakit Toplam", "Kredi Kartı Toplam", "Online Ödeme Toplam", "Toplam Ciro"],
+      ];
+      for (const r of _lastReportData.reports) {
+        rows.push([
+          r.date,
+          r.courier_name || "Bilinmiyor",
+          r.package_count,
+          r.cash_revenue,
+          r.card_revenue,
+          r.online_revenue,
+          r.total_revenue,
+        ]);
+      }
 
-    rows.push([]);
-    rows.push(["Detay"]);
-    rows.push(["Tarih", "Kurye", "Paket kodu", "Müşteri", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum"]);
+      rows.push([]);
+      rows.push(["Detay"]);
+      rows.push(["Tarih", "Kurye", "Paket kodu", "Müşteri", "Telefon", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum"]);
 
-    const dates = [...new Set(_lastReportData.reports.map((r) => r.date).filter(Boolean))];
-    for (const date of dates) {
-      try {
-        const detail = await api("/api/restaurant/reports/daily-detail?date=" + date, {
+      for (const report of _lastReportData.reports) {
+        const params = new URLSearchParams({ date: report.date });
+        if (report.courier_name) params.set("courier", report.courier_name);
+        const detail = await api("/api/restaurant/reports/daily-detail?" + params.toString(), {
           method: "GET",
           headers: restaurantAuthHeaders(),
           retryWithRefresh: refreshRestaurantAccess,
@@ -2858,10 +2984,11 @@ if (_reportDetailRefs.exportSummaryBtn) {
         for (const p of detail.packages || []) {
           const status = typeof statusLabel === "function" ? statusLabel(p.status) : p.status || "";
           rows.push([
-            date,
+            report.date,
             p.assigned_courier_name || "",
             p.tracking_no || p.id || "",
             p.recipient || "",
+            p.phone || "",
             p.delivery_address || p.customer_address || p.address || "",
             reportPaymentType(p),
             p.order_amount || 0,
@@ -2869,12 +2996,18 @@ if (_reportDetailRefs.exportSummaryBtn) {
             status,
           ]);
         }
-      } catch (err) {
-        console.error("exportReportExcel detail error", date, err);
       }
-    }
 
-    exportToExcel(rows, "delivera-z-raporu.csv");
+      exportToExcel(rows, "delivera-z-raporu.xlsx");
+      button.dataset.lastExport = new Date().toISOString();
+      showToast("Excel dosyası hazırlandı.", "success");
+    } catch (err) {
+      console.error("exportReportExcel error", err);
+      showToast("Excel hazırlanamadı.", "error");
+    } finally {
+      button.disabled = false;
+      button.innerHTML = originalText;
+    }
   });
 }
 
@@ -2882,22 +3015,27 @@ if (_reportDetailRefs.exportBtn) {
   _reportDetailRefs.exportBtn.addEventListener("click", () => {
     if (!_lastDetailData || !_lastDetailData.packages) return;
     const rows = [
-      ["Tarih", "Kurye", "Paket kodu", "Müşteri", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum"],
+      ["Tarih", "Kurye", "Paket kodu", "Müşteri", "Telefon", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum", "İşlem Geçmişi"],
     ];
     for (const p of _lastDetailData.packages) {
       const status = typeof statusLabel === "function" ? statusLabel(p.status) : p.status || "";
+      const history = Array.isArray(p.audit_history) && p.audit_history.length
+        ? p.audit_history.map((item) => `${item.action || "İşlem"} ${reportDeliveredTime(item)}`).join(" | ")
+        : "";
       rows.push([
         _lastDetailDate || _lastDetailData.date || "",
-        p.assigned_courier_name || "",
+        _lastDetailCourier || p.assigned_courier_name || "",
         p.tracking_no || p.id,
         p.recipient || "",
+        p.phone || "",
         p.delivery_address || p.customer_address || p.address || "",
         reportPaymentType(p),
         p.order_amount || 0,
         reportDeliveredTime(p),
         status,
+        history,
       ]);
     }
-    exportToExcel(rows, `delivera-detay-${_lastDetailDate}.csv`);
+    exportToExcel(rows, `delivera-detay-${_lastDetailDate}.xlsx`);
   });
 }

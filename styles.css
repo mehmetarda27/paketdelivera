@@ -2303,7 +2303,7 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
   background: var(--bg-elevated);
 }
 #restaurantWorkspace_reports .report-table {
-  min-width: 980px;
+  min-width: 1120px;
 }
 #restaurantWorkspace_reports .report-table th,
 #restaurantWorkspace_reports .report-table td {
@@ -2320,6 +2320,13 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
   max-width: 360px;
   white-space: normal;
   line-height: 1.35;
+}
+#restaurantWorkspace_reports .report-history {
+  min-width: 180px;
+  max-width: 300px;
+  white-space: normal;
+  line-height: 1.35;
+  color: var(--muted);
 }
 #restaurantWorkspace_reports .report-code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -2385,6 +2392,15 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
+  }
+  body.report-print-mode .content-section:not(#restaurantWorkspace_reports) {
+    display: none !important;
+  }
+  body.report-print-mode #restaurantWorkspace_reports {
+    display: block !important;
+  }
+  body.report-print-mode #restaurantWorkspace_reports > .topbar {
+    display: none !important;
   }
   #restaurantPrintArea {
     display: block !important;
