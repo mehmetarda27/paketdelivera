@@ -752,6 +752,7 @@ select:focus-visible {
 
 .manual-entry-grid {
   grid-template-columns: 1fr;
+  gap: 14px;
 }
 
 .manual-entry-grid > *,
@@ -759,6 +760,106 @@ select:focus-visible {
 .manual-entry-grid > div > .glass-panel {
   min-width: 0;
   width: 100%;
+}
+
+.manual-package-panel {
+  padding: 22px;
+}
+
+.manual-package-panel .panel-head {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+}
+
+.manual-package-panel .panel-head h3 {
+  font-size: 1.35rem;
+}
+
+.manual-package-panel .quick-paste-entry {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.manual-package-panel .quick-paste-entry p {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.manual-package-panel .quick-paste-entry textarea {
+  min-height: 76px;
+  max-height: 118px;
+  resize: vertical;
+}
+
+.manual-package-panel #packageForm {
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.manual-package-panel #packageForm label {
+  min-width: 0;
+  gap: 6px;
+}
+
+.manual-package-panel #packageForm input,
+.manual-package-panel #packageForm select,
+.manual-package-panel #packageForm textarea {
+  min-height: 42px;
+}
+
+.manual-package-panel #packageForm textarea[name="deliveryAddress"] {
+  min-height: 86px;
+  max-height: 124px;
+  resize: vertical;
+}
+
+.manual-package-panel #packageForm textarea[name="customerNote"] {
+  min-height: 64px;
+  max-height: 104px;
+  resize: vertical;
+}
+
+.manual-package-panel #packageForm > button[type="submit"] {
+  min-height: 46px;
+  justify-self: start;
+  padding-inline: 24px;
+}
+
+.compact-platform-toggle {
+  min-height: 40px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.manual-platform-drawer {
+  margin-top: 14px;
+  padding: 16px;
+}
+
+.manual-platform-drawer.hidden {
+  display: none;
+}
+
+.manual-platform-panel {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.manual-platform-panel::before,
+.manual-platform-panel::after {
+  display: none;
+}
+
+.manual-platform-panel .panel-head {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
 }
 
 .ready-records-panel {
@@ -803,14 +904,33 @@ select:focus-visible {
 
 .inline-search-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 46px;
+  gap: 8px;
   align-items: center;
 }
 
 .inline-search-control input {
   width: 100%;
   min-width: 0;
+}
+
+.inline-search-control .icon-btn {
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  color: #ffffff;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--coral), #ffb56a);
+  box-shadow: 0 10px 22px rgba(242, 122, 26, 0.22);
+}
+
+.inline-search-control .icon-btn svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 2.4;
 }
 
 .meta-grid {
@@ -2643,6 +2763,19 @@ body.app-unauthenticated .courier-bottom-nav {
   .ready-records-panel .panel-head {
     flex-direction: row;
     align-items: center;
+  }
+
+  .manual-package-panel {
+    padding: 16px;
+  }
+
+  .manual-package-panel .panel-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compact-platform-toggle {
+    width: 100%;
   }
 
   .ready-records-toolbar {

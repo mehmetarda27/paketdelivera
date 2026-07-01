@@ -33,9 +33,34 @@ function mountManualCustomerPanel() {
   if (!manualSection || !manualGrid) return;
 
   manualGrid.classList.add("manual-entry-grid");
-  document.getElementById("restaurantWorkspace_customers")?.remove();
+  const manualPackagePanel = manualGrid.querySelector(":scope > article.glass-panel");
+  manualPackagePanel?.classList.add("manual-package-panel");
+
+  const platformPanel = document.getElementById("manualPlatformOrderForm")?.closest(".glass-panel");
+  const rightColumn = manualGrid.querySelector(":scope > div");
+
+  manualPackagePanel?.querySelector(".panel-head")?.insertAdjacentHTML("beforeend", `
+    <button id="manualPlatformToggleButton" class="ghost-btn compact-platform-toggle" type="button" aria-expanded="false" aria-controls="manualPlatformDrawer">+ Platform Siparisi Ekle</button>
+  `);
 
   manualGrid.insertAdjacentHTML("afterend", `
+    <section id="manualPlatformDrawer" class="glass-panel manual-platform-drawer hidden" aria-hidden="true">
+      <div id="manualPlatformDrawerBody"></div>
+    </section>
+  `);
+
+  const drawerBody = document.getElementById("manualPlatformDrawerBody");
+  if (platformPanel && drawerBody) {
+    platformPanel.classList.add("manual-platform-panel");
+    drawerBody.appendChild(platformPanel);
+  }
+  if (rightColumn && rightColumn.children.length === 0) {
+    rightColumn.remove();
+  }
+
+  document.getElementById("restaurantWorkspace_customers")?.remove();
+
+  (document.getElementById("manualPlatformDrawer") || manualGrid).insertAdjacentHTML("afterend", `
     <section id="readyRecordsPanel" class="glass-panel ready-records-panel is-collapsed">
       <div class="panel-head">
         <div>
@@ -98,6 +123,21 @@ function openReadyRecords() {
 
 function toggleReadyRecords() {
   setReadyRecordsOpen(!restaurantRefs.readyRecordsPanel?.classList.contains("is-open"));
+}
+
+function setManualPlatformDrawerOpen(isOpen) {
+  const drawer = restaurantRefs.manualPlatformDrawer;
+  const button = restaurantRefs.manualPlatformToggle;
+  if (!drawer || !button) return;
+  drawer.classList.toggle("hidden", !isOpen);
+  drawer.classList.toggle("is-open", isOpen);
+  drawer.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  button.textContent = isOpen ? "Platform Siparisini Kapat" : "+ Platform Siparisi Ekle";
+}
+
+function toggleManualPlatformDrawer() {
+  setManualPlatformDrawerOpen(!restaurantRefs.manualPlatformDrawer?.classList.contains("is-open"));
 }
 
 function findRestaurantCustomerByPhone(phone) {
@@ -168,6 +208,8 @@ const restaurantRefs = {
   workspace: document.getElementById("restaurantWorkspace"),
   platformAccountForm: document.getElementById("platformAccountForm"),
   manualPlatformOrderForm: document.getElementById("manualPlatformOrderForm"),
+  manualPlatformToggle: document.getElementById("manualPlatformToggleButton"),
+  manualPlatformDrawer: document.getElementById("manualPlatformDrawer"),
   packageForm: document.getElementById("packageForm"),
   packageRestaurantId: document.getElementById("packageRestaurantId"),
   restaurantCustomerId: document.getElementById("restaurantCustomerId"),
@@ -2165,6 +2207,7 @@ restaurantRefs.manualPlatformOrderForm?.addEventListener("submit", async (event)
       throw new Error("API platform siparisinin veritabanina yazildigini dogrulayan cevap dondurmedi.");
     }
     restaurantRefs.manualPlatformOrderForm.reset();
+    setManualPlatformDrawerOpen(false);
     hydrateRestaurant(response.state || response);
     showToast(`Manuel platform siparisi kaydedildi. ID: ${response.platformOrder.id}`);
   } catch (error) {
@@ -2243,6 +2286,8 @@ restaurantRefs.logoutButton?.addEventListener("click", () => {
 
 let customerSearchTimer = null;
 let customerListSearchTimer = null;
+
+restaurantRefs.manualPlatformToggle?.addEventListener("click", toggleManualPlatformDrawer);
 
 restaurantRefs.readyRecordsToggle?.addEventListener("click", toggleReadyRecords);
 
