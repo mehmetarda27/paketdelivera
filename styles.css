@@ -5294,3 +5294,47 @@ body.theme-courier .courier-mobile-app {
     grid-auto-columns: 104px;
   }
 }
+
+/* Final override: keep the restaurant customer phone search button visible after global ghost button patches. */
+body.theme-restaurant #customerPhoneSearchButton {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 48px !important;
+  min-width: 48px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+  padding: 0 !important;
+  color: #ffffff !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  background: linear-gradient(135deg, #F27A1A, #ffb56a) !important;
+  box-shadow: 0 10px 22px rgba(242, 122, 26, 0.26) !important;
+}
+
+body.theme-restaurant #customerPhoneSearchButton svg {
+  display: block !important;
+  width: 20px !important;
+  height: 20px !important;
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+  stroke-width: 2.6 !important;
+}
+
+body.theme-restaurant #customerPhoneSearchButton:hover {
+  background: linear-gradient(135deg, #d96b16, #F27A1A) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 14px 28px rgba(242, 122, 26, 0.32) !important;
+}
+
+body.theme-restaurant #customerPhoneSearchButton:focus-visible {
+  outline: none !important;
+  box-shadow:
+    0 0 0 4px rgba(242, 122, 26, 0.18),
+    0 12px 26px rgba(242, 122, 26, 0.28) !important;
+}
+
+body.theme-restaurant .inline-search-control {
+  grid-template-columns: minmax(0, 1fr) 48px !important;
+  align-items: center !important;
+}
