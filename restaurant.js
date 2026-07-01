@@ -29,50 +29,133 @@ const restaurantState = {
 
 function mountManualCustomerPanel() {
   const manualSection = document.getElementById("restaurantWorkspace_manual");
-  const rightColumn = manualSection?.querySelector(".dashboard-grid > div");
-  if (!rightColumn) return;
+  const manualGrid = manualSection?.querySelector(".dashboard-grid");
+  if (!manualSection || !manualGrid) return;
 
-  document.getElementById("manualPlatformOrderForm")?.closest(".glass-panel")?.remove();
+  manualGrid.classList.add("manual-entry-grid");
   document.getElementById("restaurantWorkspace_customers")?.remove();
 
-  rightColumn.insertAdjacentHTML("beforeend", `
-    <section class="glass-panel">
+  manualGrid.insertAdjacentHTML("afterend", `
+    <section id="readyRecordsPanel" class="glass-panel ready-records-panel is-collapsed">
       <div class="panel-head">
         <div>
-          <p class="eyebrow accent-coral">Musteriler</p>
-          <h3>Kayitli Musteriler</h3>
+          <p class="eyebrow accent-coral">Kayitli Musteriler</p>
+          <h3>Hazir Kayitlar</h3>
         </div>
-        <button id="restaurantCustomerNewButton" class="ghost-btn" type="button">Yeni Musteri</button>
+        <button id="restaurantCustomerToggleButton" class="ghost-btn icon-btn ready-records-toggle" type="button" aria-expanded="false" aria-controls="readyRecordsBody" aria-label="Hazir kayitlari ac veya kapat">+</button>
       </div>
-      <label class="full-width">
-        Telefon / Isim
-        <input id="restaurantCustomerListSearch" type="search" placeholder="Telefon veya isim ara">
-      </label>
-      <div id="restaurantCustomerMissing" class="empty-state hidden"></div>
-      <div id="restaurantCustomerList" class="stack-list"></div>
-      <div id="restaurantCustomerHistory" class="stack-list"></div>
-      <form id="restaurantCustomerForm" class="form-grid hidden">
-        <input id="restaurantCustomerEditId" name="id" type="hidden">
-        <label class="full-width">
-          Musteri Adi
-          <input name="name" type="text" placeholder="Ad Soyad" required>
-        </label>
-        <label class="full-width">
-          Telefon
-          <input name="phone" type="tel" placeholder="05xx xxx xx xx" required>
-        </label>
-        <label class="full-width">
-          Adres
-          <textarea name="address" rows="3" placeholder="Teslimat adresi" required></textarea>
-        </label>
-        <label class="full-width">
-          Not
-          <textarea name="note" rows="2" placeholder="Apartman, tercih, dikkat notu"></textarea>
-        </label>
-        <button class="primary-btn full-width" type="submit">Musteriyi Kaydet</button>
-      </form>
+      <div id="readyRecordsBody" class="ready-records-body" hidden>
+        <div class="ready-records-toolbar">
+          <label class="full-width">
+            Telefon / Isim
+            <input id="restaurantCustomerListSearch" type="search" placeholder="Telefon veya isim ara">
+          </label>
+          <button id="restaurantCustomerNewButton" class="ghost-btn" type="button">Yeni Musteri</button>
+        </div>
+        <div id="restaurantCustomerMissing" class="empty-state hidden"></div>
+        <div id="restaurantCustomerList" class="stack-list"></div>
+        <div id="restaurantCustomerHistory" class="stack-list"></div>
+        <form id="restaurantCustomerForm" class="form-grid hidden">
+          <input id="restaurantCustomerEditId" name="id" type="hidden">
+          <label class="full-width">
+            Musteri Adi
+            <input name="name" type="text" placeholder="Ad Soyad" required>
+          </label>
+          <label class="full-width">
+            Telefon
+            <input name="phone" type="tel" placeholder="05xx xxx xx xx" required>
+          </label>
+          <label class="full-width">
+            Adres
+            <textarea name="address" rows="3" placeholder="Teslimat adresi" required></textarea>
+          </label>
+          <label class="full-width">
+            Not
+            <textarea name="note" rows="2" placeholder="Apartman, tercih, dikkat notu"></textarea>
+          </label>
+          <button class="primary-btn full-width" type="submit">Musteriyi Kaydet</button>
+        </form>
+      </div>
     </section>
   `);
+}
+
+function setReadyRecordsOpen(isOpen) {
+  const panel = restaurantRefs.readyRecordsPanel;
+  const body = restaurantRefs.readyRecordsBody;
+  const button = restaurantRefs.readyRecordsToggle;
+  if (!panel || !body || !button) return;
+  panel.classList.toggle("is-open", isOpen);
+  panel.classList.toggle("is-collapsed", !isOpen);
+  body.hidden = !isOpen;
+  button.textContent = isOpen ? "-" : "+";
+  button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+}
+
+function openReadyRecords() {
+  setReadyRecordsOpen(true);
+}
+
+function toggleReadyRecords() {
+  setReadyRecordsOpen(!restaurantRefs.readyRecordsPanel?.classList.contains("is-open"));
+}
+
+function findRestaurantCustomerByPhone(phone) {
+  const digits = normalizeRestaurantPhone(phone);
+  if (!digits) return null;
+  return (restaurantState.data?.customers || []).find((customer) => {
+    const customerDigits = normalizeRestaurantPhone(customer.phone);
+    if (!customerDigits) return false;
+    return customerDigits === digits || customerDigits.endsWith(digits) || digits.endsWith(customerDigits);
+  }) || null;
+}
+
+async function searchRestaurantCustomerByPhone({ showNotFound = true } = {}) {
+  const phone = restaurantRefs.customerPhoneSearch?.value?.trim() || "";
+  const digits = normalizeRestaurantPhone(phone);
+  if (!digits || digits.length < 5) {
+    if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Telefon yazinca kayitli musteri aranir.";
+    hideCustomerMissing();
+    return null;
+  }
+
+  const cachedCustomer = findRestaurantCustomerByPhone(phone);
+  if (cachedCustomer) {
+    fillPackageFormFromCustomer(cachedCustomer);
+    renderSelectedCustomerHistory(cachedCustomer);
+    renderRestaurantCustomers(restaurantState.data?.customers || []);
+    openReadyRecords();
+    showToast("Kayitli musteri bulundu ve form dolduruldu.");
+    return cachedCustomer;
+  }
+
+  try {
+    const data = await api(`/api/restaurant/customers?phone=${encodeURIComponent(phone)}`, {
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+    });
+    const customer = data.customers?.[0];
+    if (!customer) {
+      if (showNotFound) {
+        if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = "Kayitli musteri bulunamadi.";
+        showToast("Kayitli musteri bulunamadi.", "warning");
+      }
+      renderCustomerMissing(phone);
+      openReadyRecords();
+      return null;
+    }
+
+    fillPackageFormFromCustomer(customer);
+    renderSelectedCustomerHistory(customer);
+    renderRestaurantCustomers(data.customers || restaurantState.data?.customers || []);
+    openReadyRecords();
+    showToast("Kayitli musteri bulundu ve form dolduruldu.");
+    return customer;
+  } catch (error) {
+    if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = error.message || "Musteri aramasi basarisiz.";
+    showToast(error.message || "Musteri aramasi basarisiz.", "error");
+    return null;
+  }
 }
 
 mountManualCustomerPanel();
@@ -89,7 +172,11 @@ const restaurantRefs = {
   packageRestaurantId: document.getElementById("packageRestaurantId"),
   restaurantCustomerId: document.getElementById("restaurantCustomerId"),
   customerPhoneSearch: document.getElementById("customerPhoneSearch"),
+  customerPhoneSearchButton: document.getElementById("customerPhoneSearchButton"),
   customerSearchHint: document.getElementById("customerSearchHint"),
+  readyRecordsPanel: document.getElementById("readyRecordsPanel"),
+  readyRecordsBody: document.getElementById("readyRecordsBody"),
+  readyRecordsToggle: document.getElementById("restaurantCustomerToggleButton"),
   customerForm: document.getElementById("restaurantCustomerForm"),
   customerEditId: document.getElementById("restaurantCustomerEditId"),
   customerList: document.getElementById("restaurantCustomerList"),
@@ -1567,6 +1654,7 @@ function renderSelectedCustomerHistory(customer) {
 
 function showCustomerForm(customer = null) {
   if (!restaurantRefs.customerForm) return;
+  openReadyRecords();
   const form = restaurantRefs.customerForm;
   const elements = form.elements;
   const packageElements = restaurantRefs.packageForm?.elements;
@@ -1595,6 +1683,7 @@ function renderCustomerMissing(query) {
     return;
   }
   restaurantRefs.customerMissing.classList.remove("hidden");
+  openReadyRecords();
   restaurantRefs.customerMissing.innerHTML = `
     <p>Bu numara kayitli degil, yeni musteri olarak ekle.</p>
     <button class="ghost-btn missing-customer-add-btn" type="button">Yeni Musteri Olarak Ekle</button>
@@ -1609,6 +1698,7 @@ function selectRestaurantCustomer(customer) {
   fillPackageFormFromCustomer(customer);
   renderSelectedCustomerHistory(customer);
   renderRestaurantCustomers(restaurantState.data?.customers || []);
+  openReadyRecords();
   setActiveWorkspaceSection("restaurantWorkspace_manual");
   showToast("Musteri bilgileri manuel paket formuna aktarildi.");
 }
@@ -2112,6 +2202,8 @@ restaurantRefs.logoutButton?.addEventListener("click", () => {
 let customerSearchTimer = null;
 let customerListSearchTimer = null;
 
+restaurantRefs.readyRecordsToggle?.addEventListener("click", toggleReadyRecords);
+
 restaurantRefs.customerListSearch?.addEventListener("input", () => {
   clearTimeout(customerListSearchTimer);
   customerListSearchTimer = setTimeout(() => {
@@ -2120,6 +2212,7 @@ restaurantRefs.customerListSearch?.addEventListener("input", () => {
 });
 
 restaurantRefs.customerNewButton?.addEventListener("click", () => {
+  openReadyRecords();
   showCustomerForm();
 });
 
@@ -2205,6 +2298,17 @@ restaurantRefs.customerPhoneSearch?.addEventListener("input", () => {
       if (restaurantRefs.customerSearchHint) restaurantRefs.customerSearchHint.textContent = error.message || "Musteri aramasi basarisiz.";
     }
   }, 350);
+});
+
+restaurantRefs.customerPhoneSearchButton?.addEventListener("click", () => {
+  searchRestaurantCustomerByPhone();
+});
+
+restaurantRefs.customerPhoneSearch?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  clearTimeout(customerSearchTimer);
+  searchRestaurantCustomerByPhone();
 });
 
 restaurantRefs.packageForm.addEventListener("submit", async (event) => {

@@ -310,7 +310,15 @@
             </label>
             <label>
               Kayitli Musteri Telefon
-              <input id="customerPhoneSearch" name="customerPhoneSearch" type="tel" placeholder="05xx xxx xx xx">
+              <div class="inline-search-control">
+                <input id="customerPhoneSearch" name="customerPhoneSearch" type="tel" placeholder="05xx xxx xx xx">
+                <button id="customerPhoneSearchButton" class="ghost-btn icon-btn" type="button" aria-label="Kayitli musteri ara" title="Kayitli musteri ara">
+                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.35-4.35"></path>
+                  </svg>
+                </button>
+              </div>
               <small id="customerSearchHint" class="soft-copy">Telefon yazinca kayitli musteri aranir.</small>
             </label>
             <label class="full-width">
