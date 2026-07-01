@@ -2294,6 +2294,76 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
 .theme-dark .report-table th {
   background: rgba(255, 255, 255, 0.03);
 }
+#restaurantWorkspace_reports .glass-panel {
+  border-radius: 14px;
+}
+#restaurantWorkspace_reports .table-responsive {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+#restaurantWorkspace_reports .report-table {
+  min-width: 980px;
+}
+#restaurantWorkspace_reports .report-table th,
+#restaurantWorkspace_reports .report-table td {
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+#restaurantWorkspace_reports .report-table tbody tr:hover {
+  background: rgba(45, 212, 191, 0.06);
+}
+#restaurantWorkspace_reports .report-address {
+  min-width: 220px;
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.35;
+}
+#restaurantWorkspace_reports .report-code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  opacity: 0.86;
+}
+#restaurantWorkspace_reports .report-detail-btn {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+#reportCourierSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.report-courier-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  font-size: 0.84rem;
+}
+
+@media (max-width: 720px) {
+  #restaurantWorkspace_reports .topbar {
+    align-items: flex-start !important;
+    flex-wrap: wrap !important;
+    gap: 14px;
+  }
+  #restaurantWorkspace_reports .topbar > div:last-child {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  #restaurantWorkspace_reports .topbar button {
+    flex: 1 1 150px;
+    justify-content: center;
+  }
+}
 
 /* Print Styles */
 @media print {
@@ -2319,6 +2389,19 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
   #restaurantPrintArea {
     display: block !important;
     width: 100% !important;
+  }
+  #restaurantWorkspace_reports .table-responsive {
+    overflow: visible !important;
+    border: none !important;
+  }
+  #restaurantWorkspace_reports .report-table {
+    min-width: 0 !important;
+  }
+  #restaurantWorkspace_reports .report-table th,
+  #restaurantWorkspace_reports .report-table td {
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+    white-space: normal !important;
   }
   .print-only-header {
     display: block !important;

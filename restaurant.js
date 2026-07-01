@@ -2603,10 +2603,64 @@ const _formatTRY = (val) =>
   new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(val || 0);
 
 // ── CSV / Excel Export Utility ───────────────────────────────────────
+function reportPaymentType(pkg = {}) {
+  const text = String(`${pkg.payment_method || ""} ${pkg.payment_status || ""}`).toLowerCase();
+  if (text.includes("cash") || text.includes("nakit")) return "Nakit";
+  if (text.includes("card") || text.includes("kart") || text.includes("kredi")) return "Kredi Kartı";
+  if (text.includes("online")) return "Online Ödeme";
+  return pkg.payment_method || pkg.payment_status || "-";
+}
+
+function reportDeliveredTime(pkg = {}) {
+  const value = pkg.delivered_at || pkg.updated_at || pkg.created_at || "";
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("tr-TR");
+}
+
+function reportEscapeCsv(value = "") {
+  return String(value ?? "").replace(/;/g, ",").replace(/\r?\n/g, " ");
+}
+
+function syncReportTableHeaders() {
+  const summaryTable = restaurantRefs.reportTableBody?.closest("table");
+  const detailTable = _reportDetailRefs.detailBody?.closest("table");
+  const summaryHead = summaryTable?.querySelector("thead");
+  const detailHead = detailTable?.querySelector("thead");
+  if (summaryHead) {
+    summaryHead.innerHTML = `
+      <tr>
+        <th>Tarih</th>
+        <th>Kurye</th>
+        <th style="text-align:center;">Paket Sayısı</th>
+        <th style="text-align:right;">Nakit Toplam</th>
+        <th style="text-align:right;">Kredi Kartı</th>
+        <th style="text-align:right;">Online Ödeme</th>
+        <th style="text-align:right;">Toplam Ciro</th>
+        <th style="text-align:right;">Detay</th>
+      </tr>
+    `;
+  }
+  if (detailHead) {
+    detailHead.innerHTML = `
+      <tr>
+        <th>Paket Kodu</th>
+        <th>Müşteri</th>
+        <th>Adres</th>
+        <th style="text-align:right;">Tutar</th>
+        <th>Ödeme Tipi</th>
+        <th>Kurye</th>
+        <th>Teslim Saati</th>
+        <th>Durum</th>
+      </tr>
+    `;
+  }
+}
+
 function exportToExcel(rows, filename) {
   // BOM for Turkish character support in Excel
   const BOM = "\uFEFF";
-  const csv = rows.map((r) => r.join(";")).join("\r\n");
+  const csv = rows.map((r) => r.map(reportEscapeCsv).join(";")).join("\r\n");
   const blob = new Blob([BOM + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -2622,10 +2676,11 @@ function exportToExcel(rows, filename) {
 async function loadRestaurantReports() {
   if (!restaurantRefs.reportTableBody) return;
 
+  syncReportTableHeaders();
   if (_reportDetailRefs.section) _reportDetailRefs.section.style.display = "none";
 
   restaurantRefs.reportTableBody.innerHTML =
-    '<tr><td colspan="6" style="text-align:center;">Raporlar yükleniyor...</td></tr>';
+    '<tr><td colspan="8" style="text-align:center;">Raporlar yükleniyor...</td></tr>';
 
   try {
     const data = await api("/api/restaurant/reports/daily", {
@@ -2638,48 +2693,41 @@ async function loadRestaurantReports() {
 
     if (!data.reports || data.reports.length === 0) {
       restaurantRefs.reportTableBody.innerHTML =
-        '<tr><td colspan="6" style="text-align:center;">Geçmişe dönük gün sonu verisi bulunamadı.</td></tr>';
+        '<tr><td colspan="8" style="text-align:center;">Geçmişe dönük gün sonu verisi bulunamadı.</td></tr>';
       return;
     }
 
     const rowsHTML = data.reports
       .map(
         (r) => `
-      <tr data-report-date="${r.date}" style="cursor:pointer;transition:background .15s;"
-          onmouseenter="this.style.background='rgba(255,255,255,.06)'"
-          onmouseleave="this.style.background=''">
+      <tr>
         <td>
-          <strong>${r.date}</strong>
-          <span class="report-detail-hint" style="margin-left:6px;font-size:11px;opacity:.45;transition:opacity .15s;">▸ Detay</span>
+          <strong>${restaurantHtmlSafe(r.date)}</strong>
         </td>
-        <td style="text-align:center;">${r.package_count} Paket</td>
-        <td style="text-align:right;color:#4ade80;">${_formatTRY(r.cash_revenue)}</td>
-        <td style="text-align:right;color:#60a5fa;">${_formatTRY(r.card_revenue)}</td>
-        <td style="text-align:right;color:#a78bfa;">${_formatTRY(r.online_revenue)}</td>
+        <td>${restaurantHtmlSafe(r.courier_name || "Bilinmiyor")}</td>
+        <td style="text-align:center;">${Number(r.package_count || 0)} Paket</td>
+        <td style="text-align:right;">${_formatTRY(r.cash_revenue)}</td>
+        <td style="text-align:right;">${_formatTRY(r.card_revenue)}</td>
+        <td style="text-align:right;">${_formatTRY(r.online_revenue)}</td>
         <td style="text-align:right;font-weight:700;">${_formatTRY(r.total_revenue)}</td>
+        <td style="text-align:right;">
+          <button class="ghost-btn report-detail-btn" type="button" data-report-date="${restaurantHtmlSafe(r.date)}">Detay</button>
+        </td>
       </tr>`
       )
       .join("");
 
     restaurantRefs.reportTableBody.innerHTML = rowsHTML;
 
-    restaurantRefs.reportTableBody.querySelectorAll("tr[data-report-date]").forEach((tr) => {
-      tr.addEventListener("click", () => {
-        loadReportDetail(tr.dataset.reportDate);
-      });
-      tr.addEventListener("mouseenter", () => {
-        const hint = tr.querySelector(".report-detail-hint");
-        if (hint) hint.style.opacity = "1";
-      });
-      tr.addEventListener("mouseleave", () => {
-        const hint = tr.querySelector(".report-detail-hint");
-        if (hint) hint.style.opacity = ".45";
+    restaurantRefs.reportTableBody.querySelectorAll(".report-detail-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        loadReportDetail(btn.dataset.reportDate);
       });
     });
   } catch (err) {
     console.error("loadRestaurantReports error", err);
     restaurantRefs.reportTableBody.innerHTML =
-      '<tr><td colspan="6" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
+      '<tr><td colspan="8" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
   }
 }
 
@@ -2687,13 +2735,14 @@ async function loadRestaurantReports() {
 async function loadReportDetail(date) {
   if (!_reportDetailRefs.section) return;
 
+  syncReportTableHeaders();
   _lastDetailDate = date;
   _reportDetailRefs.section.style.display = "block";
-  _reportDetailRefs.title.textContent = date + " — Günlük Detay";
+  _reportDetailRefs.title.textContent = date + " - Günlük Detay";
   _reportDetailRefs.subtitle.textContent = "Yükleniyor...";
   _reportDetailRefs.courierSummary.innerHTML = "";
   _reportDetailRefs.detailBody.innerHTML =
-    '<tr><td colspan="9" style="text-align:center;">Detay yükleniyor...</td></tr>';
+    '<tr><td colspan="8" style="text-align:center;">Detay yükleniyor...</td></tr>';
 
   _reportDetailRefs.section.scrollIntoView({ behavior: "smooth", block: "start" });
 
@@ -2712,41 +2761,36 @@ async function loadReportDetail(date) {
       _reportDetailRefs.courierSummary.innerHTML = data.couriers
         .map(
           (c) => `
-        <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); padding:8px 12px; border-radius:8px;">
-          <div style="font-size:12px; opacity:0.7;">${c.name}</div>
-          <div style="font-weight:600; font-size:14px; margin-top:2px;">
-            ${c.package_count} Pkt <span style="opacity:0.4; margin:0 4px;">|</span> <span style="color:var(--primary);">${_formatTRY(c.total_revenue)}</span>
-          </div>
-        </div>`
+        <span class="report-courier-pill">
+          <strong>${restaurantHtmlSafe(c.name)}</strong>
+          <span>${Number(c.package_count || 0)} paket</span>
+          <span>${_formatTRY(c.total_revenue)}</span>
+        </span>`
         )
         .join("");
     }
 
     if (!data.packages || data.packages.length === 0) {
       _reportDetailRefs.detailBody.innerHTML =
-        '<tr><td colspan="9" style="text-align:center;">Kayıt bulunamadı.</td></tr>';
+        '<tr><td colspan="8" style="text-align:center;">Kayıt bulunamadı.</td></tr>';
       return;
     }
 
     const rowsHTML = data.packages
       .map((pkg) => {
-        const timeObj = pkg.delivered_at ? new Date(pkg.delivered_at) : null;
-        const timeStr = timeObj
-          ? timeObj.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })
-          : "—";
-        const addrShort = (pkg.delivery_address || pkg.address || "").substring(0, 40) + "…";
+        const address = pkg.delivery_address || pkg.customer_address || pkg.address || "-";
+        const status = typeof statusLabel === "function" ? statusLabel(pkg.status) : pkg.status || "-";
 
         return `
         <tr>
-          <td><span style="font-family:monospace;opacity:.8;">${pkg.tracking_no || pkg.id}</span></td>
-          <td><strong>${pkg.assigned_courier_name || "—"}</strong></td>
-          <td>${pkg.recipient || "—"}</td>
-          <td title="${pkg.delivery_address || pkg.address || ""}">${addrShort}</td>
-          <td>${pkg.source_platform || "—"}</td>
-          <td>${pkg.payment_method || "—"}</td>
+          <td><span class="report-code">${restaurantHtmlSafe(pkg.tracking_no || pkg.id)}</span></td>
+          <td>${restaurantHtmlSafe(pkg.recipient || "-")}</td>
+          <td class="report-address">${restaurantHtmlSafe(address)}</td>
           <td style="text-align:right;font-weight:600;">${_formatTRY(pkg.order_amount)}</td>
-          <td>${timeStr}</td>
-          <td style="text-align:right;">${pkg.distance_km ? pkg.distance_km + " km" : "—"}</td>
+          <td>${restaurantHtmlSafe(reportPaymentType(pkg))}</td>
+          <td><strong>${restaurantHtmlSafe(pkg.assigned_courier_name || "-")}</strong></td>
+          <td>${restaurantHtmlSafe(reportDeliveredTime(pkg))}</td>
+          <td><span class="status-badge ${statusClassName(pkg.status)}">${restaurantHtmlSafe(status)}</span></td>
         </tr>`;
       })
       .join("");
@@ -2755,7 +2799,7 @@ async function loadReportDetail(date) {
   } catch (err) {
     console.error("loadReportDetail error", err);
     _reportDetailRefs.detailBody.innerHTML =
-      '<tr><td colspan="9" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
+      '<tr><td colspan="8" style="text-align:center;color:var(--coral);">Bağlantı hatası oluştu.</td></tr>';
     _reportDetailRefs.subtitle.textContent = "Hata oluştu.";
   }
 }
@@ -2781,14 +2825,16 @@ if (_reportDetailRefs.closeBtn) {
 }
 
 if (_reportDetailRefs.exportSummaryBtn) {
-  _reportDetailRefs.exportSummaryBtn.addEventListener("click", () => {
+  _reportDetailRefs.exportSummaryBtn.addEventListener("click", async () => {
     if (!_lastReportData || !_lastReportData.reports) return;
     const rows = [
-      ["Tarih", "Paket Sayisi", "Nakit", "Kredi Karti", "Online", "Toplam Ciro"],
+      ["Özet"],
+      ["Tarih", "Kurye", "Paket Sayısı", "Nakit Toplam", "Kredi Kartı Toplam", "Online Ödeme Toplam", "Toplam Ciro"],
     ];
     for (const r of _lastReportData.reports) {
       rows.push([
         r.date,
+        r.courier_name || "Bilinmiyor",
         r.package_count,
         r.cash_revenue,
         r.card_revenue,
@@ -2796,7 +2842,39 @@ if (_reportDetailRefs.exportSummaryBtn) {
         r.total_revenue,
       ]);
     }
-    exportToExcel(rows, "delivera-z-raporu-ozet.csv");
+
+    rows.push([]);
+    rows.push(["Detay"]);
+    rows.push(["Tarih", "Kurye", "Paket kodu", "Müşteri", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum"]);
+
+    const dates = [...new Set(_lastReportData.reports.map((r) => r.date).filter(Boolean))];
+    for (const date of dates) {
+      try {
+        const detail = await api("/api/restaurant/reports/daily-detail?date=" + date, {
+          method: "GET",
+          headers: restaurantAuthHeaders(),
+          retryWithRefresh: refreshRestaurantAccess,
+        });
+        for (const p of detail.packages || []) {
+          const status = typeof statusLabel === "function" ? statusLabel(p.status) : p.status || "";
+          rows.push([
+            date,
+            p.assigned_courier_name || "",
+            p.tracking_no || p.id || "",
+            p.recipient || "",
+            p.delivery_address || p.customer_address || p.address || "",
+            reportPaymentType(p),
+            p.order_amount || 0,
+            reportDeliveredTime(p),
+            status,
+          ]);
+        }
+      } catch (err) {
+        console.error("exportReportExcel detail error", date, err);
+      }
+    }
+
+    exportToExcel(rows, "delivera-z-raporu.csv");
   });
 }
 
@@ -2804,35 +2882,20 @@ if (_reportDetailRefs.exportBtn) {
   _reportDetailRefs.exportBtn.addEventListener("click", () => {
     if (!_lastDetailData || !_lastDetailData.packages) return;
     const rows = [
-      [
-        "Takip No",
-        "Kurye",
-        "Alici",
-        "Telefon",
-        "Adres",
-        "Platform",
-        "Siparis No",
-        "Odeme Yontemi",
-        "Tutar",
-        "Teslim Saati",
-        "Mesafe (km)",
-        "Not",
-      ],
+      ["Tarih", "Kurye", "Paket kodu", "Müşteri", "Adres", "Ödeme tipi", "Tutar", "Teslim zamanı", "Durum"],
     ];
     for (const p of _lastDetailData.packages) {
+      const status = typeof statusLabel === "function" ? statusLabel(p.status) : p.status || "";
       rows.push([
-        p.tracking_no || p.id,
+        _lastDetailDate || _lastDetailData.date || "",
         p.assigned_courier_name || "",
+        p.tracking_no || p.id,
         p.recipient || "",
-        p.phone || "",
-        (p.delivery_address || p.address || "").replace(/;/g, ",").replace(/\n/g, " "),
-        p.source_platform || "",
-        p.external_order_no || "",
-        p.payment_method || "",
+        p.delivery_address || p.customer_address || p.address || "",
+        reportPaymentType(p),
         p.order_amount || 0,
-        p.delivered_at || "",
-        p.distance_km || "",
-        (p.note || "").replace(/;/g, ",").replace(/\n/g, " "),
+        reportDeliveredTime(p),
+        status,
       ]);
     }
     exportToExcel(rows, `delivera-detay-${_lastDetailDate}.csv`);

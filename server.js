@@ -10416,24 +10416,40 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    // Son 6 ayin gunluk ozetini getir (Yalnizca teslim edilen paketler)
+    const isPostgres = dbFacade.clientName() === "postgres";
+    const reportDateExpr = isPostgres
+      ? "TO_CHAR(COALESCE(NULLIF(delivered_at::text, '')::timestamp, NULLIF(updated_at::text, '')::timestamp, NULLIF(created_at::text, '')::timestamp), 'YYYY-MM-DD')"
+      : "DATE(COALESCE(delivered_at, updated_at, created_at), 'localtime')";
+    const sinceClause = isPostgres
+      ? "COALESCE(NULLIF(delivered_at::text, '')::timestamp, NULLIF(updated_at::text, '')::timestamp, NULLIF(created_at::text, '')::timestamp) >= NOW() - INTERVAL '6 months'"
+      : "COALESCE(delivered_at, updated_at, created_at) >= date('now', '-6 months')";
+    const paymentExpr = "LOWER(COALESCE(payment_method, '') || ' ' || COALESCE(payment_status, ''))";
+
     const sql = `
       SELECT 
-        DATE(created_at, 'localtime') as date,
-        SUM(order_amount) as total_revenue,
-        SUM(CASE WHEN payment_method LIKE '%Nakit%' THEN order_amount ELSE 0 END) as cash_revenue,
-        SUM(CASE WHEN payment_method LIKE '%Kart%' OR payment_method LIKE '%Kredi%' THEN order_amount ELSE 0 END) as card_revenue,
-        SUM(CASE WHEN payment_method NOT LIKE '%Nakit%' AND payment_method NOT LIKE '%Kart%' AND payment_method NOT LIKE '%Kredi%' THEN order_amount ELSE 0 END) as online_revenue,
+        ${reportDateExpr} as date,
+        COALESCE(assigned_courier_name, 'Bilinmiyor') as courier_name,
+        SUM(COALESCE(order_amount, 0)) as total_revenue,
+        SUM(CASE WHEN ${paymentExpr} LIKE '%cash%' OR ${paymentExpr} LIKE '%nakit%' THEN COALESCE(order_amount, 0) ELSE 0 END) as cash_revenue,
+        SUM(CASE WHEN ${paymentExpr} LIKE '%card%' OR ${paymentExpr} LIKE '%kart%' OR ${paymentExpr} LIKE '%kredi%' THEN COALESCE(order_amount, 0) ELSE 0 END) as card_revenue,
+        SUM(CASE WHEN ${paymentExpr} LIKE '%online%' OR ${paymentExpr} LIKE '%paid_online%' THEN COALESCE(order_amount, 0) ELSE 0 END) as online_revenue,
         COUNT(id) as package_count
       FROM packages
       WHERE restaurant_id = ? 
         AND status = 'delivered'
-        AND created_at >= date('now', '-6 months')
-      GROUP BY DATE(created_at, 'localtime')
-      ORDER BY date DESC
+        AND ${sinceClause}
+      GROUP BY ${reportDateExpr}, COALESCE(assigned_courier_name, 'Bilinmiyor')
+      ORDER BY date DESC, courier_name ASC
     `;
-    const rows = db.prepare(sql).all(session.restaurant_id);
-    sendJson(res, 200, { reports: rows });
+    const rows = db.prepare(sql).all(session.restaurant_id).map((row) => ({
+      ...row,
+      package_count: Number(row.package_count || 0),
+      cash_revenue: Number(row.cash_revenue || 0),
+      card_revenue: Number(row.card_revenue || 0),
+      online_revenue: Number(row.online_revenue || 0),
+      total_revenue: Number(row.total_revenue || 0),
+    }));
+    sendJson(res, 200, { ok: true, reports: rows });
     return;
   }
 
@@ -10452,20 +10468,25 @@ async function handleApi(req, res, pathname) {
     }
 
     // Belirtilen güne ait teslim edilen tüm paketleri getir
+    const isPostgres = dbFacade.clientName() === "postgres";
+    const reportDateExpr = isPostgres
+      ? "TO_CHAR(COALESCE(NULLIF(delivered_at::text, '')::timestamp, NULLIF(updated_at::text, '')::timestamp, NULLIF(created_at::text, '')::timestamp), 'YYYY-MM-DD')"
+      : "DATE(COALESCE(delivered_at, updated_at, created_at), 'localtime')";
+
     const detailSql = `
       SELECT
         id, tracking_no, recipient, phone, address, delivery_address, customer_address,
         assigned_courier_name,
         payment_method, order_amount, payment_status,
         source_platform, external_order_no,
-        created_at, delivered_at,
+        created_at, updated_at, delivered_at,
         distance_km,
-        note
+        note, customer_note, status
       FROM packages
       WHERE restaurant_id = ?
         AND status = 'delivered'
-        AND DATE(created_at, 'localtime') = ?
-      ORDER BY created_at ASC
+        AND ${reportDateExpr} = ?
+      ORDER BY COALESCE(delivered_at, updated_at, created_at) ASC
     `;
     const packages = db.prepare(detailSql).all(session.restaurant_id, dateParam);
 
@@ -10479,10 +10500,11 @@ async function handleApi(req, res, pathname) {
     for (const pkg of packages) {
       const amt = Number(pkg.order_amount) || 0;
       total_revenue += amt;
+      const paymentText = `${pkg.payment_method || ""} ${pkg.payment_status || ""}`.toLowerCase();
 
-      if (pkg.payment_method && pkg.payment_method.includes("Nakit")) {
+      if (paymentText.includes("cash") || paymentText.includes("nakit")) {
         cash_revenue += amt;
-      } else if (pkg.payment_method && (pkg.payment_method.includes("Kart") || pkg.payment_method.includes("Kredi"))) {
+      } else if (paymentText.includes("card") || paymentText.includes("kart") || paymentText.includes("kredi")) {
         card_revenue += amt;
       } else {
         online_revenue += amt;
