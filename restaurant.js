@@ -1011,6 +1011,14 @@ function packageSourceLabel(pkg) {
   return pkg.sourcePlatform;
 }
 
+function packageDisplayCode(pkg) {
+  return pkg.trackingNo || pkg.externalOrderNo || pkg.platformOrderId || pkg.id || "-";
+}
+
+function packageClosedAt(pkg) {
+  return pkg.deliveredAt || pkg.completedAt || pkg.closedAt || pkg.cancelledAt || pkg.failedAt || pkg.updatedAt || "";
+}
+
 function courierMap(data) {
   return new Map((data.couriers || []).map((courier) => [courier.id, courier]));
 }
@@ -1328,20 +1336,22 @@ function renderRecentOrders(packages) {
 
   list.forEach((pkg) => {
     const card = document.createElement("article");
-    card.className = `stack-card order-summary-card ${!pkg.assignedCourierId ? "priority-alert-card" : ""}`;
+    card.className = `stack-card order-summary-card restaurant-order-card ${!pkg.assignedCourierId ? "priority-alert-card" : ""}`;
     card.innerHTML = `
-      <div class="stack-top">
-        <div>
-          <strong class="entity-line">${SVG_PACKAGE} ${pkg.packageType || "Standart Paket"} - ${pkg.externalOrderNo}</strong>
-          <p class="entity-line">${SVG_MOTO} ${pkg.restaurantName} - ${pkg.recipient}</p>
-          <p>Kaynak: ${packageSourceLabel(pkg)}</p>
+      <div class="order-card-top">
+        <div class="order-card-title">
+          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
+          <p class="entity-line">${pkg.packageType || "Standart Paket"} - ${pkg.recipient || "Musteri"}</p>
+          <p>Kaynak: ${packageSourceLabel(pkg) || "-"} - ${pkg.restaurantName || "-"}</p>
         </div>
-        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+        <div class="order-card-badges">
+          <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+        </div>
       </div>
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Adres</span>
-          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address}</strong>
+          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
         </div>
         <div>
           <span>Kurye</span>
@@ -1356,7 +1366,7 @@ function renderRecentOrders(packages) {
           <strong>${formatDate(pkg.createdAt)}</strong>
         </div>
       </div>
-      <div style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; text-align: right;">
+      <div class="order-card-footer">
         <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
       </div>
     `;
@@ -1403,15 +1413,15 @@ function renderActiveOrders(data) {
     const isConfirmed = String(pkg.assignmentReason || "").toLowerCase().includes("onay");
 
     const card = document.createElement("article");
-    card.className = `stack-card order-summary-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
+    card.className = `stack-card order-summary-card restaurant-order-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
     card.innerHTML = `
-      <div class="stack-top">
-        <div>
-          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
-          <p>Kaynak: ${sourceLabel} - Musteri: ${pkg.recipient}</p>
+      <div class="order-card-top">
+        <div class="order-card-title">
+          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
+          <p>Kaynak: ${sourceLabel || "-"} - Musteri: ${pkg.recipient || "-"}</p>
           <p>Olusturulma: ${formatDate(pkg.createdAt)}</p>
         </div>
-        <div class="badge-row">
+        <div class="order-card-badges">
           <span class="${assignmentTone}">${assignmentBadge}</span>
           <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
           <span class="soft-badge">${paymentStatusLabel(pkg.paymentStatus)}</span>
@@ -1428,7 +1438,7 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Adres</span>
-          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address}</strong>
+          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
         </div>
         <div>
           <span>Not</span>
@@ -1463,9 +1473,22 @@ function renderActiveOrders(data) {
       ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
     `;
 
+    const detailFooter = document.createElement("div");
+    detailFooter.className = "order-card-footer";
+    const detailButton = document.createElement("button");
+    detailButton.type = "button";
+    detailButton.className = "ghost-btn details-btn compact-action-btn";
+    detailButton.textContent = "Detayi Goruntule";
+    detailButton.setAttribute("aria-label", `${packageDisplayCode(pkg)} detayini goruntule`);
+    detailButton.addEventListener("click", () => {
+      if (typeof showPackageDetailsModal === "function") showPackageDetailsModal(pkg);
+    });
+    detailFooter.appendChild(detailButton);
+    card.appendChild(detailFooter);
+
     if (pkg.status === "pending_approval" || isPlatformOrder) {
       const actions = document.createElement("div");
-      actions.className = "card-actions";
+      actions.className = "card-actions order-card-actions";
 
       if (pkg.status === "pending_approval") {
         const confirmButton = document.createElement("button");
@@ -1533,7 +1556,7 @@ function renderOrderHistory(packages) {
     restaurantState.historyRange,
     restaurantState.historyVisibleCount,
     filteredHistory.length,
-    listRenderSignature(list, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierName", "paymentStatus", "updatedAt", "deliveredAt", "failedAt"]),
+    listRenderSignature(list, ["id", "trackingNo", "externalOrderNo", "status", "recipient", "deliveryAddress", "address", "assignedCourierName", "paymentMethod", "paymentStatus", "orderAmount", "createdAt", "updatedAt", "deliveredAt", "completedAt", "closedAt", "cancelledAt", "failedAt"]),
   ].join("||");
   if (restaurantRefs.orderHistory.__deliveraRenderSignature === signature) {
     return;
@@ -1553,21 +1576,32 @@ function renderOrderHistory(packages) {
   }
 
   list.forEach((pkg) => {
+    const closedAt = packageClosedAt(pkg);
     const card = document.createElement("article");
-    card.className = `stack-card order-summary-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
+    card.className = "stack-card order-summary-card restaurant-order-card restaurant-history-card modern-card";
     card.innerHTML = `
-      <div class="stack-top">
-        <div>
-          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo}</strong>
-          <p class="entity-line">${SVG_PIN} ${pkg.packageType || "Standart Paket"} - ${pkg.deliveryAddress || pkg.address}</p>
-          <p>Guncelleme: ${formatDate(pkg.updatedAt || pkg.createdAt)}</p>
+      <div class="order-card-top">
+        <div class="order-card-title">
+          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
+          <p class="entity-line">${pkg.recipient || "Musteri"} - ${pkg.packageType || "Standart Paket"}</p>
+          <p>Kaynak: ${packageSourceLabel(pkg) || "-"}</p>
         </div>
-        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+        <div class="order-card-badges">
+          <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+        </div>
       </div>
       <div class="meta-grid compact-meta-grid">
         <div>
-          <span>Kaynak</span>
-          <strong>${packageSourceLabel(pkg)}</strong>
+          <span>Paket kodu</span>
+          <strong>${packageDisplayCode(pkg)}</strong>
+        </div>
+        <div>
+          <span>Musteri</span>
+          <strong>${pkg.recipient || "-"}</strong>
+        </div>
+        <div class="order-meta-wide">
+          <span>Adres</span>
+          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
         </div>
         <div>
           <span>Kurye</span>
@@ -1577,8 +1611,16 @@ function renderOrderHistory(packages) {
           <span>Odeme</span>
           <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
         </div>
+        <div>
+          <span>Olusturulma</span>
+          <strong>${formatDate(pkg.createdAt)}</strong>
+        </div>
+        <div>
+          <span>Kapanma</span>
+          <strong>${closedAt ? formatDate(closedAt) : "-"}</strong>
+        </div>
       </div>
-      <div style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; text-align: right;">
+      <div class="order-card-footer">
         <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
       </div>
     `;

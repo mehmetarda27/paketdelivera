@@ -1002,6 +1002,120 @@ select option {
   justify-content: center;
 }
 
+#restaurantWorkspace_orders_flow .search-input {
+  max-width: none;
+  min-width: 0;
+}
+
+.restaurant-order-flow-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.restaurant-order-flow-grid > *,
+.restaurant-order-flow-grid > div,
+.restaurant-order-flow-grid > div > .glass-panel {
+  min-width: 0;
+  width: 100%;
+}
+
+#restaurantWorkspace_orders_flow .history-list {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.restaurant-order-card {
+  display: grid;
+  gap: 16px;
+  overflow: visible;
+}
+
+.restaurant-order-card .compact-meta-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  margin: 0;
+}
+
+.restaurant-order-card .compact-meta-grid > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.restaurant-order-card .compact-meta-grid span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.restaurant-order-card .compact-meta-grid strong,
+.restaurant-order-card .entity-line,
+.order-card-title p {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.order-card-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.order-card-title {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.order-card-title strong {
+  font-size: 1.04rem;
+}
+
+.order-card-badges {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: 360px;
+}
+
+.order-card-badges .status-badge,
+.order-card-badges .soft-badge {
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+}
+
+.order-meta-wide {
+  grid-column: span 2;
+}
+
+.order-card-footer,
+.order-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-action-btn {
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+}
+
 .empty-state {
   min-height: 96px;
   padding: 34px 18px;
@@ -2541,6 +2655,25 @@ body.app-unauthenticated .courier-bottom-nav {
 
   .inline-search-control {
     grid-template-columns: minmax(0, 1fr) 46px;
+  }
+
+  .order-card-top {
+    grid-template-columns: 1fr;
+  }
+
+  .order-card-badges,
+  .order-card-footer,
+  .order-card-actions {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .restaurant-order-card .compact-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .order-meta-wide {
+    grid-column: auto;
   }
 
   .panel-head > div:last-child {
