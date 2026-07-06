@@ -3679,6 +3679,12 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(responsePayload));
 }
 
+function sendWebhookPosTicket(res, posTicket) {
+  writeSecurityHeaders(res);
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ pos_ticket: String(posTicket || "") }));
+}
+
 function sendText(res, statusCode, payload, contentType = "text/plain; charset=utf-8") {
   writeSecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": contentType });
@@ -7007,6 +7013,22 @@ function apiWebhookAuthorized(req, order = {}) {
   return Boolean(bearer && externalRestaurantId && bearer === externalRestaurantId);
 }
 
+function applyWebhookRestaurantIdFallback(req, order = {}) {
+  if (order.externalRestaurantId) {
+    return order;
+  }
+  const bearer = getBearerToken(req);
+  const bearerIsGlobalSecret = WEBHOOK_SECRET && timingSafeStringEqual(bearer, WEBHOOK_SECRET);
+  if (bearer && !bearerIsGlobalSecret) {
+    order.externalRestaurantId = bearer;
+  }
+  return order;
+}
+
+function webhookPosTicketForPackage(pkg, fallbackId = "") {
+  return String(pkg?.posTicket || pkg?.pos_ticket || fallbackId || pkg?.id || "");
+}
+
 function findWebhookPackageForOrder(order, restaurantId) {
   return db.prepare(`
     SELECT * FROM packages
@@ -9713,7 +9735,7 @@ async function handleApi(req, res, pathname) {
       sendJson(res, error.statusCode || 400, { success: false, message: error.message });
       return;
     }
-    const order = normalizeWebhookOrderPayload(body);
+    const order = applyWebhookRestaurantIdFallback(req, normalizeWebhookOrderPayload(body));
     if (!apiWebhookAuthorized(req, order)) {
       logApiWebhookAttempt({ req, order, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
       sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
@@ -9735,17 +9757,12 @@ async function handleApi(req, res, pathname) {
       if (!restaurant) {
         const unmatchedId = upsertUnmatchedOrder(order);
         logPlatformRestaurantNotMatched(order, req);
-        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 202, status: "unmatched" });
+        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 200, status: "unmatched" });
         broadcastLiveEvent({
           type: "order:unmatched",
           message: `Eslestirilemeyen platform siparisi alindi: ${order.externalRestaurantId || "-"}`,
         });
-        sendJson(res, 202, {
-          success: true,
-          matched: false,
-          unmatchedOrderId: unmatchedId,
-          message: "Order accepted as unmatched",
-        });
+        sendWebhookPosTicket(res, unmatchedId);
         return;
       }
       if (order.posentegraId) {
@@ -9789,13 +9806,7 @@ async function handleApi(req, res, pathname) {
         totalPrice: order.discountedPrice || order.totalPrice,
         shortCode: order.shortCode,
       });
-      sendJson(res, 200, {
-        success: true,
-        matched: true,
-        duplicate: result.duplicate,
-        orderId: result.packageId,
-        package: createdPackage,
-      });
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(createdPackage, result.packageId));
       return;
     } catch (error) {
       logger.error("API webhook order failed", { error, requestId: req.requestId });
@@ -9835,7 +9846,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const order = normalizeWebhookOrderPayload({ ...body, status: body.status || "cancelled" });
+    const order = applyWebhookRestaurantIdFallback(req, normalizeWebhookOrderPayload({ ...body, status: body.status || "cancelled" }));
     if (!apiWebhookAuthorized(req, order)) {
       logApiWebhookAttempt({ req, order, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
       sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
@@ -9846,28 +9857,19 @@ async function handleApi(req, res, pathname) {
       const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
       if (!restaurant) {
         logPlatformRestaurantNotMatched(order, req);
-        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 202, status: "unmatched" });
+        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 200, status: "unmatched" });
         broadcastLiveEvent({
           type: "order:cancel-unmatched",
           message: `Eslestirilemeyen platform iptali alindi: ${order.externalRestaurantId || "-"}`,
         });
-        sendJson(res, 202, {
-          success: true,
-          matched: false,
-          message: "Cancel accepted as unmatched",
-        });
+        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "unmatched-cancel");
         return;
       }
 
       const target = findWebhookPackageForOrder(order, restaurant.id);
       if (!target) {
-        logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 202, status: "unmatched" });
-        sendJson(res, 202, {
-          success: true,
-          matched: true,
-          cancelled: false,
-          message: "Cancel accepted but matching order was not found",
-        });
+        logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 200, status: "unmatched" });
+        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "missing-cancel");
         return;
       }
 
@@ -9910,13 +9912,7 @@ async function handleApi(req, res, pathname) {
         platform: order.platform,
         message: `${order.platform || "Platform"} siparisi iptal edildi.`,
       });
-      sendJson(res, 200, {
-        success: true,
-        matched: true,
-        cancelled: true,
-        orderId: target.id,
-        package: cancelledPackage,
-      });
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(cancelledPackage, target.id));
       return;
     } catch (error) {
       logger.error("API webhook cancel failed", { error, requestId: req.requestId });
