@@ -7557,6 +7557,10 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
   `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "", order.posentegraId || "");
 
   if (existing) {
+    const existingStatus = normalizeStatus(existing.status);
+    const shouldReopenExisting = order.status === "pending" && [CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(existingStatus);
+    const nextStatus = shouldReopenExisting ? PENDING_STATUS : (order.status === "pending" ? existingStatus : normalizeStatus(order.status));
+    const nextAssignmentStatus = shouldReopenExisting ? assignmentStatusForOrder(nextStatus) : (existing.assignment_status || assignmentStatusForOrder(existing.status));
     logger.warn("INSERT_SKIPPED", {
       requestId: options.requestId || null,
       tableName: "platform_orders",
@@ -7591,8 +7595,8 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       order.clientNote || existing.customer_note,
       order.clientNote ? `Platform notu: ${order.clientNote}` : existing.note,
       json(apiPackageDraftFromWebhook(order, restaurant).items),
-      order.status === "pending" ? normalizeStatus(existing.status) : normalizeStatus(order.status),
-      existing.assignment_status || assignmentStatusForOrder(existing.status),
+      nextStatus,
+      nextAssignmentStatus,
       order.externalRestaurantId || "",
       order.posentegraId || "",
       nowIso(),
