@@ -1583,7 +1583,109 @@ function findQuickPasteLabeledValue(text, labels = []) {
   return "";
 }
 
+function quickPasteKey(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function quickPasteLineMap(text) {
+  const rows = String(text || "").split("\n").map((line) => line.trim());
+  return rows.map((line, index) => {
+    const match = line.match(/^([^:\-#]{2,48})\s*[:\-]\s*(.*)$/u);
+    return {
+      index,
+      line,
+      key: match ? quickPasteKey(match[1]) : "",
+      value: match ? match[2].trim() : "",
+      hasLabel: Boolean(match),
+    };
+  });
+}
+
+function quickPasteValue(text, labels = []) {
+  const wanted = new Set(labels.map(quickPasteKey));
+  const row = quickPasteLineMap(text).find((item) => item.hasLabel && wanted.has(item.key) && item.value);
+  return row?.value || "";
+}
+
+function quickPasteBlock(text, labels = []) {
+  const rows = quickPasteLineMap(text);
+  const wanted = new Set(labels.map(quickPasteKey));
+  const stopLabels = new Set([
+    "not", "aciklama", "adres tarifi", "kurye notu", "musteri notu", "siparis icerigi",
+    "urunler", "odeme", "odeme tipi", "tutar", "toplam", "toplam tutar", "telefon",
+    "tel", "musteri", "musteri adi", "ad soyad", "siparis no", "order id"
+  ]);
+  const start = rows.find((item) => item.hasLabel && wanted.has(item.key));
+  if (!start) return "";
+  const parts = [];
+  if (start.value) parts.push(start.value);
+  for (let index = start.index + 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (!row.line) {
+      if (parts.length) break;
+      continue;
+    }
+    if (row.hasLabel && stopLabels.has(row.key)) break;
+    parts.push(row.line);
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function detectQuickPastePlatform(text) {
+  if (/yemek\s*sepeti|yemeksepeti|\bys\b/i.test(text)) return "Yemeksepeti";
+  if (/getir/i.test(text)) return "GetirYemek";
+  if (/trendyol/i.test(text)) return "Trendyol Yemek";
+  if (/migros/i.test(text)) return "Migros Yemek";
+  return "Hizli Platform";
+}
+
+function parseQuickPasteTextSmart(rawText) {
+  const text = normalizeQuickPasteText(rawText);
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const phoneMatch = text.match(/(?:\+?90\s*)?(05\d[\d\s-]{8,})/);
+  const phone = phoneMatch ? phoneMatch[1].replace(/[^\d]/g, "").replace(/^90(?=5)/, "") : "";
+  const platform = detectQuickPastePlatform(text);
+  const customerName = quickPasteValue(text, ["Musteri", "Musteri Adi", "Ad Soyad", "Adi Soyadi", "Alici"]);
+  const labeledPayment = quickPasteValue(text, ["Odeme", "Odeme Tipi", "Payment", "Payment Method"]);
+  const paymentMethod = labeledPayment || (/nakit kapida|kapida nakit|nakit/i.test(text)
+    ? "Nakit"
+    : /online|kart|kredi karti|pos/i.test(text)
+      ? "Online Odeme"
+      : "");
+  const customerNote = quickPasteValue(text, ["Not", "Aciklama", "Adres Tarifi", "Kurye Notu", "Musteri Notu"]);
+  const amountMatch = text.match(/(?:toplam\s*tutar|toplam|tutar|odeme)\s*[:\-]?\s*(?:tl|try|₺)?\s*([\d\.,]+)/i) ||
+    text.match(/([\d\.,]+)\s*(?:tl|try|₺)/i);
+  const orderAmount = amountMatch?.[1]
+    ? Number(String(amountMatch[1]).replace(/\./g, "").replace(",", "."))
+    : 0;
+  const orderNo = quickPasteValue(text, ["Siparis No", "Siparis ID", "Order No", "Order ID"]) ||
+    (text.match(/#\s*([A-Z0-9][A-Z0-9\-]{4,})/i)?.[1] || "");
+  const labeledAddress = quickPasteBlock(text, ["Teslimat Adresi", "Adres", "Musteri Adresi"]);
+  const longAddressLine = lines
+    .filter((line) => line.length >= 18 && !/^(telefon|tel|odeme|musteri|not|aciklama|toplam|tutar|urun|siparis)\b/i.test(quickPasteKey(line)))
+    .sort((left, right) => right.length - left.length)[0] || "";
+
+  return {
+    customerName,
+    phone,
+    customerAddress: labeledAddress || longAddressLine,
+    paymentMethod,
+    customerNote,
+    packageType: `${platform} Siparisi${orderNo ? ` - ${orderNo}` : ""}`,
+    platform,
+    orderNo,
+    orderAmount,
+  };
+}
+
 function parseQuickPasteText(rawText) {
+  return parseQuickPasteTextSmart(rawText);
   const text = normalizeQuickPasteText(rawText);
   const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
   const phoneMatch = text.match(/(?:\+?90\s*)?(05\d[\d\s-]{8,})/);
@@ -11363,7 +11465,7 @@ async function handleApi(req, res, pathname) {
       paymentMethod: parsed.paymentMethod || "Panel Kaydi",
       customerNote: parsed.customerNote,
       source: trimmed(body.source) || "platform_extension",
-      sourcePlatform: trimmed(body.sourcePlatform ?? body.source_platform) || "Diger",
+      sourcePlatform: trimmed(body.sourcePlatform ?? body.source_platform) || parsed.platform || "Diger",
       rawText,
       requestedStatus: AWAITING_ASSIGNMENT_STATUS,
     };
