@@ -237,6 +237,7 @@ Kurye:
 
 Entegrasyon:
 - `POST /api/webhooks/orders`
+- `POST /api/webhooks/orders/cancel`
 - `GET /api/webhooks/health`
 - `GET /api/admin/unmatched-orders`
 - `POST /api/admin/unmatched-orders/:id/match`
@@ -256,8 +257,13 @@ Entegrasyon:
 Webhook URL:
 `POST /api/webhooks/orders`
 
+Siparis iptal webhook URL:
+`POST /api/webhooks/orders/cancel`
+
 Gerekli header:
 `x-webhook-secret`
+
+Panel varsayilan header olarak `Authorization: Bearer {{restaurant.id}}` gonderebiliyorsa bu da kabul edilir. Bu durumda `{{restaurant.id}}`, webhook payload'indaki restoran/platform sube ID'si ile ayni olmalidir.
 
 Content-Type:
 `application/json`

@@ -2689,6 +2689,14 @@ function getBearerToken(req) {
   return "";
 }
 
+function timingSafeStringEqual(left, right) {
+  const leftValue = trimmed(left);
+  const rightValue = trimmed(right);
+  return Boolean(leftValue) &&
+    leftValue.length === rightValue.length &&
+    crypto.timingSafeEqual(Buffer.from(leftValue), Buffer.from(rightValue));
+}
+
 function setSessionCookie(res, token) {
   const secure = FORCE_HTTPS ? "; Secure" : "";
   const maxAge = Math.floor(REFRESH_TOKEN_MAX_AGE_MS / 1000);
@@ -6894,7 +6902,16 @@ function normalizeWebhookOrderPayload(payload = {}) {
   const address = client.deliveryAddress && typeof client.deliveryAddress === "object" ? client.deliveryAddress : {};
   const location = client.location && typeof client.location === "object" ? client.location : {};
   const externalRestaurantId = extractWebhookRestaurantId(payload);
-  const externalOrderId = trimmed(payload.pid || payload.externalOrderId || payload.orderId || payload.id);
+  const externalOrderId = trimmed(
+    payload.pid ||
+    payload.externalOrderId ||
+    payload.external_order_id ||
+    payload.orderId ||
+    payload.order_id ||
+    payload.externalOrderNo ||
+    payload.external_order_no ||
+    payload.id
+  );
   const platformSlug = trimmed(provider.slug || provider.kaynak || provider.id || provider.alici);
   const providerName = trimmed(provider.kaynak || provider.name || provider.alici || platformSlug);
   const statusInfo = mapOrderStatus(payload.status);
@@ -6972,6 +6989,42 @@ function restaurantMatchesExternalId(restaurant, externalRestaurantId, platform 
 
 function findRestaurantByExternalRestaurantId(externalRestaurantId, platform = "") {
   return getRestaurants().find((restaurant) => restaurantMatchesExternalId(restaurant, externalRestaurantId, platform)) || null;
+}
+
+function apiWebhookAuthorized(req, order = {}) {
+  const secretHeaders = [
+    req.headers["x-webhook-secret"],
+    req.headers["x-platform-secret"],
+    req.headers["x-api-key"],
+    getBearerToken(req),
+  ];
+  if (WEBHOOK_SECRET && secretHeaders.some((value) => timingSafeStringEqual(value, WEBHOOK_SECRET))) {
+    return true;
+  }
+
+  const bearer = getBearerToken(req);
+  const externalRestaurantId = trimmed(order.externalRestaurantId);
+  return Boolean(bearer && externalRestaurantId && bearer === externalRestaurantId);
+}
+
+function findWebhookPackageForOrder(order, restaurantId) {
+  return db.prepare(`
+    SELECT * FROM packages
+    WHERE restaurant_id = ?
+      AND (
+        (external_order_id IS NOT NULL AND external_order_id != '' AND external_order_id = ?)
+        OR (external_order_no IS NOT NULL AND external_order_no != '' AND external_order_no = ?)
+        OR (confirmation_id IS NOT NULL AND confirmation_id != '' AND confirmation_id = ?)
+        OR (posentegra_id IS NOT NULL AND posentegra_id != '' AND posentegra_id = ?)
+      )
+    ORDER BY datetime(created_at) DESC
+  `).get(
+    restaurantId,
+    order.externalOrderId || "",
+    order.externalOrderId || "",
+    order.confirmationId || "",
+    order.posentegraId || ""
+  );
 }
 
 function externalApiAuthorized(req) {
@@ -9632,7 +9685,7 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  if (req.method === "POST" && pathname === "/api/webhooks/orders") {
+  if (req.method === "POST" && ["/api/webhooks/orders", "/api/webhooks/order"].includes(pathname)) {
     const retryAfter = await applyRateLimit(req, "platformOrder", RATE_LIMITS.platformOrder);
     if (retryAfter !== null) {
       sendRateLimited(res, retryAfter);
@@ -9653,16 +9706,6 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
       return;
     }
-    const incomingSecret = trimmed(req.headers["x-webhook-secret"]);
-    const secretValid = Boolean(WEBHOOK_SECRET) &&
-      incomingSecret.length === WEBHOOK_SECRET.length &&
-      crypto.timingSafeEqual(Buffer.from(incomingSecret), Buffer.from(WEBHOOK_SECRET));
-    if (!secretValid) {
-      logApiWebhookAttempt({ req, order: null, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
-      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
-      return;
-    }
-
     let body;
     try {
       ({ json: body } = await readRequestBody(req));
@@ -9671,6 +9714,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const order = normalizeWebhookOrderPayload(body);
+    if (!apiWebhookAuthorized(req, order)) {
+      logApiWebhookAttempt({ req, order, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
+      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
+      return;
+    }
     if (order.posentegraId) {
       logger.info("posentegra_id_detected", {
         request_id: req.requestId,
@@ -9753,6 +9801,127 @@ async function handleApi(req, res, pathname) {
       logger.error("API webhook order failed", { error, requestId: req.requestId });
       logApiWebhookAttempt({ req, order, httpStatus: error.statusCode || 500, status: "error", errorMessage: error.message });
       sendJson(res, error.statusCode || 500, { success: false, message: error.message || "Webhook order failed" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && ["/api/webhooks/orders/cancel", "/api/webhooks/cancel"].includes(pathname)) {
+    const retryAfter = await applyRateLimit(req, "platformOrder", RATE_LIMITS.platformOrder);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    if (!WEBHOOK_ENABLED) {
+      sendJson(res, 503, { success: false, message: "Webhook endpoint disabled" });
+      return;
+    }
+    const contentType = String(req.headers["content-type"] || "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      sendJson(res, 415, { success: false, message: "Content-Type application/json olmalidir." });
+      return;
+    }
+    const incomingIp = clientIp(req);
+    if (WEBHOOK_ALLOWED_IPS.length > 0 && !WEBHOOK_ALLOWED_IPS.includes(incomingIp)) {
+      logApiWebhookAttempt({ req, order: null, httpStatus: 401, status: "error", errorMessage: "IP not allowed" });
+      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
+      return;
+    }
+
+    let body;
+    try {
+      ({ json: body } = await readRequestBody(req));
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { success: false, message: error.message });
+      return;
+    }
+
+    const order = normalizeWebhookOrderPayload({ ...body, status: body.status || "cancelled" });
+    if (!apiWebhookAuthorized(req, order)) {
+      logApiWebhookAttempt({ req, order, httpStatus: 401, status: "error", errorMessage: "Unauthorized webhook request" });
+      sendJson(res, 401, { success: false, message: "Unauthorized webhook request" });
+      return;
+    }
+
+    try {
+      const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
+      if (!restaurant) {
+        logPlatformRestaurantNotMatched(order, req);
+        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 202, status: "unmatched" });
+        broadcastLiveEvent({
+          type: "order:cancel-unmatched",
+          message: `Eslestirilemeyen platform iptali alindi: ${order.externalRestaurantId || "-"}`,
+        });
+        sendJson(res, 202, {
+          success: true,
+          matched: false,
+          message: "Cancel accepted as unmatched",
+        });
+        return;
+      }
+
+      const target = findWebhookPackageForOrder(order, restaurant.id);
+      if (!target) {
+        logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 202, status: "unmatched" });
+        sendJson(res, 202, {
+          success: true,
+          matched: true,
+          cancelled: false,
+          message: "Cancel accepted but matching order was not found",
+        });
+        return;
+      }
+
+      updatePackageLifecycle(target.id, {
+        status: CANCELED_STATUS,
+        assignmentStatus: "cancelled",
+        failureReason: trimmed(body.reason || body.cancelReason || body.cancellationReason) || "Platform iptal bildirimi.",
+      }, mapPackageRow(target));
+      db.prepare(`
+        UPDATE packages
+        SET assigned_courier_id = NULL,
+            assigned_courier_name = NULL,
+            assigned_at = NULL,
+            last_assignment_attempt_at = NULL,
+            last_assignment_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `).run(nowIso(), target.id);
+      updatePlatformOrderStatusByPackage(target, "cancelled");
+      const cancelledPackage = getPackageById(target.id);
+      logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 200, status: "cancelled" });
+      writeAuditLog({
+        actorRole: "webhook",
+        actorId: order.providerName || order.platform,
+        action: "webhook_order_cancelled",
+        packageId: target.id,
+        restaurantId: restaurant.id,
+        details: {
+          platform: order.platform,
+          externalOrderId: order.externalOrderId,
+          externalRestaurantId: order.externalRestaurantId,
+          posentegraId: order.posentegraId,
+          reason: trimmed(body.reason || body.cancelReason || body.cancellationReason),
+        },
+      });
+      broadcastLiveEvent({
+        type: "order:cancelled",
+        restaurantId: restaurant.id,
+        orderId: target.id,
+        platform: order.platform,
+        message: `${order.platform || "Platform"} siparisi iptal edildi.`,
+      });
+      sendJson(res, 200, {
+        success: true,
+        matched: true,
+        cancelled: true,
+        orderId: target.id,
+        package: cancelledPackage,
+      });
+      return;
+    } catch (error) {
+      logger.error("API webhook cancel failed", { error, requestId: req.requestId });
+      logApiWebhookAttempt({ req, order, httpStatus: error.statusCode || 500, status: "error", errorMessage: error.message });
+      sendJson(res, error.statusCode || 500, { success: false, message: error.message || "Webhook cancel failed" });
       return;
     }
   }
