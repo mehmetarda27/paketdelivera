@@ -7025,8 +7025,8 @@ function applyWebhookRestaurantIdFallback(req, order = {}) {
   return order;
 }
 
-function webhookPosTicketForPackage(pkg, fallbackId = "") {
-  return String(pkg?.posTicket || pkg?.pos_ticket || fallbackId || pkg?.id || "");
+function webhookPosTicketForPackage(pkg, fallbackId = "", order = {}) {
+  return String(order?.posTicket || order?.pos_ticket || pkg?.posTicket || pkg?.pos_ticket || fallbackId || pkg?.id || "");
 }
 
 function findWebhookPackageForOrder(order, restaurantId) {
@@ -9806,7 +9806,7 @@ async function handleApi(req, res, pathname) {
         totalPrice: order.discountedPrice || order.totalPrice,
         shortCode: order.shortCode,
       });
-      sendWebhookPosTicket(res, webhookPosTicketForPackage(createdPackage, result.packageId));
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(createdPackage, result.packageId, order));
       return;
     } catch (error) {
       logger.error("API webhook order failed", { error, requestId: req.requestId });
@@ -9912,7 +9912,7 @@ async function handleApi(req, res, pathname) {
         platform: order.platform,
         message: `${order.platform || "Platform"} siparisi iptal edildi.`,
       });
-      sendWebhookPosTicket(res, webhookPosTicketForPackage(cancelledPackage, target.id));
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(cancelledPackage, target.id, order));
       return;
     } catch (error) {
       logger.error("API webhook cancel failed", { error, requestId: req.requestId });
