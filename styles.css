@@ -4984,17 +4984,11 @@ body.theme-courier .courier-mobile-app {
 }
 
 .theme-courier .courier-map-unavailable-copy {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-
-.theme-courier .courier-map-unavailable-copy > div {
   display: grid;
-  gap: 1px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 8px;
+  flex: 1;
   min-width: 0;
 }
 
@@ -5006,14 +5000,9 @@ body.theme-courier .courier-mobile-app {
 .theme-courier .courier-map-unavailable-copy span {
   color: var(--courier-muted, #657483);
   font-size: 0.76rem;
-}
-
-.theme-courier .courier-map-unavailable-copy button {
-  flex: 0 0 auto;
-  width: max-content;
-  min-height: 32px;
-  padding: 5px 10px;
-  border-radius: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .theme-courier .courier-map-canvas {
@@ -5167,8 +5156,8 @@ body.theme-courier .courier-mobile-app {
   }
 
   .theme-courier .courier-map-unavailable-copy {
-    align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
   }
 }
 
