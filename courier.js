@@ -145,6 +145,7 @@ const courierRefs = {
   offerReject: document.getElementById("courierOfferReject"),
   missionMeta: document.getElementById("courierMissionMeta"),
   destinationMap: document.getElementById("courierDestinationMap"),
+  destinationPreview: document.getElementById("courierDestinationPreview"),
   mapTitle: document.getElementById("courierMapTitle"),
   mapAddress: document.getElementById("courierMapAddress"),
   mapButton: document.getElementById("courierMapButton"),
@@ -409,22 +410,17 @@ function openOrderMap(order, target = "customer") {
   window.open(url, "_blank");
 }
 
-function renderStaticMapFallback(target, pkg) {
+function renderMapUnavailable(target, pkg, message = "Gerçek ön izleme için müşteri konumu gerekli") {
   target.classList.remove("has-embed");
-  target.classList.add("map-fallback");
+  target.classList.remove("map-fallback");
+  target.classList.add("map-unavailable");
   const query = mapTargetQuery(pkg, "customer");
-  const label = query || "Adres bilgisi bekleniyor";
   target.innerHTML = `
-    <div class="courier-package-map-art" aria-hidden="true">
-      <span class="mini-map-road mini-map-road-a"></span>
-      <span class="mini-map-road mini-map-road-b"></span>
-      <span class="mini-map-route"></span>
-      <span class="mini-map-pin"></span>
-    </div>
-    <div class="courier-package-map-copy">
-      <strong>Google Maps</strong>
-      <span>${escapeCourierHtml(label)}</span>
-      <button class="courier-map-fallback-btn" type="button">Haritada Ac</button>
+    <div class="courier-map-unavailable-icon" aria-hidden="true">⌖</div>
+    <div class="courier-map-unavailable-copy">
+      <strong>Konum bilgisi eksik</strong>
+      <span>${escapeCourierHtml(message)}</span>
+      ${query ? '<button class="courier-map-fallback-btn" type="button">Adresi haritada ara</button>' : ""}
     </div>
   `;
   target.querySelector(".courier-map-fallback-btn")?.addEventListener("click", (event) => {
@@ -439,8 +435,8 @@ function renderPackageMapPreview(target, pkg) {
   }
   const mapUrl = buildOrderMapUrl(pkg, "customer");
   if (!mapUrl) {
-    target.classList.add("hidden");
-    target.innerHTML = "";
+    target.classList.remove("hidden");
+    renderMapUnavailable(target, pkg);
     return;
   }
 
@@ -457,7 +453,7 @@ function renderPackageMapPreview(target, pkg) {
         openOrderMap(pkg, "customer");
       }
     };
-    renderStaticMapFallback(target, pkg);
+    renderMapUnavailable(target, pkg);
     return;
   }
 
@@ -474,9 +470,7 @@ function renderPackageMapPreview(target, pkg) {
   };
 
   target.classList.add("has-embed");
-  target.classList.remove("map-fallback");
-  const previewToken = `${pkg.id || ""}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  target.dataset.mapPreviewToken = previewToken;
+  target.classList.remove("map-fallback", "map-unavailable");
   target.innerHTML = `
     <iframe title="Gercek Google Maps teslimat on izlemesi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>
     <div class="courier-map-glass">
@@ -485,19 +479,10 @@ function renderPackageMapPreview(target, pkg) {
     </div>
   `;
   updateRoadDistance(target.querySelector(".courier-live-distance"), pkg);
-  let iframeLoaded = false;
   const iframe = target.querySelector("iframe");
-  iframe?.addEventListener("load", () => {
-    iframeLoaded = true;
-  }, { once: true });
   iframe?.addEventListener("error", () => {
-    renderStaticMapFallback(target, pkg);
+    renderMapUnavailable(target, pkg, "Harita servisine şu anda ulaşılamıyor");
   }, { once: true });
-  window.setTimeout(() => {
-    if (!iframeLoaded && target.dataset.mapPreviewToken === previewToken) {
-      renderStaticMapFallback(target, pkg);
-    }
-  }, 6500);
 }
 
 window.openCourierPackageDetailsById = function(packageId) {
@@ -1507,6 +1492,7 @@ function renderCourierFocus(courier, packages) {
     if (courierRefs.mapTitle) courierRefs.mapTitle.textContent = "Harita bekleniyor";
     if (courierRefs.mapAddress) courierRefs.mapAddress.textContent = "Yeni paket geldiginde gidecegin adres burada gorunecek.";
     courierRefs.destinationMap?.classList.add("map-empty");
+    if (courierRefs.destinationPreview) courierRefs.destinationPreview.innerHTML = "";
     courierRefs.mapButton?.setAttribute("disabled", "disabled");
     if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = "Henuz aktif paket yok.";
     return;
@@ -1520,6 +1506,7 @@ function renderCourierFocus(courier, packages) {
   if (courierRefs.mapTitle) courierRefs.mapTitle.textContent = priority.recipient || "Teslimat";
   if (courierRefs.mapAddress) courierRefs.mapAddress.textContent = priority.deliveryAddress || priority.address || "Adres bilgisi bekleniyor.";
   courierRefs.destinationMap?.classList.remove("map-empty");
+  renderPackageMapPreview(courierRefs.destinationPreview, priority);
   courierRefs.mapButton?.removeAttribute("disabled");
   if (courierRefs.missionMeta) courierRefs.missionMeta.textContent = `${activePackages.length} aktif paket, ${activePackages.filter((pkg) => pkg.status === "on_route").length} sahada.`;
 }

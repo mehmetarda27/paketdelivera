@@ -4926,12 +4926,71 @@ body.theme-courier .courier-mobile-app {
 
 .theme-courier .courier-destination-map {
   display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
-  gap: 10px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   margin: 8px 0;
-  padding: 8px !important;
+  padding: 10px !important;
   overflow: hidden;
+}
+
+.theme-courier .courier-destination-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.theme-courier .courier-destination-copy {
+  min-width: 0;
+}
+
+.theme-courier .courier-destination-copy .eyebrow {
+  margin: 0 0 2px;
+}
+
+.theme-courier .courier-destination-preview {
+  width: 100%;
+  margin: 0;
+}
+
+.theme-courier .courier-package-map-preview.map-unavailable {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 78px;
+  padding: 10px;
+  cursor: default;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.theme-courier .courier-map-unavailable-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  color: #b45309;
+  background: #fff7ed;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.theme-courier .courier-map-unavailable-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.theme-courier .courier-map-unavailable-copy span {
+  color: var(--courier-muted, #657483);
+  font-size: 0.76rem;
+}
+
+.theme-courier .courier-map-unavailable-copy button {
+  width: max-content;
+  margin-top: 3px;
 }
 
 .theme-courier .courier-map-canvas {
@@ -5080,8 +5139,8 @@ body.theme-courier .courier-mobile-app {
 }
 
 @media (max-width: 380px) {
-  .theme-courier .courier-destination-map {
-    grid-template-columns: 112px minmax(0, 1fr);
+  .theme-courier .courier-destination-head {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
