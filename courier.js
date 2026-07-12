@@ -410,16 +410,22 @@ function openOrderMap(order, target = "customer") {
   window.open(url, "_blank");
 }
 
-function renderMapUnavailable(target, pkg, message = "Gerçek ön izleme için müşteri konumu gerekli") {
+function renderMapUnavailable(target, pkg, message = "Gerçek ön izleme için müşteri konumu gerekli", options = {}) {
+  if (options.hideWhenUnavailable) {
+    target.classList.add("hidden");
+    target.innerHTML = "";
+    return;
+  }
   target.classList.remove("has-embed");
   target.classList.remove("map-fallback");
   target.classList.add("map-unavailable");
   const query = mapTargetQuery(pkg, "customer");
   target.innerHTML = `
-    <div class="courier-map-unavailable-icon" aria-hidden="true">⌖</div>
+    <div class="courier-map-unavailable-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"></path><circle cx="12" cy="10" r="2.5"></circle><path d="m17.5 4.5-11 11"></path></svg>
+    </div>
     <div class="courier-map-unavailable-copy">
-      <strong>Konum bilgisi eksik</strong>
-      <span>${escapeCourierHtml(message)}</span>
+      <div><strong>Konum bilgisi eksik</strong><span>${escapeCourierHtml(message)}</span></div>
       ${query ? '<button class="courier-map-fallback-btn" type="button">Adresi haritada ara</button>' : ""}
     </div>
   `;
@@ -429,14 +435,14 @@ function renderMapUnavailable(target, pkg, message = "Gerçek ön izleme için m
   });
 }
 
-function renderPackageMapPreview(target, pkg) {
+function renderPackageMapPreview(target, pkg, options = {}) {
   if (!target) {
     return;
   }
   const mapUrl = buildOrderMapUrl(pkg, "customer");
   if (!mapUrl) {
     target.classList.remove("hidden");
-    renderMapUnavailable(target, pkg);
+    renderMapUnavailable(target, pkg, undefined, options);
     return;
   }
 
@@ -453,7 +459,7 @@ function renderPackageMapPreview(target, pkg) {
         openOrderMap(pkg, "customer");
       }
     };
-    renderMapUnavailable(target, pkg);
+    renderMapUnavailable(target, pkg, undefined, options);
     return;
   }
 
@@ -481,7 +487,7 @@ function renderPackageMapPreview(target, pkg) {
   updateRoadDistance(target.querySelector(".courier-live-distance"), pkg);
   const iframe = target.querySelector("iframe");
   iframe?.addEventListener("error", () => {
-    renderMapUnavailable(target, pkg, "Harita servisine şu anda ulaşılamıyor");
+    renderMapUnavailable(target, pkg, "Harita servisine şu anda ulaşılamıyor", options);
   }, { once: true });
 }
 
@@ -1176,7 +1182,7 @@ function renderPackages(packages) {
     node.querySelector(".eta-value").textContent = presentCourierText(pkg.eta, "ETA yok");
     node.querySelector(".payment-method").textContent = `${paymentText} - ${presentCourierAmount(pkg.orderAmount)}`;
     node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(deliveryAddress)}`;
-    renderPackageMapPreview(node.querySelector(".courier-package-map-preview"), pkg);
+    renderPackageMapPreview(node.querySelector(".courier-package-map-preview"), pkg, { hideWhenUnavailable: true });
     node.querySelector(".note-text").textContent =
       `${pkg.note || "Ek not yok."} - Kayit ${formatDate(pkg.createdAt)}${pkg.failureReason ? ` - Sorun: ${pkg.failureReason}` : ""}`;
 
