@@ -958,6 +958,13 @@ function renderCourierDayMetrics(dayMetrics) {
       <strong>${metrics.hasClosedDay ? `Kapandi ${formatTimeAgo(metrics.closedAt)}` : "Henuz kapanmadi"}</strong>
     </article>
   `;
+  if (courierRefs.dayCloseButton) {
+    courierRefs.dayCloseButton.disabled = Boolean(metrics.hasClosedDay);
+    courierRefs.dayCloseButton.textContent = metrics.hasClosedDay ? "Bugun Gun Sonu Yapildi" : "Gunu Bitir";
+  }
+  if (courierRefs.dayCloseNote) {
+    courierRefs.dayCloseNote.disabled = Boolean(metrics.hasClosedDay);
+  }
 }
 
 function renderCourierEarnings(earningsSummary) {
@@ -1988,6 +1995,10 @@ courierRefs.connectionSwitch?.addEventListener("change", async (event) => {
 
 courierRefs.dayCloseButton?.addEventListener("click", async () => {
   if (!courierState.token) {
+    return;
+  }
+  if (courierState.data?.dayMetrics?.hasClosedDay) {
+    showToast("Bugunun gun sonu raporu daha once gonderildi.", "warning");
     return;
   }
   const data = await api("/api/courier/day-close", {

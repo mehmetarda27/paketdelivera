@@ -1385,10 +1385,30 @@ async function run() {
       throw new Error("Kurye gun sonu kapida kart/POS tutari kredi karti kirilimina yansimadi.");
     }
 
+    const duplicateDayCloseResponse = await fetch(`${BASE_URL}/api/courier/day-close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...courierHeaders },
+      body: "{}",
+    });
+    const duplicateDayCloseBody = await duplicateDayCloseResponse.json();
+    if (duplicateDayCloseResponse.status !== 409 || !duplicateDayCloseBody.dayCloseReport?.id) {
+      throw new Error("Kurye ayni gun ikinci kez gun sonu yapabildi veya mevcut rapor geri donmedi.");
+    }
+
+    const editedDayClose = await request(`/api/admin/day-close/${dayCloseReport.id}`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ failedCollectionTotal: 25, adminNote: "Smoke eksik kontrolu" }),
+    });
+    const editedDayCloseReport = (editedDayClose.courierDailyReports || []).find((report) => report.id === dayCloseReport.id);
+    if (!editedDayCloseReport || Number(editedDayCloseReport.failedCollectionTotal) !== 25 || editedDayCloseReport.adminNote !== "Smoke eksik kontrolu") {
+      throw new Error("Admin gun sonu eksik tutarini ve notunu kaydedemedi.");
+    }
+
     const dayCloseApproval = await request(`/api/admin/day-close/${dayCloseReport.id}/approve`, {
       method: "POST",
       headers: adminHeaders,
-      body: "{}",
+      body: JSON.stringify({ adminNote: "Smoke eksik kontrolu" }),
     });
     if (!dayCloseApproval.success) {
       throw new Error("Admin kurye gun sonu raporunu onaylayamadi.");
@@ -1418,14 +1438,14 @@ async function run() {
     if (cardPackage.assignedCourierId === createdCourier2.id && Number(courier2DayCloseReport.creditCardAmount) < 275) {
       throw new Error("Kurye gun sonu kapida kart/POS tutari kredi karti kirilimina yansimadi.");
     }
-    const courier2DayCloseApproval = await request(`/api/admin/day-close/${courier2DayCloseReport.id}/approve`, {
+    const courier2DayCloseRejection = await request(`/api/admin/day-close/${courier2DayCloseReport.id}/reject`, {
       method: "POST",
       headers: adminHeaders,
-      body: "{}",
+      body: JSON.stringify({ adminNote: "Smoke red kontrolu" }),
     });
-    const approvedCourier2Report = (courier2DayCloseApproval.courierDailyReports || []).find((report) => report.id === courier2DayCloseReport.id);
-    if (!approvedCourier2Report || approvedCourier2Report.status !== "approved") {
-      throw new Error("Ikinci kurye gun sonu onayi admin rapor listesine yansimadi.");
+    const rejectedCourier2Report = (courier2DayCloseRejection.courierDailyReports || []).find((report) => report.id === courier2DayCloseReport.id);
+    if (!rejectedCourier2Report || rejectedCourier2Report.status !== "rejected" || rejectedCourier2Report.adminNote !== "Smoke red kontrolu") {
+      throw new Error("Kurye gun sonu reddi ve red sebebi admin rapor listesine yansimadi.");
     }
 
     const approvedDayCloseState = await request("/api/admin/bootstrap", {

@@ -73,6 +73,7 @@ const adminRefs = {
   courierIntegrationIdList: document.getElementById("courierIntegrationIdList"),
   auditLogList: document.getElementById("auditLogList"),
   courierDailyReportList: document.getElementById("courierDailyReportList"),
+  courierDailyReportDetailPanel: document.getElementById("courierDailyReportDetailPanel"),
   courierEarningsFilterForm: document.getElementById("courierEarningsFilterForm"),
   courierEarningsGenerateButton: document.getElementById("courierEarningsGenerateButton"),
   courierEarningsCourierFilter: document.getElementById("courierEarningsCourierFilter"),
@@ -1185,7 +1186,87 @@ function renderAuditLogs(logs) {
   });
 }
 
+function renderCourierDailyReportsTable(reports) {
+  const target = adminRefs.courierDailyReportList;
+  if (!target) return;
+  const signature = listRenderSignature((reports || []).slice(0, 50), ["id", "courierName", "reportDate", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "restaurantCollectedAmount", "failedCollectionTotal", "status", "adminNote", "updatedAt"]);
+  if (target.__deliveraRenderSignature === signature) return;
+  target.__deliveraRenderSignature = signature;
+  target.innerHTML = "";
+  if (!(reports || []).length) {
+    target.innerHTML = '<tr><td colspan="10" class="soft-copy" style="text-align:center;">Henuz kurye gun sonu raporu yok.</td></tr>';
+    return;
+  }
+  reports.slice(0, 50).forEach((report) => {
+    const row = document.createElement("tr");
+    const statusText = report.status === "approved" ? "Onaylandi" : report.status === "rejected" ? "Reddedildi" : "Onay Bekliyor";
+    row.innerHTML = `
+      <td><strong>${htmlSafe(report.reportDate)}</strong><br><span class="soft-copy">${htmlSafe(report.zone || "-")}</span></td>
+      <td>${htmlSafe(report.courierName || "-")}</td>
+      <td>${Number(report.deliveredCount || report.packageIds?.length || 0)} Paket</td>
+      <td>${formatCurrency(report.cashCollectedAmount)}</td>
+      <td>${formatCurrency(report.creditCardAmount)}</td>
+      <td>${formatCurrency(report.paidOnlineAmount)}</td>
+      <td>${formatCurrency(report.restaurantCollectedAmount)}</td>
+      <td class="${Number(report.failedCollectionTotal || 0) > 0 ? "report-missing-amount" : ""}">${formatCurrency(report.failedCollectionTotal)}</td>
+      <td><strong>${formatCurrency(report.totalAmount)}</strong></td>
+      <td><div class="admin-eod-row-actions"><span class="status-badge ${report.status === "approved" ? "status-delivered" : report.status === "rejected" ? "status-failed" : "status-awaiting-assignment"}">${statusText}</span><button class="ghost-btn small-btn detail-btn" type="button">Detay</button></div></td>
+    `;
+    row.querySelector(".detail-btn")?.addEventListener("click", () => renderCourierDailyReportDetail(report));
+    target.appendChild(row);
+  });
+}
+
+function renderCourierDailyReportDetail(report) {
+  const panel = adminRefs.courierDailyReportDetailPanel;
+  if (!panel) return;
+  const editable = report.status !== "approved";
+  panel.innerHTML = `
+    <article class="stack-card admin-eod-editor-card">
+      <div class="stack-top"><div><p class="eyebrow accent-teal">Gun Sonu Detayi</p><h3>${htmlSafe(report.courierName)} - ${htmlSafe(report.reportDate)}</h3><p>${htmlSafe(report.zone || "-")} bolgesi - ${Number(report.deliveredCount || 0)} teslimat</p></div><button class="ghost-btn close-detail-btn" type="button">Kapat</button></div>
+      <div class="form-grid admin-eod-editor-grid">
+        <label>Nakit<input name="cashCollectedAmount" type="number" min="0" step="0.01" value="${Number(report.cashCollectedAmount || 0).toFixed(2)}" ${editable ? "" : "disabled"}></label>
+        <label>Kredi Karti<input name="creditCardAmount" type="number" min="0" step="0.01" value="${Number(report.creditCardAmount || 0).toFixed(2)}" ${editable ? "" : "disabled"}></label>
+        <label>Online<input name="paidOnlineAmount" type="number" min="0" step="0.01" value="${Number(report.paidOnlineAmount || 0).toFixed(2)}" ${editable ? "" : "disabled"}></label>
+        <label>Restoran Tahsil<input name="restaurantCollectedAmount" type="number" min="0" step="0.01" value="${Number(report.restaurantCollectedAmount || 0).toFixed(2)}" ${editable ? "" : "disabled"}></label>
+        <label>Eksik / Tahsil Edilemedi<input name="failedCollectionTotal" type="number" min="0" step="0.01" value="${Number(report.failedCollectionTotal || 0).toFixed(2)}" ${editable ? "" : "disabled"}></label>
+        <label class="full-width">Admin Notu<textarea name="adminNote" rows="3" ${editable ? "" : "disabled"}>${htmlSafe(report.adminNote || "")}</textarea></label>
+      </div>
+      ${report.courierNote ? `<p class="soft-copy"><strong>Kurye notu:</strong> ${htmlSafe(report.courierNote)}</p>` : ""}
+      <div class="card-actions admin-eod-detail-actions">${editable ? '<button class="ghost-btn save-report-btn" type="button">Duzeltmeyi Kaydet</button><button class="primary-btn approve-report-btn" type="button">Onayla</button><button class="ghost-btn reject-report-btn" type="button">Reddet</button>' : '<span class="soft-badge">Bu rapor onaylandi ve kilitlendi.</span>'}</div>
+    </article>`;
+  panel.querySelector(".close-detail-btn")?.addEventListener("click", () => { panel.innerHTML = ""; });
+  if (!editable) return;
+  const reportPayload = () => {
+    const value = (name) => Number(panel.querySelector(`[name="${name}"]`)?.value || 0);
+    return { cashCollectedAmount: value("cashCollectedAmount"), creditCardAmount: value("creditCardAmount"), paidOnlineAmount: value("paidOnlineAmount"), restaurantCollectedAmount: value("restaurantCollectedAmount"), failedCollectionTotal: value("failedCollectionTotal"), adminNote: panel.querySelector('[name="adminNote"]')?.value || "" };
+  };
+  const saveReport = async () => {
+    const data = await api(`/api/admin/day-close/${report.id}`, { method: "PATCH", headers: adminHeaders(), body: JSON.stringify(reportPayload()), retryWithRefresh: refreshAdminAccess });
+    hydrateAdmin(data);
+    return data;
+  };
+  panel.querySelector(".save-report-btn")?.addEventListener("click", async () => { await saveReport(); showToast("Gun sonu duzeltmesi kaydedildi.", "success"); });
+  panel.querySelector(".approve-report-btn")?.addEventListener("click", async () => {
+    const payload = reportPayload();
+    await saveReport();
+    const data = await api(`/api/admin/day-close/${report.id}/approve`, { method: "POST", headers: adminHeaders(), body: JSON.stringify({ adminNote: payload.adminNote }), retryWithRefresh: refreshAdminAccess });
+    panel.innerHTML = ""; hydrateAdmin(data); showToast("Gun sonu onaylandi.", "success");
+  });
+  panel.querySelector(".reject-report-btn")?.addEventListener("click", async () => {
+    const payload = reportPayload();
+    if (!payload.adminNote.trim()) { showToast("Reddetmek icin admin notuna red sebebi yaz.", "error"); return; }
+    await saveReport();
+    const data = await api(`/api/admin/day-close/${report.id}/reject`, { method: "POST", headers: adminHeaders(), body: JSON.stringify({ adminNote: payload.adminNote }), retryWithRefresh: refreshAdminAccess });
+    panel.innerHTML = ""; hydrateAdmin(data); showToast("Gun sonu reddedildi.", "warning");
+  });
+}
+
 function renderCourierDailyReports(reports) {
+  renderCourierDailyReportsTable(reports);
+}
+
+function renderCourierDailyReportsLegacy(reports) {
   const signature = listRenderSignature((reports || []).slice(0, 20), ["id", "courierName", "reportDate", "zone", "deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "restaurantCollectedAmount", "failedCollectionTotal", "status", "updatedAt"]);
   if (adminRefs.courierDailyReportList.__deliveraRenderSignature === signature) {
     return;

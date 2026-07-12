@@ -13278,11 +13278,21 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
+    const reportDate = dayKey();
+    const existingReport = db.prepare("SELECT * FROM courier_daily_reports WHERE courier_id = ? AND report_date = ?").get(session.courier_id, reportDate);
+    if (existingReport) {
+      sendJson(res, 409, {
+        error: "Bugunun gun sonu raporu daha once gonderildi. Her kurye gunde yalnizca bir kez gun sonu yapabilir.",
+        dayCloseReport: mapCourierDailyReportRow(existingReport),
+      });
+      return;
+    }
+
     const { json: body } = await readRequestBody(req);
-    const summary = upsertCourierDailyReport(session.courier_id, dayKey(), {
+    const summary = upsertCourierDailyReport(session.courier_id, reportDate, {
       courierNote: body.courierNote ?? body.note,
     });
-    upsertCashReconciliation(session.courier_id, dayKey(), summary);
+    upsertCashReconciliation(session.courier_id, reportDate, summary);
     closeCourierShift(session.courier_id);
     const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
@@ -13290,7 +13300,7 @@ async function handleApi(req, res, pathname) {
       actorId: session.courier_id,
       action: "courier_day_closed",
       details: {
-        reportDate: dayKey(),
+        reportDate,
         deliveredCount: summary.deliveredCount,
         totalAmount: summary.totalAmount,
       },
@@ -13564,14 +13574,27 @@ async function handleApi(req, res, pathname) {
     }
     db.prepare(`
       UPDATE courier_daily_reports
-      SET cash_collected_amount = ?, credit_card_amount = ?, paid_online_amount = ?, collected_total = ?, failed_collection_total = ?, admin_note = ?, updated_at = ?
+      SET cash_collected_amount = ?, credit_card_amount = ?, paid_online_amount = ?, restaurant_collected_amount = ?,
+          collected_total = ?, failed_collection_total = ?, total_amount = ?, admin_note = ?, updated_at = ?
       WHERE id = ?
     `).run(
       normalizeMoney(body.cashTotal ?? body.cashCollectedAmount ?? report.cash_collected_amount),
       normalizeMoney(body.cardTotal ?? body.creditCardAmount ?? report.credit_card_amount),
       normalizeMoney(body.onlineTotal ?? body.paidOnlineAmount ?? report.paid_online_amount),
-      normalizeMoney(body.collectedTotal ?? report.collected_total),
+      normalizeMoney(body.restaurantCollectedAmount ?? report.restaurant_collected_amount),
+      normalizeMoney(body.collectedTotal ?? (
+        normalizeMoney(body.cashTotal ?? body.cashCollectedAmount ?? report.cash_collected_amount) +
+        normalizeMoney(body.cardTotal ?? body.creditCardAmount ?? report.credit_card_amount) +
+        normalizeMoney(body.restaurantCollectedAmount ?? report.restaurant_collected_amount)
+      )),
       normalizeMoney(body.failedCollectionTotal ?? report.failed_collection_total),
+      normalizeMoney(
+        normalizeMoney(body.cashTotal ?? body.cashCollectedAmount ?? report.cash_collected_amount) +
+        normalizeMoney(body.cardTotal ?? body.creditCardAmount ?? report.credit_card_amount) +
+        normalizeMoney(body.onlineTotal ?? body.paidOnlineAmount ?? report.paid_online_amount) +
+        normalizeMoney(body.restaurantCollectedAmount ?? report.restaurant_collected_amount) +
+        normalizeMoney(body.failedCollectionTotal ?? report.failed_collection_total)
+      ),
       trimmed(body.adminNote ?? report.admin_note),
       nowIso(),
       report.id

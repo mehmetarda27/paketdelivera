@@ -547,7 +547,7 @@
           <div id="shiftPlanList" class="stack-list compact-stack-list"></div>
         </article>
 
-        <article class="glass-panel">
+        <article class="glass-panel hidden" aria-hidden="true">
           <div class="panel-head">
             <div>
               <p class="eyebrow accent-teal">Nakit Mutabakat</p>
@@ -567,7 +567,27 @@
             <h3>Gün Sonu Ciro ve Teslimat Raporları</h3>
           </div>
         </div>
-        <div id="courierDailyReportList" class="stack-list"></div>
+        <p class="soft-copy">Kurye kapanislarini tek ekrandan incele, eksik tutari duzelt, onayla veya reddet.</p>
+        <div class="report-table-shell admin-eod-table-shell">
+          <table class="report-table admin-eod-table">
+            <thead>
+              <tr>
+                <th>Tarih</th>
+                <th>Kurye</th>
+                <th>Paket</th>
+                <th>Nakit</th>
+                <th>Kredi Karti</th>
+                <th>Online</th>
+                <th>Restoran Tahsil</th>
+                <th>Eksik</th>
+                <th>Toplam Ciro</th>
+                <th>Durum / Islem</th>
+              </tr>
+            </thead>
+            <tbody id="courierDailyReportList"></tbody>
+          </table>
+        </div>
+        <div id="courierDailyReportDetailPanel" class="stack-list admin-eod-detail-panel" style="margin-top: 20px;"></div>
       </section>
         </div>
         

@@ -2356,6 +2356,63 @@ body.theme-courier.app-unauthenticated .courier-login-panel h2 {
   font-size: 0.84rem;
 }
 
+.admin-eod-table-shell {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+}
+
+.admin-eod-table {
+  min-width: 1180px;
+}
+
+.admin-eod-table th,
+.admin-eod-table td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.admin-eod-table tbody tr:hover {
+  background: rgba(45, 212, 191, 0.06);
+}
+
+.admin-eod-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-missing-amount {
+  color: var(--coral);
+  font-weight: 800;
+}
+
+.admin-eod-editor-card {
+  border: 1px solid rgba(45, 212, 191, 0.3);
+}
+
+.admin-eod-editor-grid {
+  margin-top: 16px;
+}
+
+.admin-eod-detail-actions {
+  margin-top: 16px;
+}
+
+@media (max-width: 720px) {
+  .admin-eod-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-eod-detail-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 720px) {
   #restaurantWorkspace_reports .topbar {
     align-items: flex-start !important;
