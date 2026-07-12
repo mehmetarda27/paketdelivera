@@ -29,6 +29,7 @@ const courierState = {
   offerPackageId: "",
   offerBusy: false,
   routeDistanceCache: new Map(),
+  packageGeocodePromises: new Map(),
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -430,6 +431,30 @@ function renderMapUnavailable(target, pkg, message = "Rota ön izlemesi için m�
   `;
 }
 
+async function resolvePackageAddressCoordinates(pkg, target, options = {}) {
+  if (!pkg?.id || orderTargetCoordinates(pkg, "customer")) return;
+  let pending = courierState.packageGeocodePromises.get(pkg.id);
+  if (!pending) {
+    pending = api(`/api/courier/packages/${encodeURIComponent(pkg.id)}/geocode`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${courierState.token}` },
+      retryWithRefresh: refreshCourierAuth,
+    }).finally(() => courierState.packageGeocodePromises.delete(pkg.id));
+    courierState.packageGeocodePromises.set(pkg.id, pending);
+  }
+
+  try {
+    const coordinates = await pending;
+    pkg.customerLat = coordinates.latitude;
+    pkg.customerLng = coordinates.longitude;
+    if (target?.isConnected) renderPackageMapPreview(target, pkg, options);
+  } catch (error) {
+    if (target?.isConnected) {
+      renderMapUnavailable(target, pkg, error?.message || "Adres haritada bulunamadı", options);
+    }
+  }
+}
+
 function renderPackageMapPreview(target, pkg, options = {}) {
   if (!target) {
     return;
@@ -454,7 +479,8 @@ function renderPackageMapPreview(target, pkg, options = {}) {
         openOrderMap(pkg, "customer");
       }
     };
-    renderMapUnavailable(target, pkg, undefined, options);
+    renderMapUnavailable(target, pkg, "Adres koordinata çevriliyor, harita hazırlanıyor...", options);
+    resolvePackageAddressCoordinates(pkg, target, options);
     return;
   }
 

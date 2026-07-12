@@ -5120,6 +5120,48 @@ function publicMapsConfig() {
   };
 }
 
+const geocodeCache = new Map();
+
+async function geocodeDeliveryAddress(address) {
+  const normalizedAddress = trimmed(address);
+  if (!normalizedAddress) return null;
+
+  const cacheKey = normalizedAddress.toLocaleLowerCase("tr-TR");
+  if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const endpoint = trimmed(process.env.GEOCODING_API_URL) || "https://nominatim.openstreetmap.org/search";
+    const url = new URL(endpoint);
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("countrycodes", trimmed(process.env.GEOCODING_COUNTRY_CODES) || "tr");
+    url.searchParams.set("q", normalizedAddress);
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "User-Agent": trimmed(process.env.GEOCODING_USER_AGENT) || "Delivera/1.0 (delivery address preview)",
+      },
+    });
+    if (!response.ok) return null;
+    const results = await response.json();
+    const latitude = Number(results?.[0]?.lat);
+    const longitude = Number(results?.[0]?.lon);
+    const result = coordinatesAreValid(latitude, longitude) ? { latitude, longitude } : null;
+    if (result) geocodeCache.set(cacheKey, result);
+    return result;
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      logger.warn("delivery_address_geocode_failed", { address: normalizedAddress, error: error?.message || String(error) });
+    }
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildCourierWorkspace(courierId, options = {}) {
   const courier = getCourierById(courierId);
   if (!courier) {
@@ -12797,6 +12839,50 @@ async function handleApi(req, res, pathname) {
     }
 
     sendJson(res, 200, workspace);
+    return;
+  }
+
+  const courierPackageGeocodeMatch = pathname.match(/^\/api\/courier\/packages\/([^/]+)\/geocode$/);
+  if (req.method === "POST" && courierPackageGeocodeMatch) {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Oturum bulunamadi." });
+      return;
+    }
+
+    const packageId = decodeURIComponent(courierPackageGeocodeMatch[1]);
+    const target = db.prepare("SELECT * FROM packages WHERE id = ? AND assigned_courier_id = ?").get(packageId, session.courier_id);
+    if (!target) {
+      sendJson(res, 404, { error: "Paket bulunamadi." });
+      return;
+    }
+
+    const hasSavedCoordinates = target.customer_lat !== null && target.customer_lat !== "" &&
+      target.customer_lng !== null && target.customer_lng !== "";
+    const savedLatitude = Number(target.customer_lat);
+    const savedLongitude = Number(target.customer_lng);
+    if (hasSavedCoordinates && coordinatesAreValid(savedLatitude, savedLongitude)) {
+      sendJson(res, 200, { latitude: savedLatitude, longitude: savedLongitude, cached: true });
+      return;
+    }
+
+    const address = trimmed(target.customer_address || target.delivery_address || target.address);
+    const addressWithContext = [address, trimmed(target.zone), "Türkiye"].filter(Boolean).join(", ");
+    const coordinates = await geocodeDeliveryAddress(addressWithContext);
+    if (!coordinates) {
+      sendJson(res, 422, { error: "Adres haritada bulunamadi. Ilce ve sehir bilgisini de ekleyin." });
+      return;
+    }
+
+    db.prepare("UPDATE packages SET customer_lat = ?, customer_lng = ?, updated_at = ? WHERE id = ?")
+      .run(coordinates.latitude, coordinates.longitude, nowIso(), target.id);
+    broadcastLiveEvent({
+      type: "package-location-resolved",
+      restaurantId: target.restaurant_id,
+      courierId: session.courier_id,
+      message: "Teslimat adresi haritada bulundu.",
+    });
+    sendJson(res, 200, { ...coordinates, cached: false });
     return;
   }
 

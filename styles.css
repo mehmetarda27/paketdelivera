@@ -5475,6 +5475,29 @@ body.theme-courier .courier-mobile-app {
   }
 }
 
+/* Keep the five-item courier rows aligned on the full mobile shell width. */
+@media (min-width: 430px) {
+  .theme-courier #courierStats {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow-x: hidden;
+  }
+
+  .theme-courier #courierHistoryFilters {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow-x: hidden;
+  }
+
+  .theme-courier #courierHistoryFilters .ghost-btn {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px !important;
+  }
+}
+
 /* Final override: keep the restaurant customer phone search button visible after global ghost button patches. */
 body.theme-restaurant #customerPhoneSearchButton {
   display: inline-flex !important;
