@@ -80,10 +80,19 @@ function startMockPosentegra() {
       calls.push({ method: req.method, url: req.url, headers: req.headers, body });
       res.setHeader("Content-Type", "application/json");
       if (req.method === "POST" && req.url === "/web-api/v1/restaurants") {
-        res.end(JSON.stringify({ id: "987654321" }));
+        res.end(JSON.stringify({ id: body?.name === "Rollback Posentegra Restaurant" ? "rollback-posentegra-003" : "987654321" }));
         return;
       }
       if (req.method === "POST" && req.url === "/web-api/v1/businesses/biz-1/restaurants") {
+        if (body?.restaurantId === "rollback-posentegra-003") {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: "link failed" }));
+          return;
+        }
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (req.method === "DELETE" && req.url.startsWith("/web-api/v1/restaurants/")) {
         res.end(JSON.stringify({ ok: true }));
         return;
       }
@@ -174,6 +183,51 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
     assert.ok(mock.calls.some((call) => call.method === "POST" && call.url === "/web-api/v1/restaurants"));
     assert.ok(mock.calls.some((call) => call.method === "POST" && call.url === "/web-api/v1/businesses/biz-1/restaurants"));
     assert.ok(readRow(dbFile, "SELECT id FROM webhook_logs WHERE source_platform = ? AND status = ?", "Posentegra", "posentegra_restaurant_create"));
+
+    const existingPosentegraId = "existing-posentegra-002";
+    const createCallCountBeforeExistingLink = mock.calls.filter((call) => call.method === "POST" && call.url === "/web-api/v1/restaurants").length;
+    const existingRestaurantState = await request(baseUrl, "/api/admin/restaurants", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "Existing Posentegra Restaurant",
+        portalUsername: `existing_${Date.now()}`,
+        portalPassword: "Existing123!",
+        zone: "Erdemli",
+        latitude: 36.602,
+        longitude: 34.321,
+        posentegraId: existingPosentegraId,
+      }),
+    });
+    assert.equal(existingRestaurantState.createdRestaurant.posentegraId, existingPosentegraId);
+    assert.equal(
+      mock.calls.filter((call) => call.method === "POST" && call.url === "/web-api/v1/restaurants").length,
+      createCallCountBeforeExistingLink
+    );
+    assert.ok(mock.calls.some((call) =>
+      call.method === "POST" &&
+      call.url === "/web-api/v1/businesses/biz-1/restaurants" &&
+      call.body?.restaurantId === existingPosentegraId
+    ));
+
+    const rollbackUsername = `rollback_${Date.now()}`;
+    await assert.rejects(
+      () => request(baseUrl, "/api/admin/restaurants", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({
+          name: "Rollback Posentegra Restaurant",
+          portalUsername: rollbackUsername,
+          portalPassword: "Rollback123!",
+          zone: "Erdemli",
+          latitude: 36.603,
+          longitude: 34.322,
+        }),
+      }),
+      (error) => error.status === 500
+    );
+    assert.equal(readRow(dbFile, "SELECT id FROM restaurants WHERE username = ?", rollbackUsername), undefined);
+    assert.ok(mock.calls.some((call) => call.method === "DELETE" && call.url === "/web-api/v1/restaurants/rollback-posentegra-003"));
 
     const courierState = await request(baseUrl, "/couriers", {
       method: "POST",

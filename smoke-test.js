@@ -176,7 +176,7 @@ async function run() {
       DELIVERA_ADMIN_USERNAME: adminUsername,
       DELIVERA_ADMIN_PASSWORD: adminPassword,
       DELIVERA_ASSIGNMENT_RETRY_MS: "1000",
-      DELIVERA_COURIER_OFFER_TIMEOUT_MS: "2500",
+      DELIVERA_COURIER_OFFER_TIMEOUT_MS: "5000",
       DATABASE_PATH: tempDbFile,
       DB_PATH: tempDbFile,
       DELIVERA_DB_FILE: tempDbFile,

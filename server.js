@@ -6832,19 +6832,31 @@ async function createRestaurantInPosentegraOrRollback(restaurant, requestId) {
     business_id: posentegraClient.businessId() || null,
   });
 
+  let posentegraId = trimmed(restaurant.posentegraId);
+  let remoteRestaurantCreated = false;
   try {
-    const createResult = await posentegraClient.createRestaurant(restaurant);
-    logPosentegraApiAttempt({
-      requestId,
-      restaurantId: restaurant.id,
-      event: "posentegra_restaurant_create",
-      responseStatus: createResult.status,
-      requestBody: createResult.requestBody,
-      responseBody: createResult.responseBody,
-    });
-    const posentegraId = extractPosentegraRestaurantId(createResult);
-    if (!posentegraId) {
-      throw new Error("Posentegra restoran create response icinde id bulunamadi.");
+    if (posentegraId) {
+      logger.info("posentegra_restaurant_create_skipped", {
+        request_id: requestId,
+        internal_restaurant_id: restaurant.id,
+        posentegra_id: posentegraId,
+        reason: "existing_posentegra_restaurant_id_provided",
+      });
+    } else {
+      const createResult = await posentegraClient.createRestaurant(restaurant);
+      logPosentegraApiAttempt({
+        requestId,
+        restaurantId: restaurant.id,
+        event: "posentegra_restaurant_create",
+        responseStatus: createResult.status,
+        requestBody: createResult.requestBody,
+        responseBody: createResult.responseBody,
+      });
+      posentegraId = extractPosentegraRestaurantId(createResult);
+      if (!posentegraId) {
+        throw new Error("Posentegra restoran create response icinde id bulunamadi.");
+      }
+      remoteRestaurantCreated = true;
     }
     const linkResult = await posentegraClient.linkRestaurantToBusiness(posentegraId);
     if (linkResult) {
@@ -6880,6 +6892,42 @@ async function createRestaurantInPosentegraOrRollback(restaurant, requestId) {
       responseBody: error.result?.responseBody || null,
       error,
     });
+    if (remoteRestaurantCreated && posentegraId) {
+      try {
+        const rollbackResult = await posentegraClient.deleteRestaurant(posentegraId);
+        logPosentegraApiAttempt({
+          requestId,
+          restaurantId: restaurant.id,
+          event: "posentegra_restaurant_create_rollback",
+          responseStatus: rollbackResult.status,
+          requestBody: rollbackResult.requestBody,
+          responseBody: rollbackResult.responseBody,
+          externalRestaurantId: posentegraId,
+        });
+        logger.warn("posentegra_restaurant_create_rolled_back", {
+          request_id: requestId,
+          internal_restaurant_id: restaurant.id,
+          posentegra_id: posentegraId,
+        });
+      } catch (rollbackError) {
+        logger.error("posentegra_restaurant_create_rollback_failed", {
+          request_id: requestId,
+          internal_restaurant_id: restaurant.id,
+          posentegra_id: posentegraId,
+          error_message: rollbackError.message,
+        });
+        logPosentegraApiAttempt({
+          requestId,
+          restaurantId: restaurant.id,
+          event: "posentegra_restaurant_create_rollback_failed",
+          responseStatus: rollbackError.result?.status || 502,
+          requestBody: rollbackError.result?.requestBody || null,
+          responseBody: rollbackError.result?.responseBody || null,
+          error: rollbackError,
+          externalRestaurantId: posentegraId,
+        });
+      }
+    }
     dbFacade.transaction(() => {
       db.prepare("DELETE FROM restaurants WHERE id = ?").run(restaurant.id);
     });

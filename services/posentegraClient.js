@@ -97,6 +97,13 @@ async function createRestaurant(restaurant) {
   });
 }
 
+async function deleteRestaurant(id) {
+  return request(`/web-api/v1/restaurants/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    body: {},
+  });
+}
+
 async function getBusinesses() {
   return request("/web-api/v1/businesses");
 }
@@ -171,6 +178,7 @@ module.exports = {
   updateBusiness,
   deleteBusiness,
   createRestaurant,
+  deleteRestaurant,
   linkRestaurantToBusiness,
   assignPackageToRestaurant,
   changeOrderStatus,

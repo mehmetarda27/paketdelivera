@@ -40,9 +40,11 @@ App flow:
 1. Admin creates a restaurant in Delivera.
 2. The restaurant is inserted into `restaurants`.
 3. If Posentegra env is configured, Delivera calls `POST /web-api/v1/restaurants`.
+   If an existing Posentegra restaurant id was supplied by the admin, creation is skipped and that restaurant is linked instead.
 4. The returned `id` is written to `restaurants.posentegra_id`.
 5. Delivera immediately selects the row and verifies `posentegra_id`.
 6. If the API call or DB verification fails, the local restaurant is removed and the request fails.
+   When Delivera created the remote restaurant during this request, it also attempts a compensating `DELETE` so a failed business link does not leave an orphan Posentegra restaurant.
 
 Success response includes the internal restaurant id, name, `posentegra_id`, and `verification`.
 
