@@ -3679,10 +3679,8 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(responsePayload));
 }
 
-function sendWebhookPosTicket(res, posTicket) {
-  writeSecurityHeaders(res);
-  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify({ pos_ticket: String(posTicket || "") }));
+function sendWebhookPosTicket(res, posTicket, payload = {}) {
+  sendJson(res, 200, { ...payload, pos_ticket: String(posTicket || "") });
 }
 
 function sendText(res, statusCode, payload, contentType = "text/plain; charset=utf-8") {
@@ -9766,7 +9764,12 @@ async function handleApi(req, res, pathname) {
           type: "order:unmatched",
           message: `Eslestirilemeyen platform siparisi alindi: ${order.externalRestaurantId || "-"}`,
         });
-        sendWebhookPosTicket(res, unmatchedId);
+        sendWebhookPosTicket(res, unmatchedId, {
+          success: true,
+          matched: false,
+          unmatchedOrderId: unmatchedId,
+          message: "Order accepted as unmatched",
+        });
         return;
       }
       if (order.posentegraId) {
@@ -9810,7 +9813,13 @@ async function handleApi(req, res, pathname) {
         totalPrice: order.discountedPrice || order.totalPrice,
         shortCode: order.shortCode,
       });
-      sendWebhookPosTicket(res, webhookPosTicketForPackage(createdPackage, result.packageId, order));
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(createdPackage, result.packageId, order), {
+        success: true,
+        matched: true,
+        duplicate: result.duplicate,
+        orderId: result.packageId,
+        package: createdPackage,
+      });
       return;
     } catch (error) {
       logger.error("API webhook order failed", { error, requestId: req.requestId });
@@ -9866,14 +9875,23 @@ async function handleApi(req, res, pathname) {
           type: "order:cancel-unmatched",
           message: `Eslestirilemeyen platform iptali alindi: ${order.externalRestaurantId || "-"}`,
         });
-        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "unmatched-cancel");
+        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "unmatched-cancel", {
+          success: true,
+          matched: false,
+          message: "Cancel accepted as unmatched",
+        });
         return;
       }
 
       const target = findWebhookPackageForOrder(order, restaurant.id);
       if (!target) {
         logApiWebhookAttempt({ req, order, restaurantId: restaurant.id, isMatched: true, httpStatus: 200, status: "unmatched" });
-        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "missing-cancel");
+        sendWebhookPosTicket(res, order.externalOrderId || order.posentegraId || "missing-cancel", {
+          success: true,
+          matched: true,
+          cancelled: false,
+          message: "Cancel accepted but matching order was not found",
+        });
         return;
       }
 
@@ -9916,7 +9934,13 @@ async function handleApi(req, res, pathname) {
         platform: order.platform,
         message: `${order.platform || "Platform"} siparisi iptal edildi.`,
       });
-      sendWebhookPosTicket(res, webhookPosTicketForPackage(cancelledPackage, target.id, order));
+      sendWebhookPosTicket(res, webhookPosTicketForPackage(cancelledPackage, target.id, order), {
+        success: true,
+        matched: true,
+        cancelled: true,
+        orderId: target.id,
+        package: cancelledPackage,
+      });
       return;
     } catch (error) {
       logger.error("API webhook cancel failed", { error, requestId: req.requestId });
