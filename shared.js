@@ -619,6 +619,15 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 });
 
+function sharedHtmlSafe(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 window.showPackageDetailsModal = function(pkg) {
   const shell = document.createElement("div");
   shell.className = "modal-shell";
@@ -673,7 +682,7 @@ window.showPackageDetailsModal = function(pkg) {
           ${pkg.rawPayload ? `
           <details style="background: var(--bg); padding: 16px; border-radius: 12px; border: 1px solid var(--line);">
             <summary style="cursor: pointer; font-weight: 700;">Raw payload</summary>
-            <pre class="code-block" style="white-space: pre-wrap; overflow: auto; max-height: 280px;">${htmlSafe(JSON.stringify(pkg.rawPayload, null, 2))}</pre>
+            <pre class="code-block" style="white-space: pre-wrap; overflow: auto; max-height: 280px;">${sharedHtmlSafe(JSON.stringify(pkg.rawPayload, null, 2))}</pre>
           </details>
           ` : ""}
       </div>

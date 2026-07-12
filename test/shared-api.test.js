@@ -71,3 +71,24 @@ test("api refresh retry sends the refreshed bearer token", async () => {
   assert.deepEqual(data, { ok: true });
   assert.deepEqual(seenAuthorizations, ["Bearer old-token", "Bearer new-token"]);
 });
+
+test("package detail modal renders raw platform payload safely", () => {
+  const context = loadSharedContext(async () => ({ ok: true }));
+  const shell = {
+    className: "",
+    innerHTML: "",
+    querySelector: () => ({ addEventListener: () => {} }),
+    remove: () => {},
+  };
+  context.document.createElement = () => shell;
+
+  assert.doesNotThrow(() => context.window.showPackageDetailsModal({
+    id: "pkg-detail-1",
+    trackingNo: "PKT-DETAIL-1",
+    status: "awaiting_assignment",
+    sourcePlatform: "Trendyol Yemek",
+    rawPayload: { customerNote: "<script>unsafe()</script>" },
+  }));
+  assert.match(shell.innerHTML, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(shell.innerHTML, /<script>unsafe\(\)<\/script>/);
+});

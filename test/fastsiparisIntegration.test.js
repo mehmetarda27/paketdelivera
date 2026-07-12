@@ -262,6 +262,7 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
         customerPhone: "05550000007",
         addressText: "FastSiparis webhook address",
         totalPrice: 330,
+        paymentMethod: "PAY_WITH_MEAL_CARD",
         products: [{ id: "prod-fast-1", name: "Menu", quantity: 1, price: 330, totalPrice: 330 }],
       }),
     });
@@ -279,16 +280,15 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
       readRow(dbFile, "SELECT posentegra_id FROM platform_orders WHERE platform_order_id = ?", "test-pid-001").posentegra_id,
       "test-pid-001"
     );
-
-    const restaurantLogin = await request(baseUrl, "/api/restaurant/session", {
-      method: "POST",
-      body: JSON.stringify({ username: restaurantUsername, password: restaurantPassword }),
-    });
-    await request(baseUrl, `/api/restaurant/packages/${webhookOrder.package.id}/action`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${restaurantLogin.token}` },
-      body: JSON.stringify({ action: "confirm" }),
-    });
+    assert.notEqual(webhookOrder.package.status, "pending_approval");
+    assert.equal(
+      readRow(dbFile, "SELECT status FROM platform_orders WHERE platform_order_id = ?", "test-pid-001").status,
+      "approved"
+    );
+    assert.equal(
+      readRow(dbFile, "SELECT payment_status FROM packages WHERE id = ?", webhookOrder.package.id).payment_status,
+      "paid_online"
+    );
     runSql(
       dbFile,
       "UPDATE packages SET status = 'assigned', assignment_status = 'assigned', assigned_courier_id = ?, assigned_courier_name = ?, assigned_at = datetime('now') WHERE id = ?",
@@ -308,6 +308,23 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
       headers: { Authorization: `Bearer ${courierLogin.token}` },
       body: JSON.stringify({ status: "accepted_by_courier" }),
     });
+    await request(baseUrl, `/api/courier/packages/${webhookOrder.package.id}/status`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${courierLogin.token}` },
+      body: JSON.stringify({ status: "on_route" }),
+    });
+    await request(baseUrl, `/api/courier/packages/${webhookOrder.package.id}/status`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${courierLogin.token}` },
+      body: JSON.stringify({ status: "delivered" }),
+    });
+    const deliveredOnlinePackage = readRow(
+      dbFile,
+      "SELECT status, payment_status FROM packages WHERE id = ?",
+      webhookOrder.package.id
+    );
+    assert.equal(deliveredOnlinePackage.status, "delivered");
+    assert.equal(deliveredOnlinePackage.payment_status, "paid_online");
 
     const statusCall = mock.calls.find((call) => call.method === "POST" && call.url === "/web-api/v1/orders/change-status/test-pid-001");
     assert.ok(statusCall);

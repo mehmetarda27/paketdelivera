@@ -1532,7 +1532,7 @@ function renderRecentOrders(packages) {
       </div>
     `;
     card.querySelector('.details-btn')?.addEventListener('click', () => {
-      if (typeof showPackageDetailsModal === 'function') showPackageDetailsModal(pkg);
+      window.showPackageDetailsModal?.(pkg);
     });
     restaurantRefs.recentOrders.appendChild(card);
   });
@@ -1642,7 +1642,7 @@ function renderActiveOrders(data) {
     detailButton.textContent = "Detayi Goruntule";
     detailButton.setAttribute("aria-label", `${packageDisplayCode(pkg)} detayini goruntule`);
     detailButton.addEventListener("click", () => {
-      if (typeof showPackageDetailsModal === "function") showPackageDetailsModal(pkg);
+      window.showPackageDetailsModal?.(pkg);
     });
     detailFooter.appendChild(detailButton);
     card.appendChild(detailFooter);
@@ -1786,7 +1786,7 @@ function renderOrderHistory(packages) {
       </div>
     `;
     card.querySelector('.details-btn')?.addEventListener('click', () => {
-      if (typeof showPackageDetailsModal === 'function') showPackageDetailsModal(pkg);
+      window.showPackageDetailsModal?.(pkg);
     });
     restaurantRefs.orderHistory.appendChild(card);
   });

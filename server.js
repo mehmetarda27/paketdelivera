@@ -2242,6 +2242,9 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   }
 
   const loweredMethod = trimmed(paymentMethod).toLowerCase();
+  if (normalizePaymentMethodCode(paymentMethod) === "paid_online") {
+    return PAID_ONLINE_PAYMENT_STATUS;
+  }
   if (loweredMethod.includes("nakit")) {
     return CASH_EXPECTED_PAYMENT_STATUS;
   }
@@ -2263,6 +2266,13 @@ function normalizePaymentMethodCode(value) {
   if (VALID_PAYMENT_METHODS.has(incoming)) {
     return incoming;
   }
+  if (
+    incoming.includes("pay_with_") ||
+    incoming.includes("meal_card") ||
+    incoming.includes("mealcard") ||
+    incoming.includes("online_paid") ||
+    incoming.includes("paid_online")
+  ) return "paid_online";
   if (incoming.includes("nakit")) return "cash_on_delivery";
   if (incoming.includes("kart") || incoming.includes("kredi") || incoming.includes("pos")) return "card_on_delivery";
   if (incoming.includes("online")) return "paid_online";
@@ -7544,9 +7554,13 @@ function apiPackageDraftFromWebhook(order, restaurant) {
       note: trimmed(item.note),
     })),
     note: order.clientNote ? `Platform notu: ${order.clientNote}` : "Platform webhook siparisi alindi.",
-    status: order.status === "pending" ? PENDING_STATUS : normalizeStatus(order.status),
-    assignmentStatus: "pending",
-    assignmentReason: "Platform webhook siparisi alindi, restoran onayi bekliyor.",
+    status: order.posentegraId
+      ? AWAITING_ASSIGNMENT_STATUS
+      : (order.status === "pending" ? PENDING_STATUS : normalizeStatus(order.status)),
+    assignmentStatus: order.posentegraId ? "unassigned" : "pending",
+    assignmentReason: order.posentegraId
+      ? "Posentegra siparisi dogrudan kurye atama havuzuna alindi."
+      : "Platform webhook siparisi alindi, restoran onayi bekliyor.",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -7696,10 +7710,10 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
     const existingStatus = normalizeStatus(existing.status);
     const shouldReopenExisting = historicalReplay || (order.status === "pending" && [CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(existingStatus));
     const nextStatus = historicalReplay
-      ? PENDING_APPROVAL_STATUS
+      ? (order.posentegraId ? AWAITING_ASSIGNMENT_STATUS : PENDING_APPROVAL_STATUS)
       : (shouldReopenExisting ? PENDING_STATUS : (order.status === "pending" ? existingStatus : normalizeStatus(order.status)));
     const nextAssignmentStatus = historicalReplay
-      ? "pending_approval"
+      ? (order.posentegraId ? "unassigned" : "pending_approval")
       : (shouldReopenExisting ? assignmentStatusForOrder(nextStatus) : (existing.assignment_status || assignmentStatusForOrder(existing.status)));
     logger.warn("INSERT_SKIPPED", {
       requestId: options.requestId || null,
@@ -7751,7 +7765,14 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
             assignment_reason = ?, failure_reason = NULL, last_assignment_attempt_at = NULL,
             last_assignment_error = NULL, assignment_tried_courier_ids_json = '[]', created_at = ?, updated_at = ?
         WHERE id = ?
-      `).run("Test siparisi yeniden restoran onay havuzuna alindi.", replayedAt, replayedAt, existing.id);
+      `).run(
+        order.posentegraId
+          ? "Test Posentegra siparisi yeniden kurye atama havuzuna alindi."
+          : "Test siparisi yeniden restoran onay havuzuna alindi.",
+        replayedAt,
+        replayedAt,
+        existing.id
+      );
       logger.info("historical_webhook_replayed_as_new", {
         request_id: options.requestId || null,
         package_id: existing.id,
@@ -7775,7 +7796,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       totalPrice: order.discountedPrice || order.totalPrice,
       customerNote: order.clientNote,
       rawPayload: order.rawPayload,
-    }, restaurant.id, order.statusText || "pending_approval", {
+    }, restaurant.id, order.posentegraId ? "approved" : (order.statusText || "pending_approval"), {
       requestId: options.requestId || null,
       platformRestaurantId: order.externalRestaurantId,
       posentegraId: order.posentegraId,
@@ -7833,7 +7854,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
     totalPrice: order.discountedPrice || order.totalPrice,
     customerNote: order.clientNote,
     rawPayload: order.rawPayload,
-  }, restaurant.id, order.statusText || "pending_approval", {
+  }, restaurant.id, order.posentegraId ? "approved" : (order.statusText || "pending_approval"), {
     requestId: options.requestId || null,
     platformRestaurantId: order.externalRestaurantId,
     posentegraId: order.posentegraId,
