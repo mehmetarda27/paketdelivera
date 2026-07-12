@@ -13053,21 +13053,29 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if (nextStatus === DELIVERED_STATUS && ["cash_on_delivery", "card_on_delivery"].includes(paymentMethodCode) && !body.paymentStatus) {
+    const courierSelectablePaymentMethods = ["cash_on_delivery", "card_on_delivery", "restaurant_collected"];
+    const courierSelectablePaymentStatuses = [
+      CASH_COLLECTED_PAYMENT_STATUS,
+      CREDIT_CARD_COLLECTED_PAYMENT_STATUS,
+      RESTAURANT_COLLECTED_PAYMENT_STATUS,
+      PAYMENT_ISSUE_STATUS,
+    ];
+
+    if (nextStatus === DELIVERED_STATUS && courierSelectablePaymentMethods.includes(paymentMethodCode) && !body.paymentStatus) {
       sendJson(res, 400, { error: "Teslim oncesi odeme durumu secilmelidir." });
       return;
     }
 
     if (nextStatus === DELIVERED_STATUS) {
       const allowedPaymentStatuses = {
-        cash_on_delivery: [CASH_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS],
-        card_on_delivery: [CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS],
+        cash_on_delivery: courierSelectablePaymentStatuses,
+        card_on_delivery: courierSelectablePaymentStatuses,
         paid_online: [PAID_ONLINE_PAYMENT_STATUS],
-        restaurant_collected: [RESTAURANT_COLLECTED_PAYMENT_STATUS],
+        restaurant_collected: courierSelectablePaymentStatuses,
         collected: [COLLECTED_PAYMENT_STATUS],
         payment_issue: [PAYMENT_ISSUE_STATUS],
       }[paymentMethodCode] || [];
-      if (!["cash_on_delivery", "card_on_delivery"].includes(paymentMethodCode)) {
+      if (!courierSelectablePaymentMethods.includes(paymentMethodCode)) {
         nextPaymentStatus = paymentStatusForMethod(paymentMethodCode);
       }
       if (!allowedPaymentStatuses.includes(nextPaymentStatus)) {

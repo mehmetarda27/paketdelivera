@@ -1344,20 +1344,19 @@ function renderPackages(packages) {
 
     if (pkg.status === "on_route") {
       const methodCode = String(pkg.paymentMethodCode || "").toLowerCase();
-      const requiresCollection = ["cash_on_delivery", "card_on_delivery"].includes(methodCode);
+      const requiresCollection = ["cash_on_delivery", "card_on_delivery", "restaurant_collected"].includes(methodCode);
       let paymentSelect = null;
       if (requiresCollection) {
         paymentSelect = document.createElement("select");
         paymentSelect.className = "status-select courier-action-select";
-        const collectedOption = methodCode === "cash_on_delivery"
-          ? '<option value="cash_collected">Nakit Alındı</option>'
-          : '<option value="credit_card_collected">Kartla Alındı</option>';
         paymentSelect.innerHTML = [
           '<option value="">Tahsilat Seç</option>',
-          collectedOption,
+          '<option value="cash_collected">Nakit Alındı</option>',
+          '<option value="credit_card_collected">Kartla Alındı</option>',
+          '<option value="restaurant_collected">Restoran Aldı</option>',
           '<option value="payment_issue">Alınamadı</option>',
         ].join("");
-        if (["cash_collected", "credit_card_collected", "payment_issue"].includes(selectedPaymentStatus)) {
+        if (["cash_collected", "credit_card_collected", "restaurant_collected", "payment_issue"].includes(selectedPaymentStatus)) {
           paymentSelect.value = selectedPaymentStatus;
         }
         paymentSelect.addEventListener("change", () => {
