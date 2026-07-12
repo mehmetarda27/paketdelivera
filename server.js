@@ -7664,6 +7664,11 @@ function logPlatformRestaurantNotMatched(order, req = null) {
   });
 }
 
+function isHistoricalWebhookReplay(order = {}) {
+  const sourceDate = Date.parse(order.rawPayload?.created_at || order.rawPayload?.createdAt || "");
+  return Number.isFinite(sourceDate) && Date.now() - sourceDate > 30 * 24 * 60 * 60 * 1000;
+}
+
 function upsertWebhookPackage(order, restaurant, options = {}) {
   if (order.posentegraId) {
     logger.info("order_pid_detected", {
@@ -7687,10 +7692,15 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
   `).get(restaurant.id, order.externalOrderId || "", order.confirmationId || "", order.posentegraId || "");
 
   if (existing) {
+    const historicalReplay = isHistoricalWebhookReplay(order);
     const existingStatus = normalizeStatus(existing.status);
-    const shouldReopenExisting = order.status === "pending" && [CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(existingStatus);
-    const nextStatus = shouldReopenExisting ? PENDING_STATUS : (order.status === "pending" ? existingStatus : normalizeStatus(order.status));
-    const nextAssignmentStatus = shouldReopenExisting ? assignmentStatusForOrder(nextStatus) : (existing.assignment_status || assignmentStatusForOrder(existing.status));
+    const shouldReopenExisting = historicalReplay || (order.status === "pending" && [CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(existingStatus));
+    const nextStatus = historicalReplay
+      ? PENDING_APPROVAL_STATUS
+      : (shouldReopenExisting ? PENDING_STATUS : (order.status === "pending" ? existingStatus : normalizeStatus(order.status)));
+    const nextAssignmentStatus = historicalReplay
+      ? "pending_approval"
+      : (shouldReopenExisting ? assignmentStatusForOrder(nextStatus) : (existing.assignment_status || assignmentStatusForOrder(existing.status)));
     logger.warn("INSERT_SKIPPED", {
       requestId: options.requestId || null,
       tableName: "platform_orders",
@@ -7732,6 +7742,24 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       nowIso(),
       existing.id
     );
+    if (historicalReplay) {
+      const replayedAt = nowIso();
+      db.prepare(`
+        UPDATE packages
+        SET assigned_courier_id = NULL, assigned_courier_name = NULL, assigned_at = NULL, accepted_at = NULL,
+            on_route_at = NULL, delivered_at = NULL, failed_at = NULL, distance_km = NULL,
+            assignment_reason = ?, failure_reason = NULL, last_assignment_attempt_at = NULL,
+            last_assignment_error = NULL, assignment_tried_courier_ids_json = '[]', created_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run("Test siparisi yeniden restoran onay havuzuna alindi.", replayedAt, replayedAt, existing.id);
+      logger.info("historical_webhook_replayed_as_new", {
+        request_id: options.requestId || null,
+        package_id: existing.id,
+        platform_order_id: order.externalOrderId || order.confirmationId || null,
+        source_created_at: order.rawPayload?.created_at || order.rawPayload?.createdAt || null,
+        replayed_at: replayedAt,
+      });
+    }
     updatePackageApiMetadata(existing.id, order);
     replaceOrderItems(existing.id, order.products);
     upsertPlatformOrderRecord({
@@ -7775,7 +7803,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
         platform_order_id: order.externalOrderId || order.confirmationId || null,
       });
     }
-    return { packageId: existing.id, duplicate: true };
+    return { packageId: existing.id, duplicate: !historicalReplay, replayed: historicalReplay };
   }
 
   const draft = apiPackageDraftFromWebhook(order, restaurant);
