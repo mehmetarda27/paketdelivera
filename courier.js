@@ -28,6 +28,7 @@ const courierState = {
   activeProfileSection: "",
   offerPackageId: "",
   offerBusy: false,
+  routeDistanceCache: new Map(),
 };
 
 const COURIER_FAILURE_REASON_OPTIONS = [
@@ -346,7 +347,43 @@ function formatLiveDistance(pkg) {
   if (!destination || !courier) return "Mesafe için müşteri koordinatı bekleniyor";
   const distance = distanceBetweenCoordinates(courier.latitude, courier.longitude, destination.latitude, destination.longitude);
   if (!Number.isFinite(distance)) return "Canlı GPS bekleniyor";
-  return distance < 1 ? `${Math.round(distance * 1000)} m uzakta` : `${distance.toFixed(2)} km uzakta`;
+  return distance < 1 ? `Yaklaşık ${Math.round(distance * 1000)} m` : `Yaklaşık ${distance.toFixed(2)} km`;
+}
+
+function routeDistanceKey(pkg) {
+  const destination = orderTargetCoordinates(pkg, "customer");
+  const courier = courierState.data?.courier;
+  const courierLatitude = Number(courier?.latitude);
+  const courierLongitude = Number(courier?.longitude);
+  if (!destination || !Number.isFinite(courierLatitude) || !Number.isFinite(courierLongitude)) return null;
+  return {
+    key: `${courierLatitude.toFixed(4)},${courierLongitude.toFixed(4)}>${destination.latitude.toFixed(5)},${destination.longitude.toFixed(5)}`,
+    courierLatitude,
+    courierLongitude,
+    destination,
+  };
+}
+
+async function updateRoadDistance(target, pkg) {
+  const route = routeDistanceKey(pkg);
+  if (!route || !target?.isConnected) return;
+  const cached = courierState.routeDistanceCache.get(route.key);
+  if (Number.isFinite(cached)) {
+    target.textContent = `${cached < 1 ? `${Math.round(cached * 1000)} m` : `${cached.toFixed(2)} km`} yol mesafesi · Dokun, rotayı aç`;
+    return;
+  }
+  try {
+    const coordinates = `${route.courierLongitude},${route.courierLatitude};${route.destination.longitude},${route.destination.latitude}`;
+    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=false&alternatives=false&steps=false`);
+    if (!response.ok) return;
+    const payload = await response.json();
+    const kilometers = Number(payload?.routes?.[0]?.distance) / 1000;
+    if (!Number.isFinite(kilometers) || !target.isConnected) return;
+    courierState.routeDistanceCache.set(route.key, kilometers);
+    target.textContent = `${kilometers < 1 ? `${Math.round(kilometers * 1000)} m` : `${kilometers.toFixed(2)} km`} yol mesafesi · Dokun, rotayı aç`;
+  } catch (_error) {
+    // Anlık rota servisi erişilemezse kuş uçuşu yaklaşımı ekranda kalır.
+  }
 }
 
 function buildOpenStreetMapEmbedUrl(pkg) {
@@ -444,9 +481,10 @@ function renderPackageMapPreview(target, pkg) {
     <iframe title="Gercek Google Maps teslimat on izlemesi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>
     <div class="courier-map-glass">
       <strong>Canlı konum ön izlemesi</strong>
-      <span>${escapeCourierHtml(formatLiveDistance(pkg))} · Dokun, rotayı aç</span>
+      <span class="courier-live-distance">${escapeCourierHtml(formatLiveDistance(pkg))} · Dokun, rotayı aç</span>
     </div>
   `;
+  updateRoadDistance(target.querySelector(".courier-live-distance"), pkg);
   let iframeLoaded = false;
   const iframe = target.querySelector("iframe");
   iframe?.addEventListener("load", () => {

@@ -4406,6 +4406,11 @@ body.theme-courier .courier-mobile-app {
   order: 4;
 }
 
+.theme-courier .courier-task-card .courier-package-map-preview {
+  order: 8;
+  margin-top: 2px;
+}
+
 .theme-courier .courier-task-card .note-text {
   order: 5;
   margin: 0;
