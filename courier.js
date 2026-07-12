@@ -278,7 +278,12 @@ function buildOrderMapUrl(order, target = "customer") {
   ).trim();
 
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+    const courierLatitude = Number(courierState.data?.courier?.latitude);
+    const courierLongitude = Number(courierState.data?.courier?.longitude);
+    const origin = Number.isFinite(courierLatitude) && Number.isFinite(courierLongitude)
+      ? `&origin=${courierLatitude},${courierLongitude}`
+      : "";
+    return `https://www.google.com/maps/dir/?api=1${origin}&destination=${latitude},${longitude}&travelmode=driving`;
   }
 
   if (!address) {
@@ -310,6 +315,52 @@ function buildGoogleMapsEmbedUrl(order, target = "customer") {
     return "";
   }
   return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
+}
+
+function orderTargetCoordinates(order, target = "customer") {
+  const latitudeValue = target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude);
+  const longitudeValue = target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude);
+  if (latitudeValue === null || latitudeValue === undefined || latitudeValue === "" || longitudeValue === null || longitudeValue === undefined || longitudeValue === "") return null;
+  const latitude = Number(latitudeValue);
+  const longitude = Number(longitudeValue);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
+    ? { latitude, longitude }
+    : null;
+}
+
+function distanceBetweenCoordinates(fromLatitude, fromLongitude, toLatitude, toLongitude) {
+  const values = [fromLatitude, fromLongitude, toLatitude, toLongitude].map(Number);
+  if (!values.every(Number.isFinite)) return null;
+  const [fromLat, fromLng, toLat, toLng] = values;
+  const radians = (value) => value * Math.PI / 180;
+  const deltaLat = radians(toLat - fromLat);
+  const deltaLng = radians(toLng - fromLng);
+  const a = Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(radians(fromLat)) * Math.cos(radians(toLat)) * Math.sin(deltaLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatLiveDistance(pkg) {
+  const destination = orderTargetCoordinates(pkg, "customer");
+  const courier = courierState.data?.courier;
+  if (!destination || !courier) return "Mesafe için müşteri koordinatı bekleniyor";
+  const distance = distanceBetweenCoordinates(courier.latitude, courier.longitude, destination.latitude, destination.longitude);
+  if (!Number.isFinite(distance)) return "Canlı GPS bekleniyor";
+  return distance < 1 ? `${Math.round(distance * 1000)} m uzakta` : `${distance.toFixed(2)} km uzakta`;
+}
+
+function buildOpenStreetMapEmbedUrl(pkg) {
+  const destination = orderTargetCoordinates(pkg, "customer");
+  if (!destination) return "";
+  const latitudeSpan = 0.008;
+  const longitudeSpan = 0.012;
+  const bbox = [
+    destination.longitude - longitudeSpan,
+    destination.latitude - latitudeSpan,
+    destination.longitude + longitudeSpan,
+    destination.latitude + latitudeSpan,
+  ].join(",");
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${destination.latitude}%2C${destination.longitude}`;
 }
 
 function openOrderMap(order, target = "customer") {
@@ -356,7 +407,7 @@ function renderPackageMapPreview(target, pkg) {
     return;
   }
 
-  const embedUrl = buildGoogleMapsEmbedUrl(pkg, "customer");
+  const embedUrl = buildGoogleMapsEmbedUrl(pkg, "customer") || buildOpenStreetMapEmbedUrl(pkg);
   if (!embedUrl) {
     target.classList.remove("hidden");
     target.setAttribute("role", "link");
@@ -392,8 +443,8 @@ function renderPackageMapPreview(target, pkg) {
   target.innerHTML = `
     <iframe title="Gercek Google Maps teslimat on izlemesi" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="${escapeCourierHtml(embedUrl)}"></iframe>
     <div class="courier-map-glass">
-      <strong>Google Maps</strong>
-      <span>Dokun, rotayi ac</span>
+      <strong>Canlı konum ön izlemesi</strong>
+      <span>${escapeCourierHtml(formatLiveDistance(pkg))} · Dokun, rotayı aç</span>
     </div>
   `;
   let iframeLoaded = false;
@@ -1050,7 +1101,8 @@ function renderCourierShiftSummary(shiftSummary) {
 function renderPackages(packages) {
   const activePackages = packages.filter(isActiveCourierPackage);
   const mapsKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
-  const signature = `${mapsKey}|${listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError", "deliveryAddress", "address", "customerAddress", "customerLat", "customerLng", "customerLatitude", "customerLongitude"])}`;
+  const livePositionKey = `${courierState.data?.courier?.latitude || ""},${courierState.data?.courier?.longitude || ""}`;
+  const signature = `${mapsKey}|${livePositionKey}|${listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError", "deliveryAddress", "address", "customerAddress", "customerLat", "customerLng", "customerLatitude", "customerLongitude"])}`;
   if (courierRefs.packages.__deliveraRenderSignature === signature) {
     return;
   }
