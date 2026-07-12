@@ -272,21 +272,20 @@ function hasMapTarget(latitudeValue, longitudeValue, addressValue) {
 }
 
 function buildOrderMapUrl(order, target = "customer") {
-  const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
-  const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
+  const coordinates = orderTargetCoordinates(order, target);
   const address = String(
     target === "restaurant"
       ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
       : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
   ).trim();
 
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+  if (coordinates) {
     const courierLatitude = Number(courierState.data?.courier?.latitude);
     const courierLongitude = Number(courierState.data?.courier?.longitude);
     const origin = Number.isFinite(courierLatitude) && Number.isFinite(courierLongitude)
       ? `&origin=${courierLatitude},${courierLongitude}`
       : "";
-    return `https://www.google.com/maps/dir/?api=1${origin}&destination=${latitude},${longitude}&travelmode=driving`;
+    return `https://www.google.com/maps/dir/?api=1${origin}&destination=${coordinates.latitude},${coordinates.longitude}&travelmode=driving`;
   }
 
   if (!address) {
@@ -297,16 +296,15 @@ function buildOrderMapUrl(order, target = "customer") {
 }
 
 function mapTargetQuery(order, target = "customer") {
-  const latitude = Number(target === "restaurant" ? (order?.restaurantLat ?? order?.latitude) : (order?.customerLat ?? order?.customerLatitude));
-  const longitude = Number(target === "restaurant" ? (order?.restaurantLng ?? order?.longitude) : (order?.customerLng ?? order?.customerLongitude));
+  const coordinates = orderTargetCoordinates(order, target);
   const address = String(
     target === "restaurant"
       ? (order?.restaurantAddress || order?.restaurantName || order?.zone || "")
       : (order?.customerAddress || order?.deliveryAddress || order?.address || "")
   ).trim();
 
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    return `${latitude},${longitude}`;
+  if (coordinates) {
+    return `${coordinates.latitude},${coordinates.longitude}`;
   }
   return address;
 }
@@ -314,10 +312,13 @@ function mapTargetQuery(order, target = "customer") {
 function buildGoogleMapsEmbedUrl(order, target = "customer") {
   const apiKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
   const query = mapTargetQuery(order, target);
-  if (!query || !apiKey) {
+  if (!query) {
     return "";
   }
-  return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
+  if (apiKey) {
+    return `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}`;
+  }
+  return `https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed`;
 }
 
 function orderTargetCoordinates(order, target = "customer") {
@@ -449,7 +450,7 @@ async function resolvePackageAddressCoordinates(pkg, target, options = {}) {
     pkg.customerLng = coordinates.longitude;
     if (target?.isConnected) renderPackageMapPreview(target, pkg, options);
   } catch (error) {
-    if (target?.isConnected) {
+    if (target?.isConnected && !target.classList.contains("has-embed")) {
       renderMapUnavailable(target, pkg, error?.message || "Adres haritada bulunamadı", options);
     }
   }
@@ -505,6 +506,9 @@ function renderPackageMapPreview(target, pkg, options = {}) {
       <span class="courier-live-distance">${escapeCourierHtml(formatLiveDistance(pkg))} · Dokun, rotayı aç</span>
     </div>
   `;
+  if (!orderTargetCoordinates(pkg, "customer")) {
+    resolvePackageAddressCoordinates(pkg, target, options);
+  }
   updateRoadDistance(target.querySelector(".courier-live-distance"), pkg);
   const iframe = target.querySelector("iframe");
   iframe?.addEventListener("error", () => {
