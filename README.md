@@ -194,7 +194,7 @@ Kurye paneli:
 ## Endpoint Ozeti
 
 Genel:
-- `GET /api/bootstrap`
+- `GET /api/bootstrap` (yalnizca anonim landing istatistikleri)
 - `GET /health`
 
 Admin auth:

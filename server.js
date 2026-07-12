@@ -1845,6 +1845,11 @@ function normalizeMoney(value, fallback = 0) {
   return Number(normalized.toFixed(2));
 }
 
+function coordinatesAreValid(latitude, longitude) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+}
+
 function moneyToCents(value) {
   return Math.round(normalizeMoney(value) * 100);
 }
@@ -1871,6 +1876,10 @@ function validateRestaurantDraft(body) {
 
   if (!draft.name || !draft.zone || Number.isNaN(draft.latitude) || Number.isNaN(draft.longitude)) {
     throw validationError("Restoran bilgileri eksik.");
+  }
+
+  if (!coordinatesAreValid(draft.latitude, draft.longitude)) {
+    throw validationError("Restoran koordinatlari gecersiz.");
   }
 
   return draft;
@@ -2049,6 +2058,11 @@ function validateCourierDraft(body) {
 
   if (!draft.name || !draft.zone || !draft.username || !draft.password || Number.isNaN(draft.latitude) || Number.isNaN(draft.longitude)) {
     throw validationError("Kurye bilgileri eksik.");
+  }
+
+
+  if (!coordinatesAreValid(draft.latitude, draft.longitude)) {
+    throw validationError("Kurye koordinatlari gecersiz.");
   }
 
   if (draft.password.length < 6) {
@@ -10040,11 +10054,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "GET" && pathname === "/api/bootstrap") {
-    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-    const restaurantId = String(requestUrl.searchParams.get("restaurantId") || "").trim();
-    const payload = decorateState({ restaurantId: restaurantId || undefined, req });
-    payload.restaurants = getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant));
-    sendJson(res, 200, payload);
+    sendJson(res, 200, {
+      stats: statsFromDb(),
+    });
     return;
   }
 
@@ -12705,11 +12717,11 @@ async function handleApi(req, res, pathname) {
     const { json: body } = await readRequestBody(req);
     const latitude = Number(body.latitude);
     const longitude = Number(body.longitude);
-    const hasCoordinates = !Number.isNaN(latitude) && !Number.isNaN(longitude);
+    const hasCoordinates = coordinatesAreValid(latitude, longitude);
     const locationStamp = new Date().toISOString();
 
     if (!hasCoordinates && typeof body.available !== "boolean") {
-      sendJson(res, 400, { error: "Konum veya durum bilgisi gonderilmedi." });
+      sendJson(res, 400, { error: "Gecerli konum veya durum bilgisi gonderilmedi." });
       return;
     }
 

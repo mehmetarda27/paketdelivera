@@ -106,6 +106,13 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
   try {
     await waitForServer(baseUrl);
 
+    const publicBootstrap = await request(baseUrl, "/api/bootstrap");
+    assert.ok(publicBootstrap.stats);
+    assert.equal(publicBootstrap.restaurants, undefined);
+    assert.equal(publicBootstrap.packages, undefined);
+    assert.equal(publicBootstrap.platformOrders, undefined);
+    assert.equal(publicBootstrap.webhookLogs, undefined);
+
     const adminLogin = await request(baseUrl, "/api/admin/login", {
       method: "POST",
       body: JSON.stringify({ username: adminUsername, password: adminPassword }),
@@ -122,6 +129,38 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       headers: { Authorization: `Bearer ${refreshedAdmin.token}` },
     });
     assert.ok(Array.isArray(refreshedAdminBootstrap.restaurants));
+
+    await assert.rejects(
+      () => request(baseUrl, "/api/admin/restaurants", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({
+          name: "Invalid Coordinate Restaurant",
+          portalUsername: `invalid_${Date.now()}`,
+          portalPassword: "Invalid123!",
+          zone: "Erdemli",
+          latitude: 5654656,
+          longitude: 545484,
+        }),
+      }),
+      (error) => error.status === 400 && error.body.error === "Restoran koordinatlari gecersiz."
+    );
+
+    await assert.rejects(
+      () => request(baseUrl, "/api/admin/couriers", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({
+          name: "Invalid Coordinate Courier",
+          username: `invalid_courier_${Date.now()}`,
+          password: "Invalid123!",
+          zone: "Erdemli",
+          latitude: 13123131,
+          longitude: 48485544,
+        }),
+      }),
+      (error) => error.status === 400 && error.body.error === "Kurye koordinatlari gecersiz."
+    );
 
     const restaurantState = await request(baseUrl, "/restaurants", {
       method: "POST",
