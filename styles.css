@@ -4372,6 +4372,48 @@ body.theme-courier .courier-mobile-app {
   min-width: 0;
 }
 
+.theme-courier .courier-issue-actions {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.theme-courier .courier-issue-actions summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid #cfdae2;
+  border-radius: 14px;
+  color: #7f1d1d;
+  background: linear-gradient(180deg, #fffefe, #fff7f7);
+  font-size: 0.88rem;
+  font-weight: 850;
+  cursor: pointer;
+  list-style: none;
+}
+
+.theme-courier .courier-issue-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.theme-courier .courier-issue-actions summary::after {
+  content: "+";
+  margin-left: 8px;
+  font-size: 1.1rem;
+}
+
+.theme-courier .courier-issue-actions[open] summary::after {
+  content: "−";
+}
+
+.theme-courier .courier-issue-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
 @media (max-width: 360px) {
   .theme-courier .courier-live-bar .live-bar-header,
   .theme-courier .package-card .meta-grid,

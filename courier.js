@@ -1282,7 +1282,10 @@ function renderPackages(packages) {
 
     actions.innerHTML = "";
 
-    if (hasMapTarget(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, pkg.restaurantAddress || pkg.restaurantName || pkg.zone)) {
+    const showRestaurantAction = ["assigned", "accepted_by_courier"].includes(pkg.status);
+    const showCustomerAction = pkg.status === "on_route";
+
+    if (showRestaurantAction && hasMapTarget(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, pkg.restaurantAddress || pkg.restaurantName || pkg.zone)) {
       const restaurantMapButton = document.createElement("button");
       restaurantMapButton.type = "button";
       restaurantMapButton.className = "ghost-btn courier-action-secondary courier-map-action";
@@ -1293,7 +1296,7 @@ function renderPackages(packages) {
       actions.appendChild(restaurantMapButton);
     }
 
-    if (hasMapTarget(pkg.customerLat ?? pkg.customerLatitude, pkg.customerLng ?? pkg.customerLongitude, pkg.customerAddress || pkg.deliveryAddress || pkg.address)) {
+    if (showCustomerAction && hasMapTarget(pkg.customerLat ?? pkg.customerLatitude, pkg.customerLng ?? pkg.customerLongitude, pkg.customerAddress || pkg.deliveryAddress || pkg.address)) {
       const customerMapButton = document.createElement("button");
       customerMapButton.type = "button";
       customerMapButton.className = "ghost-btn courier-action-secondary courier-map-action";
@@ -1356,8 +1359,12 @@ function renderPackages(packages) {
       noteInput.type = "text";
       noteInput.placeholder = "Tahsilat notu";
       noteInput.value = currentDraft.courierCollectionNote || pkg.courierCollectionNote || "";
+      noteInput.classList.toggle("hidden", !selectedPaymentStatus && !noteInput.value);
       noteInput.addEventListener("input", () => {
         setPackageDraft(pkg.id, { courierCollectionNote: noteInput.value });
+      });
+      paymentSelect?.addEventListener("change", () => {
+        noteInput.classList.toggle("hidden", !paymentSelect.value && !noteInput.value);
       });
 
       const deliveredButton = document.createElement("button");
@@ -1396,8 +1403,15 @@ function renderPackages(packages) {
         await submitStatus("failed", selectedFailureReason);
       });
 
-      actions.appendChild(failureSelect);
-      actions.appendChild(failureButton);
+      const failureActions = document.createElement("details");
+      failureActions.className = "courier-issue-actions";
+      const failureSummary = document.createElement("summary");
+      failureSummary.textContent = "Sorun Bildir";
+      const failureControls = document.createElement("div");
+      failureControls.className = "courier-issue-controls";
+      failureControls.append(failureSelect, failureButton);
+      failureActions.append(failureSummary, failureControls);
+      actions.appendChild(failureActions);
     }
 
     fragment.appendChild(node);
