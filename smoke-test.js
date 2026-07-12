@@ -1283,6 +1283,28 @@ async function run() {
     if (!failedPackage || failedPackage.status !== "failed" || failedPackage.failureReason !== "teknik_sorun") {
       throw new Error("Kurye reddetme/sorun bildirme akisi beklenen sekilde calismadi.");
     }
+
+    // Yeniden atama testi tek paketi olcmeli. Onceki senaryolardan kalan
+    // atanabilir paketler ayni bos kuryeyi kaparak testi rastlantisal hale
+    // getirmesin.
+    const assignableSmokeStatuses = new Set([
+      "pending_approval",
+      "pending",
+      "preparing",
+      "awaiting_assignment",
+      "assigned",
+      "accepted_by_courier",
+      "on_route",
+      "failed",
+    ]);
+    for (const candidate of bootstrap.packages) {
+      if (candidate.id === overridePackage.id || !assignableSmokeStatuses.has(candidate.status)) continue;
+      await request(`/api/admin/packages/${candidate.id}/status`, {
+        method: "PATCH",
+        headers: adminHeaders,
+        body: JSON.stringify({ status: "cancelled" }),
+      });
+    }
     await request(`/api/admin/packages/${overridePackage.id}/status`, {
       method: "PATCH",
       headers: adminHeaders,
