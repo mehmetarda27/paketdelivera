@@ -72,6 +72,19 @@ function presentCourierAmount(value) {
 }
 
 function presentCourierPayment(pkg) {
+  const methodCode = String(pkg?.paymentMethodCode || "").toLowerCase();
+  const paymentStatus = String(pkg?.paymentStatus || "").toLowerCase();
+  if (paymentStatus === "payment_issue") return "Alınamadı";
+  if (methodCode === "cash_on_delivery") {
+    return paymentStatus === "cash_collected" ? "Nakit Alındı" : "Nakit";
+  }
+  if (methodCode === "card_on_delivery") {
+    return paymentStatus === "credit_card_collected" ? "Kartla Alındı" : "Kart";
+  }
+  if (methodCode === "restaurant_collected" || paymentStatus === "restaurant_collected") return "Restoran Aldı";
+  if (methodCode === "paid_online" || paymentStatus === "paid_online") return "Online Ödendi";
+  if (methodCode === "collected" || paymentStatus === "collected") return "Ödendi";
+
   const method = presentCourierText(pkg?.paymentMethod, "");
   const status = presentCourierText(paymentStatusLabel(pkg?.paymentStatus), "");
   if (!method && !status) {
@@ -1337,12 +1350,12 @@ function renderPackages(packages) {
         paymentSelect = document.createElement("select");
         paymentSelect.className = "status-select courier-action-select";
         const collectedOption = methodCode === "cash_on_delivery"
-          ? '<option value="cash_collected">Nakit tahsil edildi</option>'
-          : '<option value="credit_card_collected">Kart tahsil edildi</option>';
+          ? '<option value="cash_collected">Nakit Alındı</option>'
+          : '<option value="credit_card_collected">Kartla Alındı</option>';
         paymentSelect.innerHTML = [
-          '<option value="">Tahsilat durumunu sec</option>',
+          '<option value="">Tahsilat Seç</option>',
           collectedOption,
-          '<option value="payment_issue">Tahsilat alinamadi</option>',
+          '<option value="payment_issue">Alınamadı</option>',
         ].join("");
         if (["cash_collected", "credit_card_collected", "payment_issue"].includes(selectedPaymentStatus)) {
           paymentSelect.value = selectedPaymentStatus;
