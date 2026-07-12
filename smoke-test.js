@@ -1056,8 +1056,11 @@ async function run() {
       throw new Error("Kurye paneli restoran/musteri harita butonlarini icermiyor.");
     }
     const courierHtmlSource = fs.readFileSync(path.join(__dirname, "courier.html"), "utf8");
-    if (!courierHtmlSource.includes("courierDestinationMap") || !courierHtmlSource.includes("courierMapButton")) {
-      throw new Error("Kurye paneli gidecegim adres harita kartini icermiyor.");
+    if (courierHtmlSource.includes("courierDestinationMap") || courierHtmlSource.includes("courierMapButton")) {
+      throw new Error("Kurye panelindeki yinelenen gidecegim adres harita karti kaldirilmamis.");
+    }
+    if (!courierHtmlSource.includes('class="courier-package-map-preview"')) {
+      throw new Error("Kurye paket kartinin teslimat haritasi eksik.");
     }
 
     await delay(1200);
