@@ -1725,7 +1725,7 @@ function renderCashReconciliations(items) {
 
 function renderRestaurantAccounting(items = [], settlements = []) {
   if (!adminRefs.restaurantAccountingList) return;
-  const signature = listRenderSignature(items, ["restaurantId", "startDate", "endDate", "totalPackages", "totalCash", "totalCard", "totalOnline", "totalRestaurantCollected", "totalCourierCollected", "serviceFee", "netPayable"]);
+  const signature = listRenderSignature(items, ["restaurantId", "startDate", "endDate", "totalPackages", "totalCash", "totalCard", "totalOnline", "totalRestaurantCollected", "totalCourierCollected", "failedCollectionTotal", "serviceFee", "netPayable"]);
   if (adminRefs.restaurantAccountingList.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1753,6 +1753,7 @@ function renderRestaurantAccounting(items = [], settlements = []) {
         <article class="mini-stat-card"><span>Online</span><strong>${formatCurrency(item.totalOnline)}</strong></article>
         <article class="mini-stat-card"><span>Restoran Tahsil</span><strong>${formatCurrency(item.totalRestaurantCollected)}</strong></article>
         <article class="mini-stat-card"><span>Kurye Uzerinde</span><strong>${formatCurrency(item.totalCourierCollected)}</strong></article>
+        <article class="mini-stat-card"><span>Tahsil Edilemedi</span><strong>${formatCurrency(item.failedCollectionTotal)}</strong></article>
         <article class="mini-stat-card"><span>Hizmet Bedeli</span><strong>${formatCurrency(item.serviceFee)}</strong></article>
         <article class="mini-stat-card"><span>Net Odenecek</span><strong>${formatCurrency(item.netPayable)}</strong></article>
       </div>

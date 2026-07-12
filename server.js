@@ -4654,6 +4654,7 @@ function packagesForAccounting({ restaurantId = "", startDate = "", endDate = ""
 function accountingBucketForPackage(pkg) {
   const status = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
   const methodCode = normalizePaymentMethodCode(pkg.paymentMethod);
+  if (status === PAYMENT_ISSUE_STATUS || methodCode === "payment_issue") return "issue";
   if ([CASH_COLLECTED_PAYMENT_STATUS, CASH_EXPECTED_PAYMENT_STATUS].includes(status) || methodCode === "cash_on_delivery") return "cash";
   if ([CREDIT_CARD_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(status) || methodCode === "card_on_delivery") return "card";
   if (status === PAID_ONLINE_PAYMENT_STATUS || methodCode === "paid_online") return "online";
@@ -4672,7 +4673,13 @@ function summarizeRestaurantAccounting(packages, settings = getSystemSettings())
     if (bucket === "card") summary.totalCardCents += amountCents;
     if (bucket === "online") summary.totalOnlineCents += amountCents;
     if (bucket === "restaurant") summary.totalRestaurantCollectedCents += amountCents;
-    if (["cash", "card"].includes(bucket)) summary.totalCourierCollectedCents += amountCents;
+    const paymentStatus = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
+    const collectedBy = normalizeCollectedBy(paymentStatus, pkg.paymentCollectedBy);
+    if (
+      [CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(paymentStatus) ||
+      (paymentStatus === COLLECTED_PAYMENT_STATUS && collectedBy === "courier")
+    ) summary.totalCourierCollectedCents += amountCents;
+    if (bucket === "issue") summary.failedCollectionCents += amountCents;
     return summary;
   }, {
     totalPackages: 0,
@@ -4681,6 +4688,7 @@ function summarizeRestaurantAccounting(packages, settings = getSystemSettings())
     totalOnlineCents: 0,
     totalRestaurantCollectedCents: 0,
     totalCourierCollectedCents: 0,
+    failedCollectionCents: 0,
   });
   const serviceFeeCents = totals.totalPackages * feeCents;
   const netPayableCents = Math.max(0, totals.totalCourierCollectedCents - serviceFeeCents);
@@ -4691,6 +4699,7 @@ function summarizeRestaurantAccounting(packages, settings = getSystemSettings())
     totalOnline: centsToMoney(totals.totalOnlineCents),
     totalRestaurantCollected: centsToMoney(totals.totalRestaurantCollectedCents),
     totalCourierCollected: centsToMoney(totals.totalCourierCollectedCents),
+    failedCollectionTotal: centsToMoney(totals.failedCollectionCents),
     serviceFee: centsToMoney(serviceFeeCents),
     netPayable: centsToMoney(netPayableCents),
   };
@@ -4983,7 +4992,7 @@ function closeCourierShift(courierId, endedAt = nowIso()) {
   `).run(endedAt, endedAt, openShift.id);
 }
 
-function summarizeCourierPackagesForRange(packages, start, end) {
+function summarizeCourierPackagesForRange(packages, start, end, perPackageFee = null) {
   const result = packages
     .filter((pkg) => pkg.status === DELIVERED_STATUS)
     .filter((pkg) => isWithinRange(pkg.deliveredAt || pkg.updatedAt || pkg.createdAt, start, end))
@@ -4991,36 +5000,41 @@ function summarizeCourierPackagesForRange(packages, start, end) {
       const amount = normalizeMoney(pkg.orderAmount);
       summary.deliveredCount += 1;
       summary.totalAmount += amount;
-      if (pkg.paymentStatus === PAID_ONLINE_PAYMENT_STATUS) {
+      const paymentStatus = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
+      if (paymentStatus === PAID_ONLINE_PAYMENT_STATUS) {
         summary.paidOnlineAmount += amount;
       }
-      if ([CASH_EXPECTED_PAYMENT_STATUS, CASH_COLLECTED_PAYMENT_STATUS].includes(pkg.paymentStatus)) {
+      if (paymentStatus === CASH_COLLECTED_PAYMENT_STATUS) {
         summary.cashAmount += amount;
       }
+      if (paymentStatus === CREDIT_CARD_COLLECTED_PAYMENT_STATUS) summary.creditCardAmount += amount;
+      if (paymentStatus === PAYMENT_ISSUE_STATUS) summary.failedCollectionAmount += amount;
       return summary;
     }, {
       deliveredCount: 0,
       totalAmount: 0,
       paidOnlineAmount: 0,
       cashAmount: 0,
+      creditCardAmount: 0,
+      failedCollectionAmount: 0,
     });
     
   const settings = getSystemSettings();
-  const fee = Number(settings.courier_per_package_fee) || 0;
+  const fee = perPackageFee === null ? (Number(settings.courier_per_package_fee) || 0) : normalizeMoney(perPackageFee);
   result.courierEarnings = result.deliveredCount * fee;
   return result;
 }
 
-function buildCourierEarningsSummary(packages) {
+function buildCourierEarningsSummary(packages, perPackageFee = null) {
   const todayStart = rangeStart(0);
   const yesterdayStart = rangeStart(1);
   const sevenDaysStart = rangeStart(6);
   const tomorrowStart = rangeEnd(0);
   return {
-    today: summarizeCourierPackagesForRange(packages, todayStart, tomorrowStart),
-    yesterday: summarizeCourierPackagesForRange(packages, yesterdayStart, todayStart),
-    last7Days: summarizeCourierPackagesForRange(packages, sevenDaysStart, tomorrowStart),
-    total: summarizeCourierPackagesForRange(packages, "1970-01-01T00:00:00.000Z", "2999-12-31T23:59:59.999Z"),
+    today: summarizeCourierPackagesForRange(packages, todayStart, tomorrowStart, perPackageFee),
+    yesterday: summarizeCourierPackagesForRange(packages, yesterdayStart, todayStart, perPackageFee),
+    last7Days: summarizeCourierPackagesForRange(packages, sevenDaysStart, tomorrowStart, perPackageFee),
+    total: summarizeCourierPackagesForRange(packages, "1970-01-01T00:00:00.000Z", "2999-12-31T23:59:59.999Z", perPackageFee),
   };
 }
 
@@ -5115,6 +5129,11 @@ function buildCourierWorkspace(courierId, options = {}) {
   const pagination = options.pagination || { limit: DEFAULT_PAGE_LIMIT, offset: 0 };
   const packages = getCourierPackages(courierId, pagination);
   const historyPackages = getCourierHistoryPackages(courierId);
+  const deliveredPackages = mapPackageRowsWithRestaurants(db.prepare(`
+    SELECT * FROM packages
+    WHERE assigned_courier_id = ? AND status = ?
+    ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
+  `).all(courierId, DELIVERED_STATUS));
   const packagesPagination = pageMeta(countTable("packages", "assigned_courier_id = ?", [courierId]), pagination);
   const todayPackages = deliveredPackagesForCourierOnDate(courierId, dayKey());
   const daySummary = summarizeCourierDay(todayPackages);
@@ -5132,10 +5151,13 @@ function buildCourierWorkspace(courierId, options = {}) {
       totalAmount: Number(daySummary.totalAmount.toFixed(2)),
       paidOnlineAmount: Number(daySummary.paidOnlineAmount.toFixed(2)),
       cashCollectedAmount: Number(daySummary.cashCollectedAmount.toFixed(2)),
+      creditCardAmount: Number(daySummary.creditCardAmount.toFixed(2)),
+      restaurantCollectedAmount: Number(daySummary.restaurantCollectedAmount.toFixed(2)),
+      failedCollectionTotal: Number(daySummary.failedCollectionTotal.toFixed(2)),
       hasClosedDay: Boolean(dayReport),
       closedAt: dayReport?.updated_at || null,
     },
-    earningsSummary: buildCourierEarningsSummary(packages),
+    earningsSummary: buildCourierEarningsSummary(deliveredPackages, defaultCourierPackageFee(courier)),
     shiftSummary: buildCourierShiftSummary(courierId),
     notifications: getNotifications("courier", courierId, 20),
     announcements: getAnnouncements("courier"),
@@ -5214,10 +5236,13 @@ function paymentAccountingBucket(pkg) {
   const paymentStatus = normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod);
   const paymentMethod = trimmed(pkg.paymentMethod).toLowerCase();
 
-  if (paymentStatus === CASH_COLLECTED_PAYMENT_STATUS || paymentStatus === CASH_EXPECTED_PAYMENT_STATUS || paymentMethod.includes("nakit")) {
+  if (paymentStatus === PAYMENT_ISSUE_STATUS) {
+    return "issue";
+  }
+  if (paymentStatus === CASH_COLLECTED_PAYMENT_STATUS) {
     return "cash";
   }
-  if ([CREDIT_CARD_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS].includes(paymentStatus) || (!paymentMethod.includes("online") && (paymentMethod.includes("kart") || paymentMethod.includes("kredi") || paymentMethod.includes("pos")))) {
+  if (paymentStatus === CREDIT_CARD_COLLECTED_PAYMENT_STATUS) {
     return "card";
   }
   if (paymentStatus === RESTAURANT_COLLECTED_PAYMENT_STATUS || paymentMethod.includes("restoran")) {
@@ -5228,6 +5253,9 @@ function paymentAccountingBucket(pkg) {
   }
   if (paymentStatus === PAID_ONLINE_PAYMENT_STATUS || paymentMethod.includes("online")) {
     return "online";
+  }
+  if ([CASH_EXPECTED_PAYMENT_STATUS, CREDIT_CARD_PAYMENT_STATUS, UNPAID_PAYMENT_STATUS].includes(paymentStatus)) {
+    return "outstanding";
   }
   return "unknown";
 }
@@ -5253,7 +5281,7 @@ function summarizeCourierDay(packages) {
     if ([CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod))) {
       summary.collectedTotal += amount;
     }
-    if (normalizePaymentStatus(pkg.paymentStatus, pkg.paymentMethod) === PAYMENT_ISSUE_STATUS) {
+    if (bucket === "issue") {
       summary.failedCollectionTotal += amount;
     }
     summary.packageIds.push(pkg.id);
@@ -11822,6 +11850,33 @@ async function handleApi(req, res, pathname) {
     const source = normalizeOrderSource(target.source, target.source_platform);
     const isPlatformBackedOrder = source !== "external_manual" && source !== "manual";
 
+    const targetStatus = normalizeStatus(target.status);
+    if (action === "reject" && targetStatus !== PENDING_APPROVAL_STATUS) {
+      sendJson(res, 409, {
+        error: "Yalnizca onay bekleyen platform siparisleri reddedilebilir.",
+        currentStatus: targetStatus,
+      });
+      return;
+    }
+
+    if (action === "confirm" && targetStatus !== PENDING_APPROVAL_STATUS) {
+      if ([REJECTED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
+        sendJson(res, 409, {
+          error: "Bu durumdaki siparis onaylanamaz.",
+          currentStatus: targetStatus,
+        });
+        return;
+      }
+      // Entegrasyonlar ayni onayi tekrar gonderebilir. Aktif sipariste onayi
+      // idempotent tutarak mevcut kurye atamasini ve operasyon durumunu koru.
+      sendJson(res, 200, decorateState({
+        restaurantId: session.restaurant_id,
+        includeRestaurantSecrets: true,
+        req,
+      }));
+      return;
+    }
+
     if (action === "confirm") {
       db.prepare(`
         UPDATE packages
@@ -12882,7 +12937,10 @@ async function handleApi(req, res, pathname) {
 
     const nextStatus = normalizeStatus(body.status || target.status);
     const currentStatus = normalizeStatus(target.status);
-    const nextPaymentStatus = body.paymentStatus ? normalizePaymentStatus(body.paymentStatus, target.payment_method) : target.payment_status;
+    const paymentMethodCode = normalizePaymentMethodCode(target.payment_method);
+    let nextPaymentStatus = body.paymentStatus
+      ? normalizePaymentStatus(body.paymentStatus, target.payment_method)
+      : normalizePaymentStatus(target.payment_status, target.payment_method);
     const collectionNote = trimmed(body.courierCollectionNote ?? body.collectionNote ?? body.note);
 
     if (!isKnownPackageStatus(body.status || target.status)) {
@@ -12909,9 +12967,27 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if (nextStatus === DELIVERED_STATUS && !body.paymentStatus) {
+    if (nextStatus === DELIVERED_STATUS && ["cash_on_delivery", "card_on_delivery"].includes(paymentMethodCode) && !body.paymentStatus) {
       sendJson(res, 400, { error: "Teslim oncesi odeme durumu secilmelidir." });
       return;
+    }
+
+    if (nextStatus === DELIVERED_STATUS) {
+      const allowedPaymentStatuses = {
+        cash_on_delivery: [CASH_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS],
+        card_on_delivery: [CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAYMENT_ISSUE_STATUS],
+        paid_online: [PAID_ONLINE_PAYMENT_STATUS],
+        restaurant_collected: [RESTAURANT_COLLECTED_PAYMENT_STATUS],
+        collected: [COLLECTED_PAYMENT_STATUS],
+        payment_issue: [PAYMENT_ISSUE_STATUS],
+      }[paymentMethodCode] || [];
+      if (!["cash_on_delivery", "card_on_delivery"].includes(paymentMethodCode)) {
+        nextPaymentStatus = paymentStatusForMethod(paymentMethodCode);
+      }
+      if (!allowedPaymentStatuses.includes(nextPaymentStatus)) {
+        sendJson(res, 400, { error: "Odeme yontemi ile tahsilat durumu uyusmuyor." });
+        return;
+      }
     }
 
     if (nextStatus === DELIVERED_STATUS && !VALID_PAYMENT_STATUSES.has(nextPaymentStatus)) {

@@ -779,7 +779,7 @@ async function run() {
     await request(`/api/courier/packages/${cardPackage.id}/status`, {
       method: "PATCH",
       headers: cardCourierHeaders,
-      body: JSON.stringify({ status: "delivered", paymentStatus: "credit_card" }),
+      body: JSON.stringify({ status: "delivered", paymentStatus: "credit_card_collected" }),
     });
     await delay(1200);
 
@@ -1206,6 +1206,17 @@ async function run() {
       headers: restaurantHeaders,
       body: JSON.stringify({ action: "confirm" }),
     });
+    const overridePackageAfterInvalidConfirm = await request("/api/restaurant/bootstrap", {
+      headers: restaurantHeaders,
+    });
+    const preservedOverridePackage = overridePackageAfterInvalidConfirm.packages.find((pkg) => pkg.id === overridePackage.id);
+    if (
+      !preservedOverridePackage ||
+      preservedOverridePackage.status !== overridePackage.status ||
+      preservedOverridePackage.assignedCourierId !== overridePackage.assignedCourierId
+    ) {
+      throw new Error("Gecersiz yeniden onay denemesi manuel paketin atamasini degistirdi.");
+    }
 
     await request(`/api/admin/couriers/${createdCourier3.id}/availability`, {
       method: "PATCH",

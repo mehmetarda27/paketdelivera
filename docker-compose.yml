@@ -20,6 +20,22 @@ services:
       - redis
       - postgres
 
+  worker:
+    build: .
+    command: ["node", "workers/index.js"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://delivera:delivera_change_me@postgres:5432/delivera
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - postgres
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped

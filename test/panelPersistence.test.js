@@ -445,6 +445,8 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     const deliveredCourierWorkspace = await request(baseUrl, `/api/courier/packages/${packageState.createdPackage.id}/status`, {
       method: "PATCH",
       headers: lifecycleCourierHeaders,
+      // Panel kaydi online odemedir; hatali kurye secimi backend tarafinda
+      // canonical online duruma geri alinmalidir.
       body: JSON.stringify({ status: "delivered", paymentStatus: "cash_collected" }),
     });
     const deliveredPackageRow = readRow(
@@ -454,7 +456,7 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     );
     assert.equal(deliveredPackageRow.status, "delivered");
     assert.equal(deliveredPackageRow.assignment_status, "assigned");
-    assert.equal(deliveredPackageRow.payment_status, "cash_collected");
+    assert.equal(deliveredPackageRow.payment_status, "paid_online");
     assert.ok(deliveredPackageRow.accepted_at);
     assert.ok(deliveredPackageRow.on_route_at);
     assert.ok(deliveredPackageRow.delivered_at);

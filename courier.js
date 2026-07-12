@@ -792,11 +792,14 @@ function renderCourierDayMetrics(dayMetrics) {
     totalAmount: 0,
     paidOnlineAmount: 0,
     cashCollectedAmount: 0,
+    creditCardAmount: 0,
+    restaurantCollectedAmount: 0,
+    failedCollectionTotal: 0,
     courierEarnings: 0,
     hasClosedDay: false,
     closedAt: null,
   };
-  const signature = listRenderSignature([metrics], ["deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "courierEarnings", "hasClosedDay", "closedAt"]);
+  const signature = listRenderSignature([metrics], ["deliveredCount", "totalAmount", "paidOnlineAmount", "cashCollectedAmount", "creditCardAmount", "restaurantCollectedAmount", "failedCollectionTotal", "courierEarnings", "hasClosedDay", "closedAt"]);
   if (courierRefs.dayMetrics.__deliveraRenderSignature === signature) {
     return;
   }
@@ -823,6 +826,14 @@ function renderCourierDayMetrics(dayMetrics) {
     <article class="mini-stat-card">
       <span>Nakit</span>
       <strong>${formatCurrency(metrics.cashCollectedAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Kart</span>
+      <strong>${formatCurrency(metrics.creditCardAmount)}</strong>
+    </article>
+    <article class="mini-stat-card">
+      <span>Tahsil Edilemedi</span>
+      <strong>${formatCurrency(metrics.failedCollectionTotal)}</strong>
     </article>
     <article class="mini-stat-card">
       <span>Rapor</span>
@@ -1210,27 +1221,30 @@ function renderPackages(packages) {
     }
 
     if (pkg.status === "on_route") {
-      const paymentSelect = document.createElement("select");
-      paymentSelect.className = "status-select courier-action-select";
-      paymentSelect.innerHTML = [
-        '<option value="">Odeme durumunu sec</option>',
-        '<option value="cash_collected">Nakit</option>',
-        '<option value="credit_card">Kredi Kartı</option>',
-        '<option value="paid_online">Online</option>',
-      ].join("");
-      paymentSelect.innerHTML = [
-        '<option value="">Tahsilat durumunu sec</option>',
-        '<option value="cash_collected">Nakit tahsil edildi</option>',
-        '<option value="credit_card_collected">Kart tahsil edildi</option>',
-        '<option value="payment_issue">Tahsilat alinamadi</option>',
-      ].join("");
-      if (["cash_collected", "credit_card_collected", "payment_issue"].includes(selectedPaymentStatus)) {
-        paymentSelect.value = selectedPaymentStatus;
+      const methodCode = String(pkg.paymentMethodCode || "").toLowerCase();
+      const requiresCollection = ["cash_on_delivery", "card_on_delivery"].includes(methodCode);
+      let paymentSelect = null;
+      if (requiresCollection) {
+        paymentSelect = document.createElement("select");
+        paymentSelect.className = "status-select courier-action-select";
+        const collectedOption = methodCode === "cash_on_delivery"
+          ? '<option value="cash_collected">Nakit tahsil edildi</option>'
+          : '<option value="credit_card_collected">Kart tahsil edildi</option>';
+        paymentSelect.innerHTML = [
+          '<option value="">Tahsilat durumunu sec</option>',
+          collectedOption,
+          '<option value="payment_issue">Tahsilat alinamadi</option>',
+        ].join("");
+        if (["cash_collected", "credit_card_collected", "payment_issue"].includes(selectedPaymentStatus)) {
+          paymentSelect.value = selectedPaymentStatus;
+        }
+        paymentSelect.addEventListener("change", () => {
+          selectedPaymentStatus = paymentSelect.value;
+          setPackageDraft(pkg.id, { paymentStatus: selectedPaymentStatus });
+        });
+      } else {
+        selectedPaymentStatus = pkg.paymentStatus || "";
       }
-      paymentSelect.addEventListener("change", () => {
-        selectedPaymentStatus = paymentSelect.value;
-        setPackageDraft(pkg.id, { paymentStatus: selectedPaymentStatus });
-      });
       const noteInput = document.createElement("input");
       noteInput.className = "status-select courier-action-select";
       noteInput.type = "text";
@@ -1245,13 +1259,13 @@ function renderPackages(packages) {
       deliveredButton.className = "primary-btn delivered-action courier-action-delivered";
       deliveredButton.textContent = "Teslim Edildi";
       deliveredButton.addEventListener("click", async () => {
-        if (!selectedPaymentStatus) {
+        if (requiresCollection && !selectedPaymentStatus) {
           showToast("Teslim oncesi odeme durumunu sec.", "error");
           return;
         }
         await submitStatus("delivered", "", selectedPaymentStatus, noteInput.value);
       });
-      actions.appendChild(paymentSelect);
+      if (paymentSelect) actions.appendChild(paymentSelect);
       actions.appendChild(noteInput);
       actions.appendChild(deliveredButton);
     }
