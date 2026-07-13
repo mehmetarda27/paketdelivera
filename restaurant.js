@@ -543,7 +543,7 @@ function startRestaurantLiveStream() {
     onMessage(event) {
       if (event?.message) {
         showToast(event.message, notificationTone(event.type));
-        if (event.type === "package-created" || event.type === "platform-order" || event.type === "platform-order-pending" || event.type === "integration-order") {
+        if (["package-created", "platform-order", "platform-order-pending", "integration-order", "order:new"].includes(event.type)) {
           playSignal("assignment");
         } else if (event.type === "assignment-waiting") {
           playSignal("critical");
@@ -1159,7 +1159,7 @@ function getLastWebhookLog(data, account) {
 }
 
 function activeOrderPackages(packages) {
-  return packages.filter((pkg) => !["delivered", "failed", "cancelled"].includes(pkg.status));
+  return packages.filter((pkg) => !["delivered", "failed", "rejected", "cancelled"].includes(pkg.status));
 }
 
 function packageSourceLabel(pkg) {
@@ -1482,7 +1482,9 @@ function renderIntegrationWizard(wizard) {
 }
 
 function renderRecentOrders(packages) {
-  const list = packages.slice(0, 8);
+  const list = activeOrderPackages(packages)
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
+    .slice(0, 8);
   const signature = listRenderSignature(list, ["id", "trackingNo", "externalOrderNo", "status", "assignedCourierId", "assignedCourierName", "paymentStatus", "updatedAt"]);
   if (restaurantRefs.recentOrders.__deliveraRenderSignature === signature) {
     return;
@@ -1491,7 +1493,7 @@ function renderRecentOrders(packages) {
   restaurantRefs.recentOrders.innerHTML = "";
 
   if (list.length === 0) {
-    restaurantRefs.recentOrders.innerHTML = '<div class="empty-state">Bu restorana ait aktif siparis veya manuel paket yok.</div>';
+    restaurantRefs.recentOrders.innerHTML = '<div class="empty-state">Aktif sipariş yok. Yeni paket geldiğinde bu alan canlı olarak güncellenir.</div>';
     return;
   }
 
@@ -1539,7 +1541,8 @@ function renderRecentOrders(packages) {
 }
 
 function renderActiveOrders(data) {
-  const packageList = [...data.packages].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+  const packageList = activeOrderPackages(data.packages || [])
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
   const courierById = courierMap(data);
   const restaurantName = data.restaurants?.[0]?.name || "Delivera Express";
   const signature = [
@@ -1554,7 +1557,7 @@ function renderActiveOrders(data) {
   restaurantRefs.activeOrders.innerHTML = "";
 
   if (packageList.length === 0) {
-    restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Bu restorana ait siparis yok. Manuel paket veya webhook siparisi geldiginde burada gorunecek.</div>';
+    restaurantRefs.activeOrders.innerHTML = '<div class="empty-state">Aktif sipariş yok. Manuel veya platform paketi geldiğinde burada canlı olarak görünecek.</div>';
     return;
   }
 
@@ -1709,7 +1712,7 @@ function renderActiveOrders(data) {
 
 function renderOrderHistory(packages) {
   const filteredHistory = [...packages]
-    .filter((pkg) => ["delivered", "failed", "cancelled"].includes(pkg.status))
+    .filter((pkg) => ["delivered", "failed", "rejected", "cancelled"].includes(pkg.status))
     .filter((pkg) => packageMatchesHistoryRange(pkg, restaurantState.historyRange))
     .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
   const list = filteredHistory.slice(0, restaurantState.historyVisibleCount);

@@ -16,6 +16,8 @@ const adminState = {
   selectedRestaurantId: "",
   packageLimit: 100,
   packageCursor: "0",
+  unmatchedFilter: "pending",
+  unmatchedSearch: "",
   liveStream: null,
   workspacePollId: null,
   workspaceLoadPromise: null,
@@ -67,6 +69,12 @@ const adminRefs = {
   activeCourierOpsList: document.getElementById("activeCourierOpsList"),
   webhookLogList: document.getElementById("webhookLogList"),
   unmatchedOrderList: document.getElementById("unmatchedOrderList"),
+  unmatchedOrderSearch: document.getElementById("unmatchedOrderSearch"),
+  unmatchedOrderFilters: document.getElementById("unmatchedOrderFilters"),
+  unmatchedPendingBadge: document.getElementById("unmatchedPendingBadge"),
+  unmatchedPendingCount: document.getElementById("unmatchedPendingCount"),
+  unmatchedResolvedCount: document.getElementById("unmatchedResolvedCount"),
+  unmatchedTotalCount: document.getElementById("unmatchedTotalCount"),
   platformHealthSummary: document.getElementById("platformHealthSummary"),
   platformHealthList: document.getElementById("platformHealthList"),
   restaurantIntegrationIdList: document.getElementById("restaurantIntegrationIdList"),
@@ -257,7 +265,6 @@ function initializeAdminWorkspaceCards() {
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(1)", "admin-shift-plan"],
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(2)", "admin-cash"],
     ["#adminWorkspace > section:nth-of-type(10)", "admin-webhooks"],
-    ["#adminWorkspace_system_unmatched > section", "admin-unmatched-orders"],
     ["#adminWorkspace > section:nth-of-type(11)", "admin-platform-health"],
     ["#adminWorkspace > section:nth-of-type(12)", "admin-audit"],
     ["#adminWorkspace > section:nth-of-type(13)", "admin-day-close"],
@@ -317,8 +324,10 @@ function startAdminLiveStream() {
         showToast(event.message, notificationTone(event.type));
         if (event.type === "assignment-waiting") {
           playSignal("critical");
-        } else if (event.type === "package-assigned" || event.type === "platform-order-pending") {
+        } else if (["package-assigned", "platform-order-pending", "order:new"].includes(event.type)) {
           playSignal("assignment");
+        } else if (event.type === "order:unmatched") {
+          playSignal("critical");
         } else if (event.type === "package-status") {
           playSignal("ready");
         }
@@ -445,7 +454,7 @@ function renderRestaurantStats(restaurants, stats, packages) {
     ? (adminState.data?.platformAccounts || []).find((account) => account.restaurantId === selectedRestaurant.id && account.active)
     : null;
   const title = selectedRestaurant ? `${selectedRestaurant.name} Operasyon Ozet` : "Tum Restoranlar Operasyon Ozet";
-  const panelTitle = selectedRestaurant ? `${selectedRestaurant.name} Paketleri` : "Platform Kaynakli Tum Paketler";
+  const panelTitle = selectedRestaurant ? `${selectedRestaurant.name} Aktif Siparişleri` : "Tüm Restoranların Aktif Siparişleri";
   adminRefs.selectedRestaurantTitle.textContent = title;
   adminRefs.packagePanelTitle.textContent = panelTitle;
 
@@ -738,6 +747,10 @@ function packageVisible(pkg) {
   ].join(" ").toLowerCase().includes(query);
 }
 
+function isAdminActivePackage(pkg) {
+  return !["delivered", "failed", "rejected", "cancelled"].includes(String(pkg?.status || "").toLowerCase());
+}
+
 function normalizeZoneValue(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -982,7 +995,7 @@ function buildPackageCard(pkg) {
 }
 
 function renderAdminPackages(packages) {
-  const visible = packages.filter(packageVisible);
+  const visible = packages.filter(isAdminActivePackage).filter(packageVisible);
   const packagePage = adminState.data?.pagination?.packages || null;
   const signature = [
     adminRefs.searchInput.value.trim().toLowerCase(),
@@ -998,7 +1011,7 @@ function renderAdminPackages(packages) {
   adminRefs.packageList.innerHTML = "";
 
   if (visible.length === 0) {
-    adminRefs.packageList.innerHTML = '<div class="empty-state">Aramana uyan paket bulunamadi.</div>';
+    adminRefs.packageList.innerHTML = '<div class="empty-state">Aktif sipariş yok. Yeni paket geldiğinde bu alan canlı olarak güncellenir.</div>';
     return;
   }
 
@@ -1008,7 +1021,7 @@ function renderAdminPackages(packages) {
     const moreButton = document.createElement("button");
     moreButton.className = "ghost-btn";
     moreButton.type = "button";
-    moreButton.textContent = `Daha fazla yükle (${packages.length}/${packagePage.total})`;
+    moreButton.textContent = `Daha fazla aktif sipariş ara (${visible.length} aktif / ${packagePage.total} toplam)`;
     moreButton.addEventListener("click", async () => {
       adminState.packageCursor = packagePage.nextCursor;
       await loadAdminState({ append: true });
@@ -1117,43 +1130,106 @@ function renderUnmatchedOrders(unmatchedOrders, restaurants) {
   if (!adminRefs.unmatchedOrderList) {
     return;
   }
-  const signature = listRenderSignature(unmatchedOrders || [], ["id", "externalOrderId", "externalRestaurantId", "platform", "isResolved", "updatedAt"]);
+  const orders = Array.isArray(unmatchedOrders) ? unmatchedOrders : [];
+  const pendingCount = orders.filter((order) => !order.isResolved).length;
+  const resolvedCount = orders.length - pendingCount;
+  const query = adminState.unmatchedSearch.trim().toLowerCase();
+  const filteredOrders = orders.filter((order) => {
+    if (adminState.unmatchedFilter === "pending" && order.isResolved) return false;
+    if (adminState.unmatchedFilter === "resolved" && !order.isResolved) return false;
+    if (!query) return true;
+    return [
+      order.platform,
+      order.externalOrderId,
+      order.confirmationId,
+      order.externalRestaurantId,
+      order.restaurantNameFromPayload,
+      order.customerName,
+      order.customerPhone,
+    ].join(" ").toLowerCase().includes(query);
+  });
+
+  if (adminRefs.unmatchedPendingBadge) adminRefs.unmatchedPendingBadge.textContent = `${pendingCount} bekleyen`;
+  if (adminRefs.unmatchedPendingCount) adminRefs.unmatchedPendingCount.textContent = String(pendingCount);
+  if (adminRefs.unmatchedResolvedCount) adminRefs.unmatchedResolvedCount.textContent = String(resolvedCount);
+  if (adminRefs.unmatchedTotalCount) adminRefs.unmatchedTotalCount.textContent = String(orders.length);
+  adminRefs.unmatchedOrderFilters?.querySelectorAll("[data-unmatched-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.unmatchedFilter === adminState.unmatchedFilter);
+  });
+
+  const signature = [
+    adminState.unmatchedFilter,
+    adminState.unmatchedSearch,
+    listRenderSignature(filteredOrders, ["id", "externalOrderId", "externalRestaurantId", "platform", "isResolved", "resolvedRestaurantId", "updatedAt"]),
+    listRenderSignature(restaurants || [], ["id", "name"]),
+  ].join("||");
   if (adminRefs.unmatchedOrderList.__deliveraRenderSignature === signature) {
     return;
   }
   adminRefs.unmatchedOrderList.__deliveraRenderSignature = signature;
-  if (!unmatchedOrders || unmatchedOrders.length === 0) {
-    adminRefs.unmatchedOrderList.innerHTML = '<div class="empty-state">Eslestirilmeyen siparis yok.</div>';
+  if (filteredOrders.length === 0) {
+    const emptyMessage = query
+      ? "Aramana uyan eşleşme kaydı bulunamadı."
+      : adminState.unmatchedFilter === "pending"
+        ? "Bekleyen eşleşme yok. Yeni bir kayıt geldiğinde bu alan canlı olarak güncellenir."
+        : "Bu filtrede eşleşme kaydı bulunmuyor.";
+    adminRefs.unmatchedOrderList.innerHTML = `<div class="empty-state unmatched-empty-state">${htmlSafe(emptyMessage)}</div>`;
     return;
   }
-  const restaurantOptions = (restaurants || []).map((restaurant) => `<option value="${htmlSafe(restaurant.id)}">${htmlSafe(restaurant.name)}</option>`).join("");
-  adminRefs.unmatchedOrderList.innerHTML = unmatchedOrders.map((order) => `
-    <article class="stack-card">
-      <div class="stack-top">
-        <div>
-          <strong>${htmlSafe(order.platform || "-")} - ${htmlSafe(order.externalOrderId || order.confirmationId || "Siparis no yok")}</strong>
-          <p>Restoran ID: ${htmlSafe(order.externalRestaurantId || "-")} - Payload restoran: ${htmlSafe(order.restaurantNameFromPayload || "-")}</p>
-          <p>Musteri: ${htmlSafe(order.customerName || "-")} - ${htmlSafe(order.customerPhone || "-")} - ${formatCurrency(order.totalPrice || 0)}</p>
-          <p>Durum: ${order.isResolved ? "Cozuldu" : "Bekliyor"} - ${formatDate(order.createdAt)}</p>
-          <details><summary>Ham JSON</summary><pre class="code-block">${htmlSafe(JSON.stringify(order.rawPayload || {}, null, 2))}</pre></details>
+
+  const restaurantById = new Map((restaurants || []).map((restaurant) => [restaurant.id, restaurant]));
+  adminRefs.unmatchedOrderList.innerHTML = filteredOrders.map((order) => {
+    const payloadRestaurantName = String(order.restaurantNameFromPayload || "").trim().toLowerCase();
+    const suggestedRestaurant = (restaurants || []).find((restaurant) =>
+      payloadRestaurantName && String(restaurant.name || "").trim().toLowerCase() === payloadRestaurantName
+    );
+    const restaurantOptions = [
+      '<option value="">Restoran seç</option>',
+      ...(restaurants || []).map((restaurant) => `
+        <option value="${htmlSafe(restaurant.id)}" ${restaurant.id === suggestedRestaurant?.id ? "selected" : ""}>${htmlSafe(restaurant.name)}</option>
+      `),
+    ].join("");
+    const resolvedRestaurant = restaurantById.get(order.resolvedRestaurantId);
+    return `
+      <article class="stack-card unmatched-order-card ${order.isResolved ? "is-resolved" : "is-pending"}">
+        <div class="unmatched-card-head">
+          <div>
+            <span class="unmatched-platform-label">${htmlSafe(order.platform || "Platform belirtilmedi")}</span>
+            <strong>${htmlSafe(order.externalOrderId || order.confirmationId || "Sipariş numarası yok")}</strong>
+          </div>
+          <span class="status-badge ${order.isResolved ? "status-delivered" : "status-awaiting-assignment"}">${order.isResolved ? "Çözüldü" : "İşlem Bekliyor"}</span>
         </div>
-        <span class="soft-badge">${order.isResolved ? "Cozuldu" : "Bekliyor"}</span>
-      </div>
-      ${order.isResolved ? "" : `
-        <div class="form-grid" style="margin-top: 12px;">
-          <label>
-            Restoran
-            <select data-unmatched-restaurant="${htmlSafe(order.id)}">${restaurantOptions}</select>
-          </label>
-          <label class="inline-check">
-            <input type="checkbox" data-unmatched-save-id="${htmlSafe(order.id)}" checked>
-            Bu ID'yi restorana kaydet
-          </label>
-          <button class="primary-btn" type="button" data-match-unmatched="${htmlSafe(order.id)}">Restorana Bağla</button>
+
+        <div class="unmatched-detail-grid">
+          <div><span>Payload restoranı</span><strong>${htmlSafe(order.restaurantNameFromPayload || "-")}</strong></div>
+          <div><span>Platform restoran ID</span><strong class="unmatched-id-value">${htmlSafe(order.externalRestaurantId || "-")}</strong></div>
+          <div><span>Müşteri</span><strong>${htmlSafe(order.customerName || "-")} · ${htmlSafe(order.customerPhone || "-")}</strong></div>
+          <div><span>Tutar / Geliş</span><strong>${formatCurrency(order.totalPrice || 0)} · ${formatDate(order.createdAt)}</strong></div>
         </div>
-      `}
-    </article>
-  `).join("");
+
+        ${order.isResolved ? `
+          <div class="unmatched-resolution-note">${htmlSafe(resolvedRestaurant?.name || order.resolvedRestaurantId || "Restoran")} ile eşleştirildi ve arşivlendi.</div>
+        ` : `
+          <div class="unmatched-match-panel">
+            ${suggestedRestaurant ? `<p class="unmatched-suggestion">İsim eşleşmesine göre önerilen restoran: <strong>${htmlSafe(suggestedRestaurant.name)}</strong></p>` : ""}
+            <div class="unmatched-match-form">
+              <label>
+                <span>Bağlanacak restoran</span>
+                <select data-unmatched-restaurant="${htmlSafe(order.id)}">${restaurantOptions}</select>
+              </label>
+              <label class="inline-check unmatched-save-check">
+                <input type="checkbox" data-unmatched-save-id="${htmlSafe(order.id)}" checked>
+                <span>Bu Posentegra restoran ID’sini kalıcı kaydet</span>
+              </label>
+              <button class="primary-btn unmatched-match-button" type="button" data-match-unmatched="${htmlSafe(order.id)}">Restorana Bağla</button>
+            </div>
+          </div>
+        `}
+
+        <details class="unmatched-json-details"><summary>Teknik detay / Ham JSON</summary><pre class="code-block">${htmlSafe(JSON.stringify(order.rawPayload || {}, null, 2))}</pre></details>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderAuditLogs(logs) {
@@ -2178,6 +2254,18 @@ adminRefs.restaurantForm.addEventListener("submit", async (event) => {
   }
 });
 
+adminRefs.unmatchedOrderFilters?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-unmatched-filter]");
+  if (!button) return;
+  adminState.unmatchedFilter = button.dataset.unmatchedFilter || "pending";
+  renderUnmatchedOrders(adminState.data?.unmatchedOrders || [], adminState.data?.restaurants || []);
+});
+
+adminRefs.unmatchedOrderSearch?.addEventListener("input", (event) => {
+  adminState.unmatchedSearch = String(event.target.value || "");
+  renderUnmatchedOrders(adminState.data?.unmatchedOrders || [], adminState.data?.restaurants || []);
+});
+
 document.addEventListener("click", async (event) => {
   const editRestaurantPlatformIdsButton = event.target.closest("[data-edit-restaurant-platform-ids]");
   if (editRestaurantPlatformIdsButton) {
@@ -2218,9 +2306,12 @@ document.addEventListener("click", async (event) => {
     const saveIdInput = document.querySelector(`[data-unmatched-save-id="${CSS.escape(unmatchedId)}"]`);
     const restaurantId = restaurantSelect?.value || "";
     if (!restaurantId) {
-      showToast("Once restoran secmelisin.", "error");
+      showToast("Önce bağlanacak restoranı seçmelisin.", "error");
       return;
     }
+    const originalButtonText = matchButton.textContent;
+    matchButton.disabled = true;
+    matchButton.textContent = "Bağlanıyor...";
     try {
       const data = await api(`/api/admin/unmatched-orders/${encodeURIComponent(unmatchedId)}/match`, {
         method: "POST",
@@ -2229,9 +2320,11 @@ document.addEventListener("click", async (event) => {
         retryWithRefresh: refreshAdminAccess,
       });
       hydrateAdmin(data);
-      showToast("Siparis restorana baglandi.");
+      showToast("Sipariş restorana bağlandı. Sonraki Posentegra siparişleri otomatik tanınacak.");
     } catch (error) {
-      showToast(error.message || "Siparis baglanamadi.", "error");
+      matchButton.disabled = false;
+      matchButton.textContent = originalButtonText;
+      showToast(error.message || "Sipariş bağlanamadı.", "error");
     }
     return;
   }

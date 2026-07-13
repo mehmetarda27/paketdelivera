@@ -50,6 +50,10 @@
               <i data-lucide="clock" class="link-icon"></i>
               Atama Bekleyenler & Kuryeler
             </div>
+            <div class="tree-link" data-section="adminWorkspace_system_unmatched">
+              <i data-lucide="link-2" class="link-icon"></i>
+              Eşleşmeyen Siparişler
+            </div>
           </div>
         </div>
         <div class="tree-group">
@@ -116,10 +120,6 @@
             <div class="tree-link" data-section="adminWorkspace_system_webhooks">
               <i data-lucide="webhook" class="link-icon"></i>
               Webhook Logları
-            </div>
-            <div class="tree-link" data-section="adminWorkspace_system_unmatched">
-              <i data-lucide="link-2" class="link-icon"></i>
-              Eşleşmeyen Siparişler
             </div>
             <div class="tree-link" data-section="adminWorkspace_system_integration_ids">
               <i data-lucide="fingerprint" class="link-icon"></i>
@@ -652,15 +652,48 @@
         </div>
 
         <div id="adminWorkspace_system_unmatched" class="content-section">
-          <section class="glass-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow accent-teal">Eşleşmeyen Siparişler</p>
-            <h3>Platform restoran ID'si bağlanmayan siparişler</h3>
-          </div>
-        </div>
-        <div id="unmatchedOrderList" class="stack-list"></div>
-      </section>
+          <section class="glass-panel unmatched-workspace">
+            <div class="panel-head unmatched-workspace-head">
+              <div>
+                <p class="eyebrow accent-teal">Operasyon / Eşleştirme Kuyruğu</p>
+                <h3>Eşleşmeyen Siparişler</h3>
+                <p class="panel-description">Yeni siparişleri doğru restorana bir kez bağla; ortak Posentegra kimliği sonraki siparişleri otomatik tanısın.</p>
+              </div>
+              <span id="unmatchedPendingBadge" class="status-badge status-awaiting-assignment">0 bekleyen</span>
+            </div>
+
+            <div class="unmatched-overview" aria-label="Eşleşmeyen sipariş özeti">
+              <article class="unmatched-metric unmatched-metric-priority">
+                <span>İşlem Bekleyen</span>
+                <strong id="unmatchedPendingCount">0</strong>
+                <small>Öncelikli operasyon kuyruğu</small>
+              </article>
+              <article class="unmatched-metric">
+                <span>Çözülen</span>
+                <strong id="unmatchedResolvedCount">0</strong>
+                <small>Arşivlenen eşleştirmeler</small>
+              </article>
+              <article class="unmatched-metric">
+                <span>Toplam Kayıt</span>
+                <strong id="unmatchedTotalCount">0</strong>
+                <small>Son webhook kayıtları</small>
+              </article>
+            </div>
+
+            <div class="unmatched-toolbar">
+              <label class="unmatched-search-field">
+                <span>Sipariş veya restoran ara</span>
+                <input id="unmatchedOrderSearch" type="search" placeholder="Sipariş no, restoran adı veya platform..." autocomplete="off">
+              </label>
+              <div id="unmatchedOrderFilters" class="unmatched-filter-group" aria-label="Eşleşme durumu filtresi">
+                <button class="ghost-btn active" type="button" data-unmatched-filter="pending">Bekleyenler</button>
+                <button class="ghost-btn" type="button" data-unmatched-filter="resolved">Çözülenler</button>
+                <button class="ghost-btn" type="button" data-unmatched-filter="all">Tümü</button>
+              </div>
+            </div>
+
+            <div id="unmatchedOrderList" class="stack-list unmatched-order-list" aria-live="polite"></div>
+          </section>
         </div>
         
         <div id="adminWorkspace_system_health" class="content-section">

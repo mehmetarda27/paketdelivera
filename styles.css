@@ -5649,3 +5649,269 @@ body.theme-restaurant .inline-search-control {
   grid-template-columns: minmax(0, 1fr) 48px !important;
   align-items: center !important;
 }
+
+/* Admin operation queue: unmatched Posentegra orders */
+body.theme-admin .unmatched-workspace {
+  display: grid;
+  gap: 20px;
+}
+
+body.theme-admin .unmatched-workspace-head {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+body.theme-admin .unmatched-workspace-head h3 {
+  margin-bottom: 6px;
+  font-size: clamp(1.5rem, 2.4vw, 2.15rem);
+}
+
+body.theme-admin .panel-description {
+  max-width: 760px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+body.theme-admin .unmatched-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+body.theme-admin .unmatched-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+body.theme-admin .unmatched-metric-priority {
+  border-color: rgba(242, 122, 26, 0.34);
+  background: linear-gradient(135deg, rgba(242, 122, 26, 0.12), rgba(255, 255, 255, 0.72));
+}
+
+body.theme-admin .unmatched-metric span,
+body.theme-admin .unmatched-detail-grid span,
+body.theme-admin .unmatched-search-field > span,
+body.theme-admin .unmatched-match-form label > span:first-child {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+body.theme-admin .unmatched-metric strong {
+  color: var(--ink);
+  font-size: 1.75rem;
+  line-height: 1.1;
+}
+
+body.theme-admin .unmatched-metric small {
+  color: var(--muted);
+}
+
+body.theme-admin .unmatched-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+body.theme-admin .unmatched-search-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+body.theme-admin .unmatched-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body.theme-admin .unmatched-filter-group .ghost-btn {
+  min-height: 44px;
+  padding-inline: 16px;
+  border-radius: 999px;
+}
+
+body.theme-admin .unmatched-filter-group .ghost-btn.active {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(135deg, #0f766e, #14b88a);
+  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.18);
+}
+
+body.theme-admin .unmatched-order-list {
+  gap: 14px;
+}
+
+body.theme-admin .unmatched-order-card {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border-left: 4px solid #f27a1a;
+}
+
+body.theme-admin .unmatched-order-card.is-resolved {
+  border-left-color: #14b88a;
+  opacity: 0.9;
+}
+
+body.theme-admin .unmatched-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+body.theme-admin .unmatched-card-head > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+body.theme-admin .unmatched-card-head strong {
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+
+body.theme-admin .unmatched-platform-label {
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body.theme-admin .unmatched-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body.theme-admin .unmatched-detail-grid > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.035);
+}
+
+body.theme-admin .unmatched-detail-grid strong,
+body.theme-admin .unmatched-id-value {
+  overflow-wrap: anywhere;
+}
+
+body.theme-admin .unmatched-id-value {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.86rem;
+}
+
+body.theme-admin .unmatched-match-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(20, 184, 138, 0.22);
+  border-radius: 16px;
+  background: rgba(20, 184, 138, 0.07);
+}
+
+body.theme-admin .unmatched-suggestion {
+  margin: 0;
+  color: #0f766e;
+}
+
+body.theme-admin .unmatched-match-form {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.2fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+body.theme-admin .unmatched-match-form > label:not(.inline-check) {
+  display: grid;
+  gap: 7px;
+}
+
+body.theme-admin .unmatched-save-check {
+  align-self: center;
+  min-height: 48px;
+  margin: 0;
+}
+
+body.theme-admin .unmatched-match-button {
+  width: auto;
+  min-width: 176px;
+  min-height: 48px;
+  white-space: nowrap;
+}
+
+body.theme-admin .unmatched-resolution-note {
+  padding: 12px 14px;
+  border-radius: 14px;
+  color: #0f766e;
+  background: rgba(20, 184, 138, 0.09);
+}
+
+body.theme-admin .unmatched-json-details {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+body.theme-admin .unmatched-json-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+body.theme-admin .unmatched-json-details .code-block {
+  max-height: 360px;
+  margin-top: 10px;
+}
+
+body.theme-admin .unmatched-empty-state {
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+}
+
+@media (max-width: 900px) {
+  body.theme-admin .unmatched-toolbar,
+  body.theme-admin .unmatched-match-form {
+    grid-template-columns: 1fr;
+  }
+
+  body.theme-admin .unmatched-match-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  body.theme-admin .unmatched-overview,
+  body.theme-admin .unmatched-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.theme-admin .unmatched-card-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body.theme-admin .unmatched-filter-group {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  body.theme-admin .unmatched-filter-group .ghost-btn {
+    min-width: 0;
+    padding-inline: 8px;
+  }
+}
