@@ -83,12 +83,20 @@ test("package detail modal renders raw platform payload safely", () => {
   context.document.createElement = () => shell;
 
   assert.doesNotThrow(() => context.window.showPackageDetailsModal({
-    id: "pkg-detail-1",
-    trackingNo: "PKT-DETAIL-1",
+    id: "<img src=x onerror=unsafe()>",
+    trackingNo: "<svg onload=unsafe()>",
     status: "awaiting_assignment",
-    sourcePlatform: "Trendyol Yemek",
+    sourcePlatform: "<script>platformUnsafe()</script>",
+    recipient: "<img src=x onerror=customerUnsafe()>",
+    phone: "<b>0555</b>",
+    deliveryAddress: "<iframe srcdoc='<script>addressUnsafe()</script>'></iframe>",
+    customerNote: "<script>noteUnsafe()</script>",
     rawPayload: { customerNote: "<script>unsafe()</script>" },
   }));
   assert.match(shell.innerHTML, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(shell.innerHTML, /<script>unsafe\(\)<\/script>/);
+  assert.doesNotMatch(shell.innerHTML, /<script>platformUnsafe\(\)<\/script>/);
+  assert.doesNotMatch(shell.innerHTML, /<img src=x onerror=/);
+  assert.doesNotMatch(shell.innerHTML, /<svg onload=/);
+  assert.doesNotMatch(shell.innerHTML, /<iframe srcdoc=/);
 });

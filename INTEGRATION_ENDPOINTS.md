@@ -5,6 +5,9 @@
 - `POSENTEGRA_API_BASE_URL`: FastSiparis / Posentegra Web API base URL.
 - `POSENTEGRA_API_KEY`: API key/token. Sent as `Authorization: Bearer ...` and `X-API-Key`.
 - `POSENTEGRA_BUSINESS_ID`: Optional business id used to link newly created restaurants.
+- `POSENTEGRA_REQUEST_TIMEOUT_MS`: Request timeout, default `8000`.
+- `POSENTEGRA_RETRY_ATTEMPTS`: Retry count for idempotent package/status calls, default `3`.
+- `POSENTEGRA_OUTBOX_POLL_MS`: Durable outbox sweep interval, default `10000`.
 - `WEBHOOK_SECRET`: Incoming webhook secret for `/api/webhooks/orders`.
 
 Secrets are redacted before application logs or `webhook_logs` writes.
@@ -79,6 +82,15 @@ Prepared client operation:
 Important id rule:
 
 - `{id}` must be the Posentegra restaurant id (`restaurants.posentegra_id`), not Delivera internal `restaurants.id`.
+
+Manual and extension-created packages are written locally first and queued in `posentegra_outbox` in the same database transaction. The outbox calls `assign-package` with an idempotency key. A Posentegra outage therefore does not block restaurant or courier operations; failures are retried with exponential backoff and become `dead_letter` after 10 delivery cycles.
+
+Courier lifecycle changes are also persisted locally first. `accepted_by_courier`, `on_route`, `delivered`, and `failed` are delivered through the durable outbox. If Posentegra returns a canonical `pid` for a manually assigned package, `packages.posentegra_id` is updated before later status events are delivered.
+
+Operations endpoints (admin session required):
+
+- `GET /api/admin/posentegra-outbox?status=failed&limit=100`
+- `POST /api/admin/posentegra-outbox/{id}/retry`
 
 ## PID Logic
 

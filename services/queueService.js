@@ -85,6 +85,12 @@ class QueueService {
       retryPolicy: DEFAULT_RETRY_POLICY,
     };
   }
+
+  async close() {
+    const queues = [...this.queues.values()];
+    this.queues.clear();
+    await Promise.allSettled(queues.map((queue) => queue.close()));
+  }
 }
 
 function createQueueService(options = {}) {

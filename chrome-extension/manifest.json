@@ -18,7 +18,16 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://*.trendyol.com/*",
+        "https://*.trendyolgo.com/*",
+        "https://*.yemeksepeti.com/*",
+        "https://*.yemeksepeti.com.tr/*",
+        "https://*.getir.com/*",
+        "https://*.getiryemek.com/*",
+        "https://*.migros.com.tr/*",
+        "https://*.migros.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
       ],
       "js": [
         "shared.js",

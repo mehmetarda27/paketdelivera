@@ -112,17 +112,23 @@
   }
 
   function detectPlatformFromUrl(url = "") {
-    const lowered = String(url || "").toLowerCase();
-    if (lowered.includes("getir")) {
+    let hostname = "";
+    try {
+      hostname = new URL(String(url || "")).hostname.toLowerCase();
+    } catch {
+      return "Diger";
+    }
+    const matchesDomain = (domain) => hostname === domain || hostname.endsWith(`.${domain}`);
+    if (["getir.com", "getiryemek.com"].some(matchesDomain)) {
       return "Getir";
     }
-    if (lowered.includes("trendyol")) {
+    if (["trendyol.com", "trendyolgo.com"].some(matchesDomain)) {
       return "Trendyol Yemek";
     }
-    if (lowered.includes("yemeksepeti")) {
+    if (["yemeksepeti.com", "yemeksepeti.com.tr"].some(matchesDomain)) {
       return "Yemeksepeti";
     }
-    if (lowered.includes("migros")) {
+    if (["migros.com.tr", "migros.com"].some(matchesDomain)) {
       return "Migros Yemek";
     }
     return "Diger";

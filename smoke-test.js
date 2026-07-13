@@ -200,8 +200,8 @@ async function run() {
     const adminHeaders = { Authorization: `Bearer ${adminLogin.token}` };
 
     const health = await request("/health");
-    if (!health.ok || health.database?.mode !== "sqlite" || !health.queues || !health.cache) {
-      throw new Error("Health endpoint production durum alanlarini dondurmedi.");
+    if (!health.ok || health.app !== "Delivera Express" || health.database || health.queues || health.cache) {
+      throw new Error("Public health endpoint guvenli minimal payload dondurmedi.");
     }
     const metrics = await requestText("/metrics");
     if (!metrics.includes("delivera_up 1") || !metrics.includes("delivera_requests_total") || !metrics.includes("delivera_table_rows")) {

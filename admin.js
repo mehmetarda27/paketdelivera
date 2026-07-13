@@ -633,9 +633,9 @@ function renderAdminCouriers(couriers) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong class="entity-line">${SVG_MOTO} ${courier.name}</strong>
-          <p>@${courier.username}</p>
-          <p class="entity-line">${SVG_PIN} ${courier.zone} bolgesi - GPS ${Number(courier.latitude).toFixed(5)}, ${Number(courier.longitude).toFixed(5)}</p>
+          <strong class="entity-line">${SVG_MOTO} ${htmlSafe(courier.name)}</strong>
+          <p>@${htmlSafe(courier.username)}</p>
+          <p class="entity-line">${SVG_PIN} ${htmlSafe(courier.zone)} bolgesi - GPS ${Number(courier.latitude).toFixed(5)}, ${Number(courier.longitude).toFixed(5)}</p>
           <p class="entity-line">${SVG_COURIER} ${courier.activeLoad} aktif paket - ${courier.available ? "Atamaya acik" : "Pasif"}</p>
           <p>${motionLabel} - Son sinyal ${liveLabel}</p>
         </div>
@@ -683,7 +683,7 @@ function renderZoneBoard(zones) {
     const card = document.createElement("article");
     card.className = "zone-card";
     card.innerHTML = `
-      <strong class="entity-line">${SVG_PIN} ${zone.name}</strong>
+      <strong class="entity-line">${SVG_PIN} ${htmlSafe(zone.name)}</strong>
       <p class="entity-line">${SVG_MOTO} ${zone.packageCount} paket - ${zone.activeCourierCount}/${zone.courierCount} aktif kurye</p>
       <p>${zone.waitingCount} paket bekliyor</p>
     `;
@@ -710,8 +710,8 @@ function renderZoneAlerts(zoneAlerts) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${alert.zone}</strong>
-          <p>${alert.message}</p>
+          <strong>${htmlSafe(alert.zone)}</strong>
+          <p>${htmlSafe(alert.message)}</p>
           <p>${alert.waitingCount} bekleyen siparis - en eski bekleme ${alert.oldestWaitingMinutes} dk</p>
         </div>
         <span class="soft-badge">${alert.severity === "critical" ? "Kirmizi Oncelik" : "Yogunluk"}</span>
@@ -813,9 +813,9 @@ function openPackagePrintWindow(pkg) {
   const items = Array.isArray(pkg.items) && pkg.items.length
     ? pkg.items.map((item) => `
       <tr>
-        <td>${item.name || "-"}</td>
-        <td>${item.quantity || 1}</td>
-        <td>${formatCurrency(item.price || 0)}</td>
+        <td>${htmlSafe(item.name || "-")}</td>
+        <td>${htmlSafe(item.quantity || 1)}</td>
+        <td>${htmlSafe(formatCurrency(item.price || 0))}</td>
       </tr>
     `).join("")
     : '<tr><td colspan="3">Urun bilgisi paylasilmadi.</td></tr>';
@@ -823,7 +823,7 @@ function openPackagePrintWindow(pkg) {
   win.document.write(`
     <html>
       <head>
-        <title>${pkg.externalOrderNo} Fis</title>
+        <title>${htmlSafe(pkg.externalOrderNo)} Fis</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
           table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -831,20 +831,20 @@ function openPackagePrintWindow(pkg) {
         </style>
       </head>
       <body>
-        <h1>${pkg.restaurantName || "Delivera Express"}</h1>
-        <p>Platform: ${pkg.sourcePlatform || "-"}</p>
-        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
-        <p>Musteri: ${pkg.recipient || "-"}</p>
-        <p>Telefon: ${pkg.phone || "-"}</p>
-        <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
+        <h1>${htmlSafe(pkg.restaurantName || "Delivera Express")}</h1>
+        <p>Platform: ${htmlSafe(pkg.sourcePlatform || "-")}</p>
+        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${htmlSafe(pkg.externalOrderNo || pkg.trackingNo || "-")}</p>
+        <p>Musteri: ${htmlSafe(pkg.recipient || "-")}</p>
+        <p>Telefon: ${htmlSafe(pkg.phone || "-")}</p>
+        <p>Adres: ${htmlSafe(pkg.deliveryAddress || pkg.address || "-")}</p>
         <table>
           <thead><tr><th>Urun</th><th>Adet</th><th>Tutar</th></tr></thead>
           <tbody>${items}</tbody>
         </table>
         <p>Toplam: ${formatCurrency(pkg.orderAmount || 0)}</p>
-        <p>Odeme: ${pkg.paymentMethod || "-"}</p>
-        <p>Notlar: ${pkg.customerNote || pkg.note || "-"}</p>
-        <p>Tarih Saat: ${formatDate(pkg.createdAt)}</p>
+        <p>Odeme: ${htmlSafe(pkg.paymentMethod || "-")}</p>
+        <p>Notlar: ${htmlSafe(pkg.customerNote || pkg.note || "-")}</p>
+        <p>Tarih Saat: ${htmlSafe(formatDate(pkg.createdAt))}</p>
       </body>
     </html>
   `);
@@ -864,14 +864,14 @@ function buildPackageCard(pkg) {
   if (!pkg.assignedCourierId && ["pending_approval", "pending", "preparing", "awaiting_assignment"].includes(pkg.status)) {
     wrapper.classList.add("priority-alert-card");
   }
-  node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${pkg.trackingNo} - ${pkg.externalOrderNo} - ${formatDate(pkg.createdAt)} - Paket ID: ${htmlSafe(pkg.id)}`;
-  node.querySelector(".recipient-name").innerHTML = `${SVG_PHONE} ${pkg.recipient} - ${pkg.phone}`;
-  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${pkg.sourcePlatform || pkg.platform || "-"} - Platform Restoran ID: ${htmlSafe(pkg.platformRestaurantId || "-")} - Posentegra PID: ${htmlSafe(pkg.posentegraId || "-")} - Platform Siparis ID: ${htmlSafe(pkg.platformOrderId || pkg.externalOrderNo || "-")}`;
-  node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${pkg.restaurantName} - Sistem ID: ${htmlSafe(pkg.restaurantId || "-")}`;
-  node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}`;
+  node.querySelector(".tracking-no").innerHTML = `${SVG_PACKAGE} ${htmlSafe(pkg.trackingNo)} - ${htmlSafe(pkg.externalOrderNo)} - ${htmlSafe(formatDate(pkg.createdAt))} - Paket ID: ${htmlSafe(pkg.id)}`;
+  node.querySelector(".recipient-name").innerHTML = `${SVG_PHONE} ${htmlSafe(pkg.recipient)} - ${htmlSafe(pkg.phone)}`;
+  node.querySelector(".platform-name").innerHTML = `${SVG_MOTO} ${htmlSafe(pkg.sourcePlatform || pkg.platform || "-")} - Platform Restoran ID: ${htmlSafe(pkg.platformRestaurantId || "-")} - Posentegra PID: ${htmlSafe(pkg.posentegraId || "-")} - Platform Siparis ID: ${htmlSafe(pkg.platformOrderId || pkg.externalOrderNo || "-")}`;
+  node.querySelector(".restaurant-name").innerHTML = `${SVG_MOTO} ${htmlSafe(pkg.restaurantName)} - Sistem ID: ${htmlSafe(pkg.restaurantId || "-")}`;
+  node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${htmlSafe(pkg.assignedCourierName || "Kurye bekleniyor")}`;
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
-  node.querySelector(".address-value").innerHTML = `${SVG_PIN} ${pkg.deliveryAddress || pkg.address}`;
+  node.querySelector(".address-value").innerHTML = `${SVG_PIN} ${htmlSafe(pkg.deliveryAddress || pkg.address)}`;
 
   if (!node.querySelector(".details-btn-injected")) {
     const actionsRow = document.createElement('div');
@@ -1038,10 +1038,10 @@ function renderAwaitingPackages(packages) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${pkg.trackingNo} - ${SVG_MOTO} ${pkg.restaurantName}</strong>
-          <p class="entity-line">${SVG_PIN} ${pkg.recipient} - ${pkg.deliveryAddress || pkg.address}</p>
-          <p>Son deneme: ${pkg.lastAssignmentAttemptAt ? formatDate(pkg.lastAssignmentAttemptAt) : "-"}</p>
-          <p>Hata: ${pkg.lastAssignmentError || "-"}</p>
+          <strong style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} ${htmlSafe(pkg.trackingNo)} - ${SVG_MOTO} ${htmlSafe(pkg.restaurantName)}</strong>
+          <p class="entity-line">${SVG_PIN} ${htmlSafe(pkg.recipient)} - ${htmlSafe(pkg.deliveryAddress || pkg.address)}</p>
+          <p>Son deneme: ${htmlSafe(pkg.lastAssignmentAttemptAt ? formatDate(pkg.lastAssignmentAttemptAt) : "-")}</p>
+          <p>Hata: ${htmlSafe(pkg.lastAssignmentError || "-")}</p>
         </div>
         <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
       </div>
@@ -1070,8 +1070,8 @@ function renderActiveCourierOps(couriers) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong class="entity-line">${SVG_MOTO} ${courier.name}</strong>
-          <p class="entity-line">${SVG_PIN} @${courier.username} - ${courier.zone}</p>
+          <strong class="entity-line">${SVG_MOTO} ${htmlSafe(courier.name)}</strong>
+          <p class="entity-line">${SVG_PIN} @${htmlSafe(courier.username)} - ${htmlSafe(courier.zone)}</p>
           <p class="entity-line">${SVG_COURIER} ${courier.activeLoad} aktif is - Son sinyal ${courier.lastLocationAt ? formatTimeAgo(courier.lastLocationAt) : "yok"}</p>
         </div>
         <span class="soft-badge">${courierStatusLabel(courier.status)}</span>
@@ -1175,9 +1175,9 @@ function renderAuditLogs(logs) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${log.action}</strong>
-          <p>${log.actorRole} - ${log.actorId || "anonim"}</p>
-          <p>Restoran: ${log.restaurantId || "-"}${log.packageId ? ` - Paket: ${log.packageId}` : ""}</p>
+          <strong>${htmlSafe(log.action)}</strong>
+          <p>${htmlSafe(log.actorRole)} - ${htmlSafe(log.actorId || "anonim")}</p>
+          <p>Restoran: ${htmlSafe(log.restaurantId || "-")}${log.packageId ? ` - Paket: ${htmlSafe(log.packageId)}` : ""}</p>
         </div>
         <span class="soft-badge">${formatDate(log.createdAt)}</span>
       </div>
@@ -1286,8 +1286,8 @@ function renderCourierDailyReportsLegacy(reports) {
     card.innerHTML = `
       <div class="stack-top" style="align-items: flex-start;">
         <div>
-          <strong>${report.courierName} - ${report.reportDate}</strong>
-          <p>${report.zone} bolgesi - ${report.deliveredCount} teslimat</p>
+          <strong>${htmlSafe(report.courierName)} - ${htmlSafe(report.reportDate)}</strong>
+          <p>${htmlSafe(report.zone)} bolgesi - ${Number(report.deliveredCount || 0)} teslimat</p>
           <p style="font-weight: bold; color: #10B981;">Toplam Ciro: ${formatCurrency(report.totalAmount)}</p>
         </div>
         <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
@@ -1295,7 +1295,7 @@ function renderCourierDailyReportsLegacy(reports) {
             ${isPending ? 'Onay Bekliyor' : 'Onaylandı'}
           </span>
           <span class="soft-badge" style="font-size: 0.75rem;">${formatDate(report.updatedAt)}</span>
-          ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${report.id}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button><button class="ghost-btn small-btn edit-btn" data-id="${report.id}">Duzenle</button><button class="ghost-btn small-btn reject-btn" data-id="${report.id}">Reddet</button>` : ''}
+          ${isPending ? `<button class="primary-btn small-btn approve-btn" data-id="${htmlSafe(report.id)}" style="background: #F27A1A; border-color: #F27A1A;">Onayla</button><button class="ghost-btn small-btn edit-btn" data-id="${htmlSafe(report.id)}">Duzenle</button><button class="ghost-btn small-btn reject-btn" data-id="${htmlSafe(report.id)}">Reddet</button>` : ''}
         </div>
       </div>
       <div class="meta-grid compact-meta-grid" style="margin-top: 12px; border-top: 1px solid #E2E8F0; padding-top: 12px; grid-template-columns: repeat(6, 1fr);">
@@ -1635,8 +1635,8 @@ function renderAnnouncements(items) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${item.title}</strong>
-          <p>${item.message}</p>
+          <strong>${htmlSafe(item.title)}</strong>
+          <p>${htmlSafe(item.message)}</p>
           <p>Yayin: ${formatDate(item.updatedAt || item.createdAt)}</p>
         </div>
         <button class="ghost-btn" type="button">Sil</button>
@@ -1662,7 +1662,7 @@ function renderShiftPlanTools(couriers, plans, summary) {
     if (adminRefs.shiftPlanCourier.__deliveraRenderSignature !== selectSignature) {
       adminRefs.shiftPlanCourier.__deliveraRenderSignature = selectSignature;
       adminRefs.shiftPlanCourier.innerHTML = ['<option value="">Kurye sec</option>']
-        .concat((couriers || []).map((courier) => `<option value="${courier.id}">${courier.name} - ${courier.zone}</option>`))
+        .concat((couriers || []).map((courier) => `<option value="${htmlSafe(courier.id)}">${htmlSafe(courier.name)} - ${htmlSafe(courier.zone)}</option>`))
         .join("");
       adminRefs.shiftPlanCourier.value = selectedCourier;
     }
@@ -1679,7 +1679,7 @@ function renderShiftPlanTools(couriers, plans, summary) {
     const card = document.createElement("article");
     card.className = "zone-card";
     card.innerHTML = `
-      <strong>${item.zone}</strong>
+      <strong>${htmlSafe(item.zone)}</strong>
       <p>${item.plannedCouriers} planli kurye</p>
       <p>${item.missingCouriers > 0 ? `${item.missingCouriers} eksik vardiya` : "Kadrolama dengeli"}</p>
     `;
@@ -1706,7 +1706,7 @@ function renderShiftPlanTools(couriers, plans, summary) {
       <div class="stack-top">
         <div>
           <strong>Kabul Eden Kuryeler</strong>
-          <p>${acceptedPlans.map((plan) => `${plan.courierName} (${plan.startTime}-${plan.endTime})`).join(" - ")}</p>
+          <p>${acceptedPlans.map((plan) => `${htmlSafe(plan.courierName)} (${htmlSafe(plan.startTime)}-${htmlSafe(plan.endTime)})`).join(" - ")}</p>
         </div>
         <span class="soft-badge">${acceptedPlans.length} kabul</span>
       </div>
@@ -1720,9 +1720,9 @@ function renderShiftPlanTools(couriers, plans, summary) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${plan.courierName}</strong>
-          <p>${plan.zone} - ${plan.planDate}</p>
-          <p>${plan.startTime} / ${plan.endTime}</p>
+          <strong>${htmlSafe(plan.courierName)}</strong>
+          <p>${htmlSafe(plan.zone)} - ${htmlSafe(plan.planDate)}</p>
+          <p>${htmlSafe(plan.startTime)} / ${htmlSafe(plan.endTime)}</p>
           <p>${plan.status === "accepted"
             ? `Kurye onayi ${formatDate(plan.acceptedAt)}`
             : plan.status === "awaiting_courier_acceptance"
@@ -1755,8 +1755,8 @@ function renderCashReconciliations(items) {
     card.innerHTML = `
       <div class="stack-top">
         <div>
-          <strong>${item.courierName} - ${item.reportDate}</strong>
-          <p>${item.zone} bolgesi</p>
+          <strong>${htmlSafe(item.courierName)} - ${htmlSafe(item.reportDate)}</strong>
+          <p>${htmlSafe(item.zone)} bolgesi</p>
           <p>Beklenen ${formatCurrency(item.expectedCash)} - Bildirilen ${formatCurrency(item.reportedCash)}</p>
         </div>
         <span class="soft-badge">${item.status}</span>

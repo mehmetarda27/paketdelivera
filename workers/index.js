@@ -9,6 +9,8 @@ const logger = require("../services/logger");
 const { JOB_TYPES, DEFAULT_RETRY_POLICY } = require("../services/queueService");
 const { redisConnectionOptions } = require("../services/redisConnection");
 const { sendPlatformStatusCallback } = require("../services/platformCallbackService");
+const posentegraClient = require("../services/posentegraClient");
+const { createPosentegraOutboxService } = require("../services/posentegraOutboxService");
 
 const REDIS_URL = String(process.env.REDIS_URL || process.env.DELIVERA_REDIS_URL || "").trim();
 const QUEUE_CONCURRENCY = Number(process.env.DELIVERA_WORKER_CONCURRENCY || 5);
@@ -16,6 +18,8 @@ const connection = redisConnectionOptions(REDIS_URL);
 const workers = [];
 const queueEvents = [];
 const db = getDb();
+const posentegraOutbox = createPosentegraOutboxService({ db, client: posentegraClient, logger });
+let posentegraSweepTimer = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -142,7 +146,14 @@ async function processAssignmentRetryJob(job) {
 }
 
 async function processPlatformStatusSyncJob(job) {
-  return processStatusCallbackJob(job);
+  const packageId = job.data?.packageId;
+  const status = job.data?.status;
+  const row = packageId ? db.prepare("SELECT posentegra_id FROM packages WHERE id = ?").get(packageId) : null;
+  if (!packageId || !status || !row?.posentegra_id) {
+    throw new Error("posentegra_status_sync_payload_invalid");
+  }
+  posentegraOutbox.enqueueStatus({ packageId, orderId: row.posentegra_id, status, meta: job.data?.meta || {} });
+  return posentegraOutbox.processDue();
 }
 
 function processorFor(type) {
@@ -192,6 +203,7 @@ function startWorker(type) {
 }
 
 async function shutdown() {
+  if (posentegraSweepTimer) clearInterval(posentegraSweepTimer);
   await Promise.allSettled(workers.map((worker) => worker.close()));
   await Promise.allSettled(queueEvents.map((events) => events.close()));
   close();
@@ -203,6 +215,11 @@ async function main() {
     return;
   }
   Object.values(JOB_TYPES).forEach(startWorker);
+  posentegraSweepTimer = setInterval(() => {
+    posentegraOutbox.processDue().catch((error) => logger.warn("Worker Posentegra outbox sweep failed", { error }));
+  }, Math.max(5_000, Number(process.env.POSENTEGRA_OUTBOX_POLL_MS || 10_000)));
+  posentegraSweepTimer.unref();
+  posentegraOutbox.processDue().catch((error) => logger.warn("Initial Posentegra outbox sweep failed", { error }));
   logger.info("Delivera queue worker started", {
     queues: Object.values(JOB_TYPES),
     concurrency: QUEUE_CONCURRENCY,

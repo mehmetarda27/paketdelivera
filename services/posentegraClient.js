@@ -18,6 +18,21 @@ function configured() {
   return Boolean(baseUrl() && apiKey());
 }
 
+function requestTimeoutMs() {
+  const configuredValue = Number(process.env.POSENTEGRA_REQUEST_TIMEOUT_MS || 8000);
+  return Math.max(1000, Math.min(30000, Number.isFinite(configuredValue) ? configuredValue : 8000));
+}
+
+function retryAttempts() {
+  const configuredValue = Number(process.env.POSENTEGRA_RETRY_ATTEMPTS || 3);
+  return Math.max(1, Math.min(5, Number.isFinite(configuredValue) ? Math.floor(configuredValue) : 3));
+}
+
+function retryDelay(attempt) {
+  const baseDelay = Math.max(100, Math.min(5000, Number(process.env.POSENTEGRA_RETRY_DELAY_MS || 500)));
+  return new Promise((resolve) => setTimeout(resolve, baseDelay * (2 ** Math.max(0, attempt - 1))));
+}
+
 function redact(value) {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return value.length > 160 ? `${value.slice(0, 157)}...` : value;
@@ -43,39 +58,69 @@ async function request(pathname, options = {}) {
 
   const method = options.method || "GET";
   const body = options.body === undefined ? undefined : JSON.stringify(options.body);
-  const response = await fetch(`${baseUrl()}${pathname}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey()}`,
-      "X-API-Key": apiKey(),
-      ...(options.headers || {}),
-    },
-    body,
-  });
-  const text = await response.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { raw: text };
+  const attempts = options.retryable ? retryAttempts() : 1;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs());
+    try {
+      const response = await fetch(`${baseUrl()}${pathname}`, {
+        method,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey()}`,
+          "X-API-Key": apiKey(),
+          ...(options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
+          ...(options.headers || {}),
+        },
+        body,
+        signal: controller.signal,
+      });
+      const text = await response.text().catch(() => "");
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text };
+      }
+      const result = {
+        ok: response.ok,
+        status: response.status,
+        method,
+        path: pathname,
+        requestBody: redact(options.body || null),
+        responseBody: redact(data),
+        attempt,
+      };
+      if (response.ok) {
+        return result;
+      }
+      const error = new Error(`Posentegra API ${method} ${pathname} HTTP ${response.status}`);
+      error.code = "POSENTEGRA_HTTP_ERROR";
+      error.result = result;
+      lastError = error;
+      if (!options.retryable || response.status < 500 || attempt >= attempts) {
+        throw error;
+      }
+    } catch (error) {
+      lastError = error;
+      if (error.name === "AbortError") {
+        const timeoutError = new Error(`Posentegra API ${method} ${pathname} timeout`);
+        timeoutError.code = "POSENTEGRA_TIMEOUT";
+        timeoutError.result = { status: 504, method, path: pathname, requestBody: redact(options.body || null), responseBody: null, attempt };
+        lastError = timeoutError;
+      }
+      const retryableNetworkError = options.retryable && (lastError.code === "POSENTEGRA_TIMEOUT" || !lastError.result || Number(lastError.result.status) >= 500);
+      if (!retryableNetworkError || attempt >= attempts) {
+        throw lastError;
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    await retryDelay(attempt);
   }
-  const result = {
-    ok: response.ok,
-    status: response.status,
-    method,
-    path: pathname,
-    requestBody: redact(options.body || null),
-    responseBody: redact(data),
-  };
-  if (!response.ok) {
-    const error = new Error(`Posentegra API ${method} ${pathname} HTTP ${response.status}`);
-    error.code = "POSENTEGRA_HTTP_ERROR";
-    error.result = result;
-    throw error;
-  }
-  return result;
+  throw lastError;
 }
 
 function restaurantPayload(restaurant = {}) {
@@ -139,6 +184,8 @@ async function assignPackageToRestaurant(posentegraRestaurantId, payload = {}) {
   return request(`/web-api/v1/restaurants/${encodeURIComponent(posentegraRestaurantId)}/assign-package`, {
     method: "POST",
     body: payload,
+    retryable: true,
+    idempotencyKey: `package:${payload.id || payload.packageId || payload.externalOrderId || "unknown"}`,
   });
 }
 
@@ -146,6 +193,8 @@ async function changeOrderStatus(orderId, status, meta = {}) {
   return request(`/web-api/v1/orders/change-status/${encodeURIComponent(orderId)}`, {
     method: "POST",
     body: { status, ...meta },
+    retryable: true,
+    idempotencyKey: `status:${orderId}:${status}:${meta.packageId || ""}`,
   });
 }
 

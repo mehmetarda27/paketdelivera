@@ -19,6 +19,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const net = require("net");
 
 const uploadsDir = path.resolve(process.env.DELIVERA_UPLOAD_DIR || path.join(__dirname, "uploads"));
 if (!fs.existsSync(uploadsDir)) {
@@ -37,6 +38,7 @@ const { createQueueService, JOB_TYPES } = require("./services/queueService");
 const { createSessionRevocationService } = require("./services/sessionRevocationService");
 const { sendPlatformStatusCallback } = require("./services/platformCallbackService");
 const posentegraClient = require("./services/posentegraClient");
+const { createPosentegraOutboxService } = require("./services/posentegraOutboxService");
 const {
   createConnectionHealthService,
   HEALTH_STATUS,
@@ -83,6 +85,9 @@ const REDIS_URL = trimmed(process.env.REDIS_URL || process.env.DELIVERA_REDIS_UR
 const WEBHOOK_SECRET = trimmed(process.env.WEBHOOK_SECRET);
 const WEBHOOK_ENABLED = !["0", "false", "no"].includes(String(process.env.WEBHOOK_ENABLED || "true").toLowerCase());
 const WEBHOOK_LOG_ENABLED = !["0", "false", "no"].includes(String(process.env.WEBHOOK_LOG_ENABLED || "true").toLowerCase());
+const LOG_PASSWORD_RESET_TOKENS = !IS_PRODUCTION && ["1", "true", "yes"].includes(String(process.env.DELIVERA_LOG_PASSWORD_RESET_TOKENS || "").toLowerCase());
+const MAX_REQUEST_BODY_BYTES = Math.max(64 * 1024, Math.min(5 * 1024 * 1024, Number(process.env.DELIVERA_MAX_REQUEST_BODY_BYTES || 1024 * 1024)));
+const METRICS_TOKEN = trimmed(process.env.DELIVERA_METRICS_TOKEN);
 const WEBHOOK_ALLOWED_IPS = String(process.env.WEBHOOK_ALLOWED_IPS || "")
   .split(",")
   .map((ip) => ip.trim())
@@ -92,6 +97,7 @@ const RATE_LIMITS = {
   courierLogin: { limit: 10, windowMs: RATE_LIMIT_WINDOW_MS },
   adminLogin: { limit: 5, windowMs: RATE_LIMIT_WINDOW_MS },
   restaurantLogin: { limit: 20, windowMs: RATE_LIMIT_WINDOW_MS },
+  passwordReset: { limit: 5, windowMs: 15 * 60_000 },
   platformOrder: { limit: 1000, windowMs: RATE_LIMIT_WINDOW_MS },
   quickPaste: { limit: 50, windowMs: RATE_LIMIT_WINDOW_MS },
   adminWrites: { limit: 500, windowMs: RATE_LIMIT_WINDOW_MS },
@@ -309,6 +315,7 @@ logger.info("Database pool status", {
 });
 const rateLimitStore = createRateLimitStore({ redisUrl: REDIS_URL, logger, db, dbClient: dbFacade.clientName() });
 const queueService = createQueueService({ redisUrl: REDIS_URL, logger });
+const posentegraOutbox = createPosentegraOutboxService({ db, client: posentegraClient, logger });
 const sessionRevocationService = createSessionRevocationService({ redisUrl: REDIS_URL, logger, db, dbClient: dbFacade.clientName() });
 const liveStreams = new Map();
 const performanceMetrics = {
@@ -2430,8 +2437,16 @@ function plusHoursIso(value, hours) {
 }
 
 function clientIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.socket.remoteAddress || "unknown";
+  if (TRUST_PROXY) {
+    const forwarded = String(req.headers["x-forwarded-for"] || "")
+      .split(",")
+      .map((value) => value.trim().replace(/^\[|\]$/g, ""))
+      .filter((value) => net.isIP(value));
+    if (forwarded.length) {
+      return forwarded[forwarded.length - 1];
+    }
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
 function requestProtocol(req) {
@@ -3075,6 +3090,9 @@ function consumePasswordReset(actorRole, token) {
 }
 
 function logPasswordReset(actorRole, username, token) {
+  if (!LOG_PASSWORD_RESET_TOKENS) {
+    return;
+  }
   const line = `[${new Date().toISOString()}] role=${actorRole} username=${username} token=${token}\n`;
   fs.appendFileSync(PASSWORD_RESET_LOG_FILE, line, "utf8");
 }
@@ -3653,15 +3671,25 @@ function isPlatformBackedPackage(pkg) {
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let settled = false;
 
     req.on("data", (chunk) => {
+      if (settled) {
+        return;
+      }
       raw += chunk.toString();
-      if (raw.length > 15_000_000) {
+      if (Buffer.byteLength(raw, "utf8") > MAX_REQUEST_BODY_BYTES) {
+        settled = true;
+        raw = "";
         reject(httpError(413, "Payload cok buyuk."));
       }
     });
 
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (!raw) {
         resolve({ raw: "", json: {} });
         return;
@@ -3674,7 +3702,12 @@ function readRequestBody(req) {
       }
     });
 
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
   });
 }
 
@@ -3958,6 +3991,7 @@ function queueHealthPayload() {
     platformPollIntervalMs: PLATFORM_POLL_INTERVAL_MS,
     liveStreams: liveStreams.size,
     queueService: queueService.health(),
+    posentegraOutbox: posentegraOutbox.health(),
   };
 }
 
@@ -6807,6 +6841,78 @@ function posentegraStatusForPackageStatus(status) {
   return normalized;
 }
 
+function triggerPosentegraOutbox() {
+  posentegraOutbox.processDue().catch((error) => {
+    logger.warn("Posentegra outbox sweep failed", { error });
+  });
+}
+
+function schedulePosentegraOutbox() {
+  queueMicrotask(triggerPosentegraOutbox);
+}
+
+function enqueuePosentegraPackageAssignment(pkg) {
+  if (!posentegraClient.configured() || isPlatformBackedPackage(pkg)) {
+    return null;
+  }
+  const restaurant = db.prepare("SELECT id, posentegra_id FROM restaurants WHERE id = ?").get(pkg.restaurantId);
+  if (!restaurant?.posentegra_id) {
+    logger.warn("Posentegra package assignment skipped", {
+      packageId: pkg.id,
+      restaurantId: pkg.restaurantId,
+      reason: "restaurant_posentegra_id_missing",
+    });
+    return null;
+  }
+  const row = posentegraOutbox.enqueuePackageAssignment({
+    packageId: pkg.id,
+    restaurantPosentegraId: restaurant.posentegra_id,
+    packagePayload: {
+      externalOrderId: pkg.externalOrderId || pkg.externalOrderNo,
+      trackingNo: pkg.trackingNo,
+      customerName: pkg.recipient,
+      recipient: pkg.recipient,
+      phone: pkg.phone,
+      deliveryAddress: pkg.deliveryAddress || pkg.address,
+      packageType: pkg.packageType,
+      source: pkg.source,
+      sourcePlatform: pkg.sourcePlatform,
+      orderAmount: normalizeMoney(pkg.orderAmount),
+      paymentMethod: pkg.paymentMethod,
+      paymentStatus: pkg.paymentStatus,
+      items: Array.isArray(pkg.items) ? pkg.items : [],
+      note: pkg.customerNote || pkg.note || "",
+      createdAt: pkg.createdAt,
+    },
+  });
+  schedulePosentegraOutbox();
+  return row;
+}
+
+function enqueuePosentegraStatusChange(packageRow, nextStatus, req) {
+  const normalized = normalizeStatus(nextStatus);
+  if (!posentegraClient.configured() || ![ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS].includes(normalized)) {
+    return null;
+  }
+  const orderId = resolvePackagePosentegraId(packageRow);
+  if (!orderId) {
+    logger.warn("order_pid_missing_for_status_change", {
+      request_id: req?.requestId || null,
+      package_id: packageRow?.id || null,
+      status: normalized,
+    });
+    return null;
+  }
+  const row = posentegraOutbox.enqueueStatus({
+    packageId: packageRow.id,
+    orderId,
+    status: posentegraStatusForPackageStatus(normalized),
+    meta: { internalStatus: normalized, requestId: req?.requestId || null },
+  });
+  schedulePosentegraOutbox();
+  return row;
+}
+
 async function syncPosentegraStatusChangeOrThrow(packageRow, nextStatus, req) {
   if (!isPlatformBackedPackage(packageRow)) {
     return null;
@@ -8688,6 +8794,7 @@ function createPackageRecord(pkg, packageType = "Platform Siparisi", trace = {})
     platform_restaurant_id: verified.platform_restaurant_id || null,
     platform_order_id: verified.external_order_id || pkg.externalOrderNo || null,
   });
+  enqueuePosentegraPackageAssignment(pkg);
 }
 
 function findDuplicatePackage(restaurantId, source, externalOrderId, posentegraId = "") {
@@ -8770,6 +8877,10 @@ function updatePackageLifecycle(packageId, updates, current = {}) {
     nowIso(),
     packageId
   );
+  if (normalizeStatus(current.status) !== status) {
+    const updatedPackage = db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId);
+    enqueuePosentegraStatusChange(updatedPackage, status);
+  }
   syncAssignmentRetryForPackage(getPackageById(packageId));
 }
 
@@ -10141,6 +10252,72 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/posentegra-outbox") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    const requestedStatus = trimmed(requestUrl.searchParams.get("status"));
+    const allowedStatuses = new Set(["pending", "processing", "failed", "completed", "dead_letter"]);
+    const limit = clampLimit(requestUrl.searchParams.get("limit"), 100);
+    const rows = requestedStatus && allowedStatuses.has(requestedStatus)
+      ? db.prepare(`SELECT * FROM posentegra_outbox WHERE status = ? ORDER BY created_at DESC LIMIT ?`).all(requestedStatus, limit)
+      : db.prepare(`SELECT * FROM posentegra_outbox ORDER BY created_at DESC LIMIT ?`).all(limit);
+    sendJson(res, 200, {
+      ok: true,
+      health: posentegraOutbox.health(),
+      items: rows.map((row) => ({
+        id: row.id,
+        eventType: row.event_type,
+        aggregateId: row.aggregate_id,
+        status: row.status,
+        attempts: row.attempts,
+        nextAttemptAt: row.next_attempt_at,
+        lastError: row.last_error,
+        completedAt: row.completed_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+    });
+    return;
+  }
+
+  const posentegraOutboxRetryMatch = pathname.match(/^\/api\/admin\/posentegra-outbox\/([^/]+)\/retry$/);
+  if (req.method === "POST" && posentegraOutboxRetryMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    const outboxId = decodeURIComponent(posentegraOutboxRetryMatch[1]);
+    const result = db.prepare(`
+      UPDATE posentegra_outbox
+      SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+          locked_at = NULL, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('failed', 'dead_letter')
+    `).run(nowIso(), nowIso(), outboxId);
+    if (!result.changes) {
+      sendJson(res, 404, { error: "Tekrar denenebilir Posentegra outbox kaydi bulunamadi." });
+      return;
+    }
+    writeAuditLog({
+      actorRole: "admin",
+      actorId: adminActorId(adminSession),
+      action: "posentegra_outbox_retry_requested",
+      details: { outboxId },
+    });
+    schedulePosentegraOutbox();
+    sendJson(res, 202, { ok: true, outboxId, status: "pending" });
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/performance-summary") {
     const adminSession = getAdminSession(req);
     if (!adminSession) {
@@ -10625,6 +10802,11 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/admin/forgot-password") {
+    const retryAfter = await applyRateLimit(req, "adminPasswordReset", RATE_LIMITS.passwordReset);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
     const startTime = Date.now();
@@ -10659,6 +10841,11 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/forgot-password") {
+    const retryAfter = await applyRateLimit(req, "restaurantPasswordReset", RATE_LIMITS.passwordReset);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
     const startTime = Date.now();
@@ -10694,6 +10881,11 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/courier/forgot-password") {
+    const retryAfter = await applyRateLimit(req, "courierPasswordReset", RATE_LIMITS.passwordReset);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
     const { json: body } = await readRequestBody(req);
     const { username } = validatePasswordResetRequestDraft(body);
     const startTime = Date.now();
@@ -13138,13 +13330,6 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    try {
-      await syncPosentegraStatusChangeOrThrow(target, nextStatus, req);
-    } catch (error) {
-      sendJson(res, error.statusCode || 502, { error: error.message || "Posentegra durum degisikligi basarisiz." });
-      return;
-    }
-
     updatePackageLifecycle(packageId, {
       status: nextStatus,
       failureReason: nextStatus === FAILED_STATUS ? failureReason : "",
@@ -14184,7 +14369,6 @@ const server = http.createServer(async (req, res) => {
     recordRequestLog(req, res, requestStartedAt);
   });
   try {
-    console.log(`[DEBUG] INCOMING REQUEST: ${req.method} ${req.url}`);
     res._deliveraRequest = req;
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const { pathname } = requestUrl;
@@ -14202,14 +14386,19 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && pathname === "/health") {
       sendJson(res, 200, {
-        ...systemStatusPayload(),
-        secure: isSecureRequest(req),
-        assignmentRetryMs: ASSIGNMENT_RETRY_INTERVAL_MS,
+        ok: true,
+        app: "Delivera Express",
+        timestamp: nowIso(),
       });
       return;
     }
 
     if (req.method === "GET" && pathname === "/metrics") {
+      const suppliedMetricsToken = getBearerToken(req) || trimmed(req.headers["x-metrics-token"]);
+      if ((IS_PRODUCTION || METRICS_TOKEN) && !timingSafeStringEqual(suppliedMetricsToken, METRICS_TOKEN)) {
+        sendJson(res, METRICS_TOKEN ? 401 : 404, { error: METRICS_TOKEN ? "Metrics token gecersiz." : "Bulunamadi." });
+        return;
+      }
       sendText(res, 200, metricsTextPayload(), "text/plain; version=0.0.4; charset=utf-8");
       return;
     }
@@ -14260,6 +14449,10 @@ setInterval(() => {
   }
 }, ASSIGNMENT_RETRY_INTERVAL_MS).unref();
 
+setInterval(() => {
+  triggerPosentegraOutbox();
+}, Math.max(5_000, Number(process.env.POSENTEGRA_OUTBOX_POLL_MS || 10_000))).unref();
+
 connectionHealthService = createConnectionHealthService({
   db,
   logger,
@@ -14297,3 +14490,30 @@ currentState().packages
 server.listen(PORT, () => {
   logger.info("Delivera Express ready", { url: `http://localhost:${PORT}`, port: PORT });
 });
+
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info("Graceful shutdown started", { signal });
+  const forceTimer = setTimeout(() => {
+    logger.error("Graceful shutdown timed out", { signal });
+    process.exit(1);
+  }, 15_000);
+  forceTimer.unref();
+  liveStreams.forEach((stream) => closeLiveStream(stream.id));
+  server.close(async () => {
+    try {
+      await queueService.close();
+      dbFacade.close();
+      logger.info("Graceful shutdown completed", { signal });
+      process.exit(0);
+    } catch (error) {
+      logger.error("Graceful shutdown failed", { signal, error });
+      process.exit(1);
+    }
+  });
+}
+
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));

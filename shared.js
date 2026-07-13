@@ -268,7 +268,10 @@ function createPlatformOptions(selected = "") {
 }
 
 function setZoneOptions(select, zones) {
-  select.innerHTML = zones.map((zone) => `<option value="${zone.name || zone}">${zone.name || zone}</option>`).join("");
+  select.innerHTML = zones.map((zone) => {
+    const value = sharedHtmlSafe(zone.name || zone);
+    return `<option value="${value}">${value}</option>`;
+  }).join("");
 }
 
 function authHeaders(token) {
@@ -481,7 +484,7 @@ function renderNotificationCenter(target, notifications = [], emptyText = "Bildi
   if (!renderIfChanged(target, signature || `empty:${emptyText}`, () => {
   target.innerHTML = "";
   if (!visibleNotifications.length) {
-    target.innerHTML = `<div class="empty-state compact-empty-state">${emptyText}</div>`;
+    target.innerHTML = `<div class="empty-state compact-empty-state">${sharedHtmlSafe(emptyText)}</div>`;
     return;
   }
 
@@ -503,7 +506,7 @@ function renderNotificationCenter(target, notifications = [], emptyText = "Bildi
       <div class="stack-top">
         <div>
           <strong>${titleMap[item.eventType] || "Sistem Bildirimi"}</strong>
-          <p>${item.message || "-"}</p>
+          <p>${sharedHtmlSafe(item.message || "-")}</p>
         </div>
         <span class="soft-badge">${formatTimeAgo(item.createdAt)}</span>
       </div>
@@ -650,25 +653,25 @@ window.showPackageDetailsModal = function(pkg) {
              </div>
              <div style="text-align: right;">
                <span style="font-size: 0.8rem; color: var(--ink-soft); display: block; margin-bottom: 4px;">Sipariş Kodu</span>
-               <strong style="font-size: 1.1rem;">${pkg.trackingNo || "-"}</strong>
+               <strong style="font-size: 1.1rem;">${sharedHtmlSafe(pkg.trackingNo || "-")}</strong>
              </div>
           </div>
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; background: var(--bg); padding: 16px; border-radius: 12px; border: 1px solid var(--line);">
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform</span><br><strong>${pkg.sourcePlatform || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Harici No</span><br><strong>${pkg.externalOrderNo || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Package ID</span><br><strong>${pkg.id || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Tracking No</span><br><strong>${pkg.trackingNo || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Restaurant ID</span><br><strong>${pkg.restaurantId || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Restaurant Name</span><br><strong>${pkg.restaurantName || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Restaurant ID</span><br><strong>${pkg.platformRestaurantId || pkg.externalRestaurantId || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Posentegra ID / PID</span><br><strong>${pkg.posentegraId || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Order ID</span><br><strong>${pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Müşteri</span><br><strong>${pkg.recipient || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Telefon</span><br><strong>${pkg.phone || "-"}</strong></div>
-            <div style="grid-column: 1 / -1;"><span style="color: var(--ink-soft); font-size: 0.85rem;">Adres</span><br><strong>${pkg.deliveryAddress || pkg.address || "-"}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Ödeme</span><br><strong>${pkg.paymentMethod || "-"} - ${formatCurrency(pkg.orderAmount)}</strong></div>
-            <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Kurye</span><br><strong>${pkg.assignedCourierName || "Atama Bekliyor"}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform</span><br><strong>${sharedHtmlSafe(pkg.sourcePlatform || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Harici No</span><br><strong>${sharedHtmlSafe(pkg.externalOrderNo || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Package ID</span><br><strong>${sharedHtmlSafe(pkg.id || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Tracking No</span><br><strong>${sharedHtmlSafe(pkg.trackingNo || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Internal Restaurant ID</span><br><strong>${sharedHtmlSafe(pkg.restaurantId || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Restaurant Name</span><br><strong>${sharedHtmlSafe(pkg.restaurantName || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Restaurant ID</span><br><strong>${sharedHtmlSafe(pkg.platformRestaurantId || pkg.externalRestaurantId || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Posentegra ID / PID</span><br><strong>${sharedHtmlSafe(pkg.posentegraId || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Platform Order ID</span><br><strong>${sharedHtmlSafe(pkg.platformOrderId || pkg.externalOrderId || pkg.externalOrderNo || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Müşteri</span><br><strong>${sharedHtmlSafe(pkg.recipient || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Telefon</span><br><strong>${sharedHtmlSafe(pkg.phone || "-")}</strong></div>
+             <div style="grid-column: 1 / -1;"><span style="color: var(--ink-soft); font-size: 0.85rem;">Adres</span><br><strong>${sharedHtmlSafe(pkg.deliveryAddress || pkg.address || "-")}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Ödeme</span><br><strong>${sharedHtmlSafe(pkg.paymentMethod || "-")} - ${sharedHtmlSafe(formatCurrency(pkg.orderAmount))}</strong></div>
+             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Kurye</span><br><strong>${sharedHtmlSafe(pkg.assignedCourierName || "Atama Bekliyor")}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Oluşturulma</span><br><strong>${formatDate(pkg.createdAt)}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Güncellenme</span><br><strong>${formatDate(pkg.updatedAt || pkg.createdAt)}</strong></div>
           </div>
@@ -676,7 +679,7 @@ window.showPackageDetailsModal = function(pkg) {
           ${pkg.customerNote || pkg.note ? `
           <div style="background: rgba(242, 122, 26, 0.08); padding: 16px; border-radius: 12px; border: 1px solid rgba(242, 122, 26, 0.2);">
             <strong style="color: #F27A1A; display: block; margin-bottom: 8px;">Müşteri Notu:</strong>
-            <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">${pkg.customerNote || pkg.note}</p>
+             <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">${sharedHtmlSafe(pkg.customerNote || pkg.note)}</p>
           </div>
           ` : ""}
           ${pkg.rawPayload ? `

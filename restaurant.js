@@ -914,9 +914,9 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
   const items = Array.isArray(pkg.items) && pkg.items.length
     ? pkg.items.map((item) => `
       <tr>
-        <td>${item.name || "-"}</td>
-        <td>${item.quantity || 1}</td>
-        <td>${formatCurrency(item.price || 0)}</td>
+        <td>${escapeHtml(item.name || "-")}</td>
+        <td>${escapeHtml(item.quantity || 1)}</td>
+        <td>${escapeHtml(formatCurrency(item.price || 0))}</td>
       </tr>
     `).join("")
     : '<tr><td colspan="3">Urun bilgisi paylasilmadi.</td></tr>';
@@ -924,7 +924,7 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
   win.document.write(`
     <html>
       <head>
-        <title>${pkg.externalOrderNo} Fis</title>
+        <title>${escapeHtml(pkg.externalOrderNo || pkg.trackingNo || "Siparis")} Fis</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
           h1 { margin: 0 0 12px; font-size: 24px; }
@@ -935,22 +935,22 @@ function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
         </style>
       </head>
       <body>
-        <h1>${restaurantName}</h1>
-        <p>Platform: ${pkg.sourcePlatform || "-"}</p>
-        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${pkg.externalOrderNo || pkg.trackingNo || "-"}</p>
-        <p>Musteri: ${pkg.recipient || "-"}</p>
-        <p>Telefon: ${pkg.phone || "-"}</p>
-        <p>Adres: ${pkg.deliveryAddress || pkg.address || "-"}</p>
+        <h1>${escapeHtml(restaurantName)}</h1>
+        <p>Platform: ${escapeHtml(pkg.sourcePlatform || "-")}</p>
+        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${escapeHtml(pkg.externalOrderNo || pkg.trackingNo || "-")}</p>
+        <p>Musteri: ${escapeHtml(pkg.recipient || "-")}</p>
+        <p>Telefon: ${escapeHtml(pkg.phone || "-")}</p>
+        <p>Adres: ${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</p>
         <h2>Urunler</h2>
         <table>
           <thead><tr><th>Urun</th><th>Adet</th><th>Tutar</th></tr></thead>
           <tbody>${items}</tbody>
         </table>
         <h2>Odeme</h2>
-        <p>Odeme Tipi: ${pkg.paymentMethod || "-"}</p>
-        <p>Toplam Tutar: ${formatCurrency(pkg.orderAmount || 0)}</p>
-        <p>Notlar: ${pkg.customerNote || pkg.note || "-"}</p>
-        <p>Tarih Saat: ${formatDate(pkg.createdAt)}</p>
+        <p>Odeme Tipi: ${escapeHtml(pkg.paymentMethod || "-")}</p>
+        <p>Toplam Tutar: ${escapeHtml(formatCurrency(pkg.orderAmount || 0))}</p>
+        <p>Notlar: ${escapeHtml(pkg.customerNote || pkg.note || "-")}</p>
+        <p>Tarih Saat: ${escapeHtml(formatDate(pkg.createdAt))}</p>
       </body>
     </html>
   `);
@@ -1319,8 +1319,8 @@ function renderRestaurantList(restaurants) {
   card.innerHTML = `
     <div class="stack-top">
       <div>
-        <strong>${restaurant.name}</strong>
-        <p>${restaurant.zone} bolgesi - GPS ${restaurant.latitude}, ${restaurant.longitude}</p>
+        <strong>${escapeHtml(restaurant.name)}</strong>
+        <p>${escapeHtml(restaurant.zone)} bolgesi - GPS ${escapeHtml(restaurant.latitude)}, ${escapeHtml(restaurant.longitude)}</p>
         <div class="badge-row">${createPlatformBadges(restaurant.platforms)}</div>
       </div>
       <span class="soft-badge">Tenant Izole</span>
@@ -1501,9 +1501,9 @@ function renderRecentOrders(packages) {
     card.innerHTML = `
       <div class="order-card-top">
         <div class="order-card-title">
-          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
-          <p class="entity-line">${pkg.packageType || "Standart Paket"} - ${pkg.recipient || "Musteri"}</p>
-          <p>Kaynak: ${packageSourceLabel(pkg) || "-"} - ${pkg.restaurantName || "-"}</p>
+          <strong class="entity-line">${SVG_PACKAGE} ${escapeHtml(packageDisplayCode(pkg))}</strong>
+          <p class="entity-line">${escapeHtml(pkg.packageType || "Standart Paket")} - ${escapeHtml(pkg.recipient || "Musteri")}</p>
+          <p>Kaynak: ${escapeHtml(packageSourceLabel(pkg) || "-")} - ${escapeHtml(pkg.restaurantName || "-")}</p>
         </div>
         <div class="order-card-badges">
           <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
@@ -1512,15 +1512,15 @@ function renderRecentOrders(packages) {
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Adres</span>
-          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
+          <strong class="entity-line">${SVG_PIN} ${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</strong>
         </div>
         <div>
           <span>Kurye</span>
-          <strong class="entity-line">${SVG_COURIER} ${pkg.assignedCourierName || "Kurye bekleniyor"}</strong>
+          <strong class="entity-line">${SVG_COURIER} ${escapeHtml(pkg.assignedCourierName || "Kurye bekleniyor")}</strong>
         </div>
         <div>
           <span>Odeme</span>
-          <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+          <strong>${escapeHtml(pkg.paymentMethod || "-")} - ${escapeHtml(paymentStatusLabel(pkg.paymentStatus))} - ${escapeHtml(formatCurrency(pkg.orderAmount))}</strong>
         </div>
         <div>
           <span>Zaman</span>
@@ -1528,7 +1528,7 @@ function renderRecentOrders(packages) {
         </div>
       </div>
       <div class="order-card-footer">
-        <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
+        <button class="ghost-btn details-btn" type="button" aria-label="${escapeHtml(pkg.trackingNo || "Siparis")} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
       </div>
     `;
     card.querySelector('.details-btn')?.addEventListener('click', () => {
@@ -1578,8 +1578,8 @@ function renderActiveOrders(data) {
     card.innerHTML = `
       <div class="order-card-top">
         <div class="order-card-title">
-          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
-          <p>Kaynak: ${sourceLabel || "-"} - Musteri: ${pkg.recipient || "-"}</p>
+          <strong class="entity-line">${SVG_PACKAGE} ${escapeHtml(packageDisplayCode(pkg))}</strong>
+          <p>Kaynak: ${escapeHtml(sourceLabel || "-")} - Musteri: ${escapeHtml(pkg.recipient || "-")}</p>
           <p>Olusturulma: ${formatDate(pkg.createdAt)}</p>
         </div>
         <div class="order-card-badges">
@@ -1591,27 +1591,27 @@ function renderActiveOrders(data) {
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Paket ID</span>
-          <strong>${pkg.id}</strong>
+          <strong>${escapeHtml(pkg.id)}</strong>
         </div>
         <div>
           <span>Hazirlik Kodu</span>
-          <strong>${prepCode}</strong>
+          <strong>${escapeHtml(prepCode)}</strong>
         </div>
         <div>
           <span>Adres</span>
-          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
+          <strong class="entity-line">${SVG_PIN} ${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</strong>
         </div>
         <div>
           <span>Not</span>
-          <strong>${pkg.customerNote || pkg.note || "-"}</strong>
+          <strong>${escapeHtml(pkg.customerNote || pkg.note || "-")}</strong>
         </div>
         <div>
           <span>Odeme</span>
-          <strong>${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+          <strong>${escapeHtml(pkg.paymentMethod || "-")} - ${escapeHtml(paymentStatusLabel(pkg.paymentStatus))} - ${escapeHtml(formatCurrency(pkg.orderAmount))}</strong>
         </div>
         <div>
           <span>Kurye</span>
-          <strong class="entity-line">${SVG_MOTO} ${pkg.assignedCourierName || "Henüz atanmadı"}</strong>
+          <strong class="entity-line">${SVG_MOTO} ${escapeHtml(pkg.assignedCourierName || "Henüz atanmadı")}</strong>
         </div>
         <div>
           <span>Kurye Durumu</span>
@@ -1627,11 +1627,11 @@ function renderActiveOrders(data) {
         </div>
         <div>
           <span>Hazirlik Sayaci</span>
-          <strong>${pkg.eta || "5 dk"}</strong>
+          <strong>${escapeHtml(pkg.eta || "5 dk")}</strong>
         </div>
       </div>
-      ${Array.isArray(pkg.items) && pkg.items.length ? `<p>Urunler: ${pkg.items.map((item) => `${item.quantity || 1}x ${item.name}`).join(", ")}</p>` : ""}
-      ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${pkg.lastAssignmentError}</p>` : ""}
+      ${Array.isArray(pkg.items) && pkg.items.length ? `<p>Urunler: ${pkg.items.map((item) => `${escapeHtml(item.quantity || 1)}x ${escapeHtml(item.name || "-")}`).join(", ")}</p>` : ""}
+      ${pkg.lastAssignmentError ? `<p>Son Atama Notu: ${escapeHtml(pkg.lastAssignmentError)}</p>` : ""}
     `;
 
     const detailFooter = document.createElement("div");
@@ -1743,9 +1743,9 @@ function renderOrderHistory(packages) {
     card.innerHTML = `
       <div class="order-card-top">
         <div class="order-card-title">
-          <strong class="entity-line">${SVG_PACKAGE} ${packageDisplayCode(pkg)}</strong>
-          <p class="entity-line">${pkg.recipient || "Musteri"} - ${pkg.packageType || "Standart Paket"}</p>
-          <p>Kaynak: ${packageSourceLabel(pkg) || "-"}</p>
+          <strong class="entity-line">${SVG_PACKAGE} ${escapeHtml(packageDisplayCode(pkg))}</strong>
+          <p class="entity-line">${escapeHtml(pkg.recipient || "Musteri")} - ${escapeHtml(pkg.packageType || "Standart Paket")}</p>
+          <p>Kaynak: ${escapeHtml(packageSourceLabel(pkg) || "-")}</p>
         </div>
         <div class="order-card-badges">
           <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
@@ -1754,23 +1754,23 @@ function renderOrderHistory(packages) {
       <div class="meta-grid compact-meta-grid">
         <div>
           <span>Paket kodu</span>
-          <strong>${packageDisplayCode(pkg)}</strong>
+          <strong>${escapeHtml(packageDisplayCode(pkg))}</strong>
         </div>
         <div>
           <span>Musteri</span>
-          <strong>${pkg.recipient || "-"}</strong>
+          <strong>${escapeHtml(pkg.recipient || "-")}</strong>
         </div>
         <div class="order-meta-wide">
           <span>Adres</span>
-          <strong class="entity-line">${SVG_PIN} ${pkg.deliveryAddress || pkg.address || "-"}</strong>
+          <strong class="entity-line">${SVG_PIN} ${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</strong>
         </div>
         <div>
           <span>Kurye</span>
-          <strong class="entity-line">${SVG_MOTO} ${pkg.assignedCourierName || "Atama yok"}</strong>
+          <strong class="entity-line">${SVG_MOTO} ${escapeHtml(pkg.assignedCourierName || "Atama yok")}</strong>
         </div>
         <div>
           <span>Odeme</span>
-          <strong>${pkg.paymentMethod || "-"} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}</strong>
+          <strong>${escapeHtml(pkg.paymentMethod || "-")} - ${escapeHtml(paymentStatusLabel(pkg.paymentStatus))} - ${escapeHtml(formatCurrency(pkg.orderAmount))}</strong>
         </div>
         <div>
           <span>Olusturulma</span>
@@ -1782,7 +1782,7 @@ function renderOrderHistory(packages) {
         </div>
       </div>
       <div class="order-card-footer">
-        <button class="ghost-btn details-btn" type="button" aria-label="${pkg.trackingNo || "Siparis"} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
+        <button class="ghost-btn details-btn" type="button" aria-label="${escapeHtml(pkg.trackingNo || "Siparis")} detayini goruntule" style="padding: 6px 16px; font-size: 0.85rem; border-radius: 8px;">Detayı Görüntüle</button>
       </div>
     `;
     card.querySelector('.details-btn')?.addEventListener('click', () => {
