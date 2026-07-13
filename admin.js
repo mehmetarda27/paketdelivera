@@ -257,7 +257,7 @@ function initializeAdminWorkspaceCards() {
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(1)", "admin-shift-plan"],
     ["#adminWorkspace > section:nth-of-type(9) > article:nth-of-type(2)", "admin-cash"],
     ["#adminWorkspace > section:nth-of-type(10)", "admin-webhooks"],
-    ["#adminWorkspace_system_unmatched", "admin-unmatched-orders"],
+    ["#adminWorkspace_system_unmatched > section", "admin-unmatched-orders"],
     ["#adminWorkspace > section:nth-of-type(11)", "admin-platform-health"],
     ["#adminWorkspace > section:nth-of-type(12)", "admin-audit"],
     ["#adminWorkspace > section:nth-of-type(13)", "admin-day-close"],
