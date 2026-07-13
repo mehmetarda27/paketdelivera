@@ -753,6 +753,62 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.equal(unmatchedWebhookOrder.matched, false);
     assert.equal(readRow(dbFile, "SELECT COUNT(*) AS count FROM packages").count, packageCountBeforeUnmatched);
 
+    const sharedPosentegraRestaurantId = `pos-common-${Date.now()}`;
+    const firstSharedWebhook = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify({
+        provider: { slug: "ty", api: "tywh", kaynak: "Trendyol Yemek" },
+        pid: `POS-SHARED-TY-${Date.now()}`,
+        restaurant: { id: sharedPosentegraRestaurantId, name: "Second Persistence Test Restaurant" },
+        customerName: "Shared Posentegra Customer",
+        addressText: "Shared Posentegra address",
+        totalPrice: 150,
+        products: [{ id: "prod-shared-1", name: "Tantuni", quantity: 1, price: 150, totalPrice: 150 }],
+      }),
+    });
+    assert.equal(firstSharedWebhook.matched, false);
+
+    const matchedSharedWebhook = await request(
+      baseUrl,
+      `/api/admin/unmatched-orders/${firstSharedWebhook.unmatchedOrderId}/match`,
+      {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({
+          restaurantId: secondRestaurantState.createdRestaurant.id,
+          saveExternalId: true,
+        }),
+      }
+    );
+    assert.equal(matchedSharedWebhook.ok, true);
+    const savedSharedIds = JSON.parse(
+      readRow(
+        dbFile,
+        "SELECT external_restaurant_ids FROM restaurants WHERE id = ?",
+        secondRestaurantState.createdRestaurant.id
+      ).external_restaurant_ids
+    );
+    assert.ok(savedSharedIds.some((item) =>
+      item.platform === "posentegra" && item.restaurantId === sharedPosentegraRestaurantId
+    ));
+
+    const secondSharedWebhook = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify({
+        provider: { slug: "getir", api: "getirwh", kaynak: "Getir Yemek" },
+        pid: `POS-SHARED-GETIR-${Date.now()}`,
+        restaurant: { id: sharedPosentegraRestaurantId, name: "Second Persistence Test Restaurant" },
+        customerName: "Shared Posentegra Customer Two",
+        addressText: "Shared Posentegra address two",
+        totalPrice: 175,
+        products: [{ id: "prod-shared-2", name: "Burger", quantity: 1, price: 175, totalPrice: 175 }],
+      }),
+    });
+    assert.equal(secondSharedWebhook.matched, true);
+    assert.equal(secondSharedWebhook.package.restaurantId, secondRestaurantState.createdRestaurant.id);
+
     const externalPackages = await request(baseUrl, "/api/external/packages", {
       headers: externalHeaders,
     });

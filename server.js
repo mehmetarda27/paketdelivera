@@ -7226,6 +7226,14 @@ function normalizeWebhookOrderPayload(payload = {}) {
   };
 }
 
+function isPosentegraWebhookPayload(payload = {}) {
+  const provider = payload.provider && typeof payload.provider === "object" ? payload.provider : {};
+  const providerApi = trimmed(provider.api);
+  const restaurantId = trimmed(payload.restaurant?.id || payload.restaurantId);
+  const orderId = trimmed(payload.pid || payload.posentegraId || payload.posentegra_id);
+  return Boolean(providerApi && restaurantId && orderId);
+}
+
 function restaurantMatchesExternalId(restaurant, externalRestaurantId, platform = "") {
   const incoming = trimmed(externalRestaurantId);
   if (!incoming) return false;
@@ -8113,7 +8121,7 @@ function updateRestaurantPlatformIds(restaurantId, body = {}) {
   return getRestaurants({ restaurantId })[0];
 }
 
-function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId) {
+function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId, options = {}) {
   const incoming = trimmed(externalRestaurantId);
   if (!incoming) return null;
   const lowerPlatform = trimmed(platform).toLowerCase();
@@ -8128,6 +8136,25 @@ function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId
           : "";
   const restaurant = getRestaurants({ restaurantId })[0];
   if (!restaurant) return null;
+  const knownIds = [
+    restaurant.posentegraId,
+    restaurant.trendyolRestaurantId,
+    restaurant.yemeksepetiRestaurantId,
+    restaurant.getirRestaurantId,
+    restaurant.migrosRestaurantId,
+    ...restaurant.externalRestaurantIds.map((item) => item.restaurantId),
+  ].filter(Boolean);
+  if (knownIds.includes(incoming)) {
+    return restaurant;
+  }
+  if (options.sharedAcrossPlatforms) {
+    return updateRestaurantPlatformIds(restaurantId, {
+      externalRestaurantIds: [
+        ...restaurant.externalRestaurantIds,
+        { platform: "posentegra", restaurantId: incoming },
+      ],
+    });
+  }
   if (field && !restaurant[field]) {
     return updateRestaurantPlatformIds(restaurantId, { [field]: incoming });
   }
@@ -8159,7 +8186,9 @@ function matchUnmatchedOrder(unmatchedOrderId, restaurantId, options = {}) {
     WHERE id = ?
   `).run(restaurantId, result.packageId, nowIso(), nowIso(), unmatchedOrderId);
   if (options.saveExternalId !== false) {
-    saveExternalIdToRestaurant(restaurantId, order.platform, order.externalRestaurantId);
+    saveExternalIdToRestaurant(restaurantId, order.platform, order.externalRestaurantId, {
+      sharedAcrossPlatforms: isPosentegraWebhookPayload(order.rawPayload),
+    });
   }
   return {
     packageId: result.packageId,
