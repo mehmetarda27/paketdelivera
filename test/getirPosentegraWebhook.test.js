@@ -1,0 +1,110 @@
+const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForServer(baseUrl, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(`${baseUrl}/api/bootstrap`);
+      if (response.ok) return;
+    } catch {}
+    await delay(100);
+  }
+  throw new Error("Getir Posentegra webhook test server did not start in time.");
+}
+
+async function stopServer(server) {
+  if (server.exitCode !== null || server.signalCode !== null) return;
+  await new Promise((resolve) => {
+    server.once("exit", resolve);
+    server.kill();
+    setTimeout(resolve, 2000).unref();
+  });
+}
+
+test("Getir Posentegra webhook uses platformRestaurantId instead of order pid", { timeout: 20000 }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-getir-posentegra-"));
+  const dbFile = path.join(tempDir, "delivera.sqlite");
+  const port = 40000 + Math.floor(Math.random() * 1000);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const webhookSecret = `getir-secret-${Date.now()}`;
+  const server = spawn(process.execPath, ["server.js"], {
+    cwd: path.join(__dirname, ".."),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: "test",
+      DATABASE_URL: "",
+      POSTGRES_URL: "",
+      DATABASE_PATH: dbFile,
+      DB_PATH: dbFile,
+      DELIVERA_DB_FILE: dbFile,
+      WEBHOOK_SECRET: webhookSecret,
+      DELIVERA_ASSIGNMENT_RETRY_MS: "60000",
+      DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  server.stderr.on("data", (chunk) => process.stderr.write(chunk));
+
+  try {
+    await waitForServer(baseUrl);
+    const stamp = new Date().toISOString();
+    const posentegraRestaurantId = `pos-getir-${Date.now()}`;
+    const db = new DatabaseSync(dbFile);
+    try {
+      db.prepare(`
+        INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, posentegra_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("rst_getir_pos", "Getir Posentegra Restaurant", "Erdemli", 36.6, 34.3, "[]", "getir-api-key", webhookSecret, posentegraRestaurantId, stamp);
+    } finally {
+      db.close();
+    }
+
+    const pid = `GETIR-POS-${Date.now()}`;
+    const response = await fetch(`${baseUrl}/api/webhooks/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-webhook-secret": webhookSecret },
+      body: JSON.stringify({
+        provider: { slug: "getir", api: "getirwh", kaynak: "Getir Yemek" },
+        pid,
+        platformRestaurantId: posentegraRestaurantId,
+        customer: { name: "Getir Customer", phone: "05550000006" },
+        deliveryAddress: { address1: "Getir address", district: "Erdemli", city: "Mersin" },
+        totalAmount: 275,
+        items: [{ id: "getir-item-1", name: "Tantuni", quantity: 1, price: 275, totalPrice: 275 }],
+      }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.matched, true);
+    assert.equal(body.package.restaurantId, "rst_getir_pos");
+    assert.equal(body.package.sourcePlatform, "Getir Yemek");
+
+    const verificationDb = new DatabaseSync(dbFile, { readOnly: true });
+    try {
+      const row = verificationDb.prepare(`
+        SELECT restaurant_id, platform_restaurant_id, posentegra_id, source_platform
+        FROM packages WHERE id = ?
+      `).get(body.package.id);
+      assert.equal(row.restaurant_id, "rst_getir_pos");
+      assert.equal(row.platform_restaurant_id, posentegraRestaurantId);
+      assert.equal(row.posentegra_id, pid);
+      assert.equal(row.source_platform, "Getir Yemek");
+    } finally {
+      verificationDb.close();
+    }
+  } finally {
+    await stopServer(server);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

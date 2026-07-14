@@ -7158,41 +7158,86 @@ function pickLocalizedText(value) {
   return trimmed(value?.tr || value?.en || value?.title?.tr || value?.title?.en);
 }
 
+function webhookOrderContent(payload = {}) {
+  const candidates = [
+    Array.isArray(payload.content) ? payload.content[0] : null,
+    payload.data?.order,
+    payload.data?.shipment,
+    payload.order,
+    payload.shipment,
+    payload.data,
+  ];
+  const nested = candidates.find((item) => item && typeof item === "object" && !Array.isArray(item));
+  if (!nested || nested === payload) return payload;
+  return {
+    ...payload,
+    ...nested,
+    provider: nested.provider || payload.provider,
+    restaurant: nested.restaurant || payload.restaurant,
+  };
+}
+
 function extractWebhookRestaurantId(payload = {}) {
+  const orderPayload = webhookOrderContent(payload);
+  const store = orderPayload.store && typeof orderPayload.store === "object" ? orderPayload.store : {};
   return trimmed(
-    payload.restaurantId ||
-    payload.restaurant?.id ||
-    payload.provider?.restaurantId ||
-    payload.branchId ||
-    payload.storeId ||
-    payload.pid ||
-    payload.posentegraId ||
-    payload.posentegra_id
+    orderPayload.platformRestaurantId ||
+    orderPayload.platform_restaurant_id ||
+    orderPayload.externalRestaurantId ||
+    orderPayload.external_restaurant_id ||
+    orderPayload.restaurantId ||
+    orderPayload.restaurant_id ||
+    orderPayload.restaurant?.id ||
+    orderPayload.provider?.restaurantId ||
+    orderPayload.provider?.restaurant_id ||
+    orderPayload.branchId ||
+    orderPayload.branch_id ||
+    orderPayload.storeId ||
+    orderPayload.store_id ||
+    orderPayload.merchantId ||
+    orderPayload.merchant_id ||
+    orderPayload.vendorId ||
+    orderPayload.vendor_id ||
+    store.id
   );
 }
 
 function normalizeWebhookOrderPayload(payload = {}) {
-  const provider = payload.provider && typeof payload.provider === "object" ? payload.provider : {};
-  const client = payload.client && typeof payload.client === "object" ? payload.client : {};
-  const address = client.deliveryAddress && typeof client.deliveryAddress === "object" ? client.deliveryAddress : {};
-  const location = client.location && typeof client.location === "object" ? client.location : {};
+  const orderPayload = webhookOrderContent(payload);
+  const provider = orderPayload.provider && typeof orderPayload.provider === "object" ? orderPayload.provider : {};
+  const customer = orderPayload.customer && typeof orderPayload.customer === "object" ? orderPayload.customer : {};
+  const client = orderPayload.client && typeof orderPayload.client === "object" ? orderPayload.client : customer;
+  const deliveryAddress = client.deliveryAddress || orderPayload.deliveryAddress || orderPayload.shipmentAddress || orderPayload.address;
+  const address = deliveryAddress && typeof deliveryAddress === "object" ? deliveryAddress : {};
+  const locationSource = client.location || orderPayload.location || orderPayload.geo || {};
+  const location = locationSource && typeof locationSource === "object" ? locationSource : {};
   const externalRestaurantId = extractWebhookRestaurantId(payload);
   const externalOrderId = trimmed(
-    payload.pid ||
-    payload.externalOrderId ||
-    payload.external_order_id ||
-    payload.orderId ||
-    payload.order_id ||
-    payload.externalOrderNo ||
-    payload.external_order_no ||
-    payload.id
+    orderPayload.pid ||
+    orderPayload.externalOrderId ||
+    orderPayload.external_order_id ||
+    orderPayload.orderId ||
+    orderPayload.order_id ||
+    orderPayload.externalOrderNo ||
+    orderPayload.external_order_no ||
+    orderPayload.orderNumber ||
+    orderPayload.order_number ||
+    orderPayload.id
   );
-  const platformSlug = trimmed(provider.slug || provider.kaynak || provider.id || provider.alici);
-  const providerName = trimmed(provider.kaynak || provider.name || provider.alici || platformSlug);
-  const statusInfo = mapOrderStatus(payload.status);
-  const products = Array.isArray(payload.products) ? payload.products : [];
-  const addressText = trimmed(address.address || client.address || location.text || payload.addressText);
-  const street = trimmed(address.street || address.address);
+  const platformSlug = trimmed(provider.slug || provider.kaynak || provider.id || provider.alici || orderPayload.platformSlug || orderPayload.platform);
+  const providerName = trimmed(provider.kaynak || provider.name || provider.alici || orderPayload.providerName || orderPayload.platform || platformSlug);
+  const statusInfo = mapOrderStatus(orderPayload.status);
+  const productsSource = orderPayload.products || orderPayload.items || orderPayload.lines;
+  const products = Array.isArray(productsSource) ? productsSource : [];
+  const addressText = trimmed(
+    address.address ||
+    address.address1 ||
+    (typeof deliveryAddress === "string" ? deliveryAddress : "") ||
+    client.address ||
+    location.text ||
+    orderPayload.addressText
+  );
+  const street = trimmed(address.street || address.address || address.address1);
   const fullAddress = [
     addressText,
     address.aptNo ? `No: ${address.aptNo}` : "",
@@ -7205,20 +7250,20 @@ function normalizeWebhookOrderPayload(payload = {}) {
   return {
     externalOrderId,
     posentegraId: resolvePackagePosentegraId({
-      pid: payload.pid,
-      posentegraId: payload.posentegraId ?? payload.posentegra_id,
+      pid: orderPayload.pid,
+      posentegraId: orderPayload.posentegraId ?? orderPayload.posentegra_id,
       externalOrderId,
     }),
-    confirmationId: trimmed(payload.confirmationId),
+    confirmationId: trimmed(orderPayload.confirmationId || orderPayload.confirmation_id),
     externalRestaurantId,
-    restaurantNameFromPayload: trimmed(payload.restaurantName || payload.restaurant?.name),
+    restaurantNameFromPayload: trimmed(orderPayload.restaurantName || orderPayload.restaurant?.name || orderPayload.store?.name),
     platform: webhookPlatformLabel(platformSlug, providerName),
     platformSlug,
     providerId: trimmed(provider.id),
     providerName,
-    customerName: trimmed(client.name || payload.customerName),
-    customerPhone: trimmed(client.clientPhoneNumber || payload.customerPhone),
-    contactPhone: trimmed(client.contactPhoneNumber || payload.contactPhone),
+    customerName: trimmed(client.name || customer.name || orderPayload.customerName || orderPayload.recipient),
+    customerPhone: trimmed(client.clientPhoneNumber || client.phone || customer.phone || orderPayload.customerPhone || orderPayload.phone),
+    contactPhone: trimmed(client.contactPhoneNumber || orderPayload.contactPhone || orderPayload.phone),
     addressText: fullAddress || addressText || "-",
     city: trimmed(address.city),
     district: trimmed(address.district),
@@ -7227,33 +7272,34 @@ function normalizeWebhookOrderPayload(payload = {}) {
     floor: trimmed(address.floor),
     doorNo: trimmed(address.doorNo),
     addressDescription: trimmed(address.description),
-    latitude: Number.isFinite(Number(location.lat)) ? Number(location.lat) : null,
-    longitude: Number.isFinite(Number(location.lon ?? location.lng)) ? Number(location.lon ?? location.lng) : null,
+    latitude: Number.isFinite(Number(location.lat ?? location.latitude ?? orderPayload.latitude)) ? Number(location.lat ?? location.latitude ?? orderPayload.latitude) : null,
+    longitude: Number.isFinite(Number(location.lon ?? location.lng ?? location.longitude ?? orderPayload.longitude)) ? Number(location.lon ?? location.lng ?? location.longitude ?? orderPayload.longitude) : null,
     status: statusInfo.status,
     statusText: statusInfo.statusText,
     rawStatus: statusInfo.rawStatus,
-    totalPrice: normalizeMoney(payload.totalPrice),
-    discountedPrice: normalizeMoney(payload.totalDiscountedPrice ?? payload.discountedPrice),
-    totalDiscount: normalizeMoney(payload.totalDiscount),
-    paymentMethod: trimmed(payload.paymentMethod),
-    paymentMethodText: pickLocalizedText(payload.paymentMethodText),
-    posPaymentMethod: trimmed(payload.posPaymentMethod),
-    posTicket: trimmed(payload.pos_ticket || payload.posTicket),
-    clientNote: trimmed(payload.clientNote),
-    shortCode: trimmed(payload.shortCode),
-    deliveryType: trimmed(payload.deliveryType),
-    isScheduled: Boolean(payload.isScheduled),
-    scheduledDate: trimmed(payload.scheduledDate),
+    totalPrice: normalizeMoney(orderPayload.totalPrice ?? orderPayload.totalAmount ?? orderPayload.orderAmount),
+    discountedPrice: normalizeMoney(orderPayload.totalDiscountedPrice ?? orderPayload.discountedPrice),
+    totalDiscount: normalizeMoney(orderPayload.totalDiscount),
+    paymentMethod: trimmed(orderPayload.paymentMethod),
+    paymentMethodText: pickLocalizedText(orderPayload.paymentMethodText),
+    posPaymentMethod: trimmed(orderPayload.posPaymentMethod),
+    posTicket: trimmed(orderPayload.pos_ticket || orderPayload.posTicket),
+    clientNote: trimmed(orderPayload.clientNote || orderPayload.customerNote || orderPayload.note),
+    shortCode: trimmed(orderPayload.shortCode),
+    deliveryType: trimmed(orderPayload.deliveryType),
+    isScheduled: Boolean(orderPayload.isScheduled),
+    scheduledDate: trimmed(orderPayload.scheduledDate),
     products,
     rawPayload: payload,
   };
 }
 
 function isPosentegraWebhookPayload(payload = {}) {
-  const provider = payload.provider && typeof payload.provider === "object" ? payload.provider : {};
+  const orderPayload = webhookOrderContent(payload);
+  const provider = orderPayload.provider && typeof orderPayload.provider === "object" ? orderPayload.provider : {};
   const providerApi = trimmed(provider.api);
-  const restaurantId = trimmed(payload.restaurant?.id || payload.restaurantId);
-  const orderId = trimmed(payload.pid || payload.posentegraId || payload.posentegra_id);
+  const restaurantId = extractWebhookRestaurantId(payload);
+  const orderId = trimmed(orderPayload.pid || orderPayload.posentegraId || orderPayload.posentegra_id);
   return Boolean(providerApi && restaurantId && orderId);
 }
 
