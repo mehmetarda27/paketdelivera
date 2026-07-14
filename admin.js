@@ -8,7 +8,7 @@ const SVG_COURIER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 const ADMIN_TOKEN_KEY = "deliveraAdminToken";
 const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
 const ADMIN_REFRESH_MS = 20_000;
-const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 2;
+const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 4;
 
 const adminState = {
   data: null,
@@ -959,8 +959,8 @@ function buildCourierOverrideOptions(pkg) {
         ? activeLoad >= ADMIN_MANUAL_MAX_ACTIVE_PACKAGES
           ? `${ADMIN_MANUAL_MAX_ACTIVE_PACKAGES} paket limiti dolu`
           : "Offline"
-        : activeLoad === 1
-          ? "Admin 2. paket atayabilir"
+        : activeLoad > 0
+          ? `Admin ${activeLoad + 1}. paket atayabilir`
           : "Musait";
 
       return {

@@ -218,7 +218,7 @@ const PAYMENT_METHOD_LABELS = {
 const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
 const COURIER_BUSY_STATUS = "busy";
-const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 2;
+const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 4;
 const COURIER_FAILURE_REASONS = new Set([
   "musteri_yok",
   "adres_bulunamadi",

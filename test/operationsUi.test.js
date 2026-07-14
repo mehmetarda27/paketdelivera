@@ -147,14 +147,17 @@ test("unmatched orders live under Operations and default to the pending queue", 
         { id: "cr_free", name: "Bos Kurye", zone: "Merkez", status: "online", activeLoad: 0, latitude: 36.8, longitude: 34.6 },
         { id: "cr_one", name: "Tek Paketli Kurye", zone: "Merkez", status: "busy", activeLoad: 1, latitude: 36.8, longitude: 34.6 },
         { id: "cr_two", name: "Iki Paketli Kurye", zone: "Merkez", status: "busy", activeLoad: 2, latitude: 36.8, longitude: 34.6 },
+        { id: "cr_four", name: "Dort Paketli Kurye", zone: "Merkez", status: "busy", activeLoad: 4, latitude: 36.8, longitude: 34.6 },
       ],
     };
     const manualCourierOptions = dom.window.__operationsUi.buildCourierOverrideOptions({ latitude: 36.8, longitude: 34.6 });
     assert.equal(manualCourierOptions.find((option) => option.value === "cr_free").disabled, false);
     assert.equal(manualCourierOptions.find((option) => option.value === "cr_one").disabled, false);
     assert.match(manualCourierOptions.find((option) => option.value === "cr_one").label, /2\. paket/);
-    assert.equal(manualCourierOptions.find((option) => option.value === "cr_two").disabled, true);
-    assert.match(manualCourierOptions.find((option) => option.value === "cr_two").label, /limit/);
+    assert.equal(manualCourierOptions.find((option) => option.value === "cr_two").disabled, false);
+    assert.match(manualCourierOptions.find((option) => option.value === "cr_two").label, /3\. paket/);
+    assert.equal(manualCourierOptions.find((option) => option.value === "cr_four").disabled, true);
+    assert.match(manualCourierOptions.find((option) => option.value === "cr_four").label, /limit/);
   } finally {
     dom.window.close();
   }

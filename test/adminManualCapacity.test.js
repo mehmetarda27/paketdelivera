@@ -46,7 +46,7 @@ async function stopServer(server) {
   });
 }
 
-test("only admin manual override can give a courier a second active package", { timeout: 20000 }, async () => {
+test("only admin manual override can give a courier up to four active packages", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-admin-capacity-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 39000 + Math.floor(Math.random() * 1000);
@@ -93,7 +93,7 @@ test("only admin manual override can give a courier a second active package", { 
           x, y, note, status, assignment_status, assignment_reason, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (let index = 1; index <= 3; index += 1) {
+      for (let index = 1; index <= 5; index += 1) {
         insertPackage.run(
           `pkg_capacity_${index}`,
           `PKT-CAPACITY-${index}`,
@@ -133,30 +133,32 @@ test("only admin manual override can give a courier a second active package", { 
       headers,
       body: JSON.stringify({ courierId: "cr_capacity" }),
     });
-    const secondAssignment = await request(baseUrl, "/api/admin/packages/pkg_capacity_2/override", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ courierId: "cr_capacity" }),
-    });
-    assert.equal(secondAssignment.couriers.find((courier) => courier.id === "cr_capacity")?.activeLoad, 2);
+    for (let index = 2; index <= 4; index += 1) {
+      const assignment = await request(baseUrl, `/api/admin/packages/pkg_capacity_${index}/override`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ courierId: "cr_capacity" }),
+      });
+      assert.equal(assignment.couriers.find((courier) => courier.id === "cr_capacity")?.activeLoad, index);
+    }
 
     await assert.rejects(
-      () => request(baseUrl, "/api/admin/packages/pkg_capacity_3/override", {
+      () => request(baseUrl, "/api/admin/packages/pkg_capacity_5/override", {
         method: "POST",
         headers,
         body: JSON.stringify({ courierId: "cr_capacity" }),
       }),
-      (error) => error.status === 400 && /manuel atama limitine ulasti \(2 aktif paket\)/.test(error.body.error)
+      (error) => error.status === 400 && /manuel atama limitine ulasti \(4 aktif paket\)/.test(error.body.error)
     );
 
     const verificationDb = new DatabaseSync(dbFile, { readOnly: true });
     try {
       assert.equal(
         verificationDb.prepare("SELECT COUNT(*) AS count FROM packages WHERE assigned_courier_id = ? AND status = 'assigned'").get("cr_capacity").count,
-        2
+        4
       );
       assert.equal(
-        verificationDb.prepare("SELECT assigned_courier_id FROM packages WHERE id = ?").get("pkg_capacity_3").assigned_courier_id,
+        verificationDb.prepare("SELECT assigned_courier_id FROM packages WHERE id = ?").get("pkg_capacity_5").assigned_courier_id,
         null
       );
     } finally {
