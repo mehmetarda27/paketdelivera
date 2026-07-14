@@ -4322,6 +4322,9 @@ function getPackages(filter = {}) {
     whereParts.push("source_platform = ?");
     params.push(filter.platform);
   }
+  if (filter.assignedOnly) {
+    whereParts.push("assigned_courier_id IS NOT NULL");
+  }
   if (filter.dateFrom) {
     whereParts.push("created_at >= ?");
     params.push(filter.dateFrom);
@@ -4450,6 +4453,9 @@ function packagePagination(filter = {}, pagination = { limit: DEFAULT_PAGE_LIMIT
   if (filter.platform) {
     whereParts.push("source_platform = ?");
     params.push(filter.platform);
+  }
+  if (filter.assignedOnly) {
+    whereParts.push("assigned_courier_id IS NOT NULL");
   }
   if (filter.dateFrom) {
     whereParts.push("created_at >= ?");
@@ -10536,6 +10542,10 @@ async function handleApi(req, res, pathname) {
       restaurantId: trimmed(requestUrl.searchParams.get("restaurantId")) || undefined,
       platform: trimmed(requestUrl.searchParams.get("platform")) || undefined,
       status: trimmed(requestUrl.searchParams.get("status")) || undefined,
+      dateFrom: trimmed(requestUrl.searchParams.get("dateFrom")) || undefined,
+      dateTo: trimmed(requestUrl.searchParams.get("dateTo")) || undefined,
+      search: trimmed(requestUrl.searchParams.get("search")) || undefined,
+      assignedOnly: requestUrl.searchParams.get("assignedOnly") === "true",
       pagination,
     };
     sendJson(res, 200, {

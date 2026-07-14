@@ -46,6 +46,8 @@ test("unmatched orders live under Operations and default to the pending queue", 
   try {
     evaluatePage(dom, "admin.js", `window.__operationsUi = {
       renderUnmatchedOrders,
+      renderOrderHistoryOrders,
+      initializeOrderHistoryDates,
       isAdminActivePackage,
       startAdminLiveStream,
       connectLiveStream,
@@ -60,6 +62,12 @@ test("unmatched orders live under Operations and default to the pending queue", 
       .find((group) => group.querySelector(".tree-header span")?.textContent.trim() === "Sistem & Loglar");
     assert.ok(operationGroup?.contains(unmatchedLink));
     assert.equal(systemGroup?.contains(unmatchedLink), false);
+
+    const historyLink = dom.window.document.querySelector('[data-section="adminWorkspace_ops_history"]');
+    assert.ok(operationGroup?.contains(historyLink));
+    assert.ok(dom.window.document.getElementById("adminWorkspace_ops_history"));
+    dom.window.__operationsUi.initializeOrderHistoryDates();
+    assert.match(dom.window.document.getElementById("orderHistoryDateFrom").value, /^\d{4}-\d{2}-\d{2}$/);
 
     const pendingOrder = {
       id: "unm_pending",
@@ -103,6 +111,30 @@ test("unmatched orders live under Operations and default to the pending queue", 
     assert.match(String(dom.window.__operationsUi.startAdminLiveStream), /order:new/);
     assert.match(String(dom.window.__operationsUi.connectLiveStream), /order:new/);
     assert.match(String(dom.window.__operationsUi.connectLiveStream), /order:unmatched/);
+
+    const archivedPackage = {
+      id: "pkg_archived",
+      trackingNo: "PKT-ARCHIVE",
+      restaurantId: "rst_flash",
+      recipient: "Arsiv Musterisi",
+      phone: "05551112233",
+      assignedCourierId: "cr_1",
+      assignedCourierName: "Test Kurye",
+      assignedAt: "2026-07-01T12:00:00.000Z",
+      createdAt: "2026-07-01T11:45:00.000Z",
+      status: "delivered",
+      paymentMethod: "cash",
+      paymentStatus: "paid",
+      orderAmount: 325,
+      address: "Mersin Test Adresi",
+      zone: "Merkez",
+    };
+    dom.window.__operationsUi.renderOrderHistoryOrders([archivedPackage], { total: 1, hasMore: false });
+    const historyCard = dom.window.document.querySelector('[data-order-history-id="pkg_archived"]');
+    assert.match(historyCard.textContent, /PKT-ARCHIVE/);
+    assert.match(historyCard.textContent, /Test Kurye/);
+    assert.match(historyCard.textContent, /Teslim Edildi/);
+    assert.equal(dom.window.document.getElementById("orderHistoryTotalCount").textContent, "1");
   } finally {
     dom.window.close();
   }

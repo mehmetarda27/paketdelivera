@@ -18,6 +18,13 @@ const adminState = {
   packageCursor: "0",
   unmatchedFilter: "pending",
   unmatchedSearch: "",
+  orderHistory: {
+    orders: [],
+    pagination: null,
+    cursor: "0",
+    loaded: false,
+    loading: false,
+  },
   liveStream: null,
   workspacePollId: null,
   workspaceLoadPromise: null,
@@ -92,6 +99,20 @@ const adminRefs = {
   restaurantAccountingDetailPanel: document.getElementById("restaurantAccountingDetailPanel"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
+  orderHistoryLink: document.querySelector('[data-section="adminWorkspace_ops_history"]'),
+  orderHistoryFilterForm: document.getElementById("orderHistoryFilterForm"),
+  orderHistoryDateFrom: document.getElementById("orderHistoryDateFrom"),
+  orderHistoryDateTo: document.getElementById("orderHistoryDateTo"),
+  orderHistoryRestaurant: document.getElementById("orderHistoryRestaurant"),
+  orderHistoryStatus: document.getElementById("orderHistoryStatus"),
+  orderHistoryAssignment: document.getElementById("orderHistoryAssignment"),
+  orderHistorySearch: document.getElementById("orderHistorySearch"),
+  orderHistoryTotalBadge: document.getElementById("orderHistoryTotalBadge"),
+  orderHistoryTotalCount: document.getElementById("orderHistoryTotalCount"),
+  orderHistoryLoadedCount: document.getElementById("orderHistoryLoadedCount"),
+  orderHistoryAmount: document.getElementById("orderHistoryAmount"),
+  orderHistoryList: document.getElementById("orderHistoryList"),
+  orderHistoryLoadMore: document.getElementById("orderHistoryLoadMore"),
   template: document.getElementById("adminPackageTemplate"),
   courierAddForm: document.getElementById("adminCourierAddForm"),
   courierTableBody: document.getElementById("adminCourierTableBody"),
@@ -749,6 +770,125 @@ function packageVisible(pkg) {
 
 function isAdminActivePackage(pkg) {
   return !["delivered", "failed", "rejected", "cancelled"].includes(String(pkg?.status || "").toLowerCase());
+}
+
+function localDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function initializeOrderHistoryDates() {
+  if (!adminRefs.orderHistoryDateFrom || adminRefs.orderHistoryDateFrom.value) return;
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - 30);
+  adminRefs.orderHistoryDateFrom.value = localDateInputValue(start);
+  adminRefs.orderHistoryDateTo.value = localDateInputValue(end);
+}
+
+function renderOrderHistoryRestaurantOptions(restaurants = []) {
+  if (!adminRefs.orderHistoryRestaurant) return;
+  const selected = adminRefs.orderHistoryRestaurant.value;
+  const signature = listRenderSignature(restaurants, ["id", "name"]);
+  if (adminRefs.orderHistoryRestaurant.__deliveraRenderSignature === signature) return;
+  adminRefs.orderHistoryRestaurant.__deliveraRenderSignature = signature;
+  adminRefs.orderHistoryRestaurant.innerHTML = ['<option value="">Tüm Restoranlar</option>']
+    .concat(restaurants.map((restaurant) => `<option value="${htmlSafe(restaurant.id)}">${htmlSafe(restaurant.name)}</option>`))
+    .join("");
+  adminRefs.orderHistoryRestaurant.value = selected;
+}
+
+function orderHistoryRestaurantName(pkg) {
+  return pkg.restaurantName || adminState.data?.restaurants?.find((restaurant) => restaurant.id === pkg.restaurantId)?.name || "Bilinmeyen Restoran";
+}
+
+function renderOrderHistoryOrders(orders = [], pagination = null) {
+  if (!adminRefs.orderHistoryList) return;
+  const total = Number(pagination?.total ?? orders.length);
+  const amount = orders.reduce((sum, pkg) => sum + Number(pkg.orderAmount || 0), 0);
+  adminRefs.orderHistoryTotalBadge.textContent = `${total} kayıt`;
+  adminRefs.orderHistoryTotalCount.textContent = String(total);
+  adminRefs.orderHistoryLoadedCount.textContent = String(orders.length);
+  adminRefs.orderHistoryAmount.textContent = formatCurrency(amount);
+  adminRefs.orderHistoryLoadMore.classList.toggle("hidden", !pagination?.hasMore);
+
+  if (!orders.length) {
+    adminRefs.orderHistoryList.innerHTML = '<div class="empty-state">Seçilen tarih ve filtrelerde sipariş bulunamadı.</div>';
+    return;
+  }
+
+  adminRefs.orderHistoryList.innerHTML = orders.map((pkg) => `
+    <article class="order-history-card" data-order-history-id="${htmlSafe(pkg.id)}">
+      <div class="order-history-card-head">
+        <div>
+          <span class="order-history-date">${htmlSafe(formatDate(pkg.createdAt))}</span>
+          <strong>${htmlSafe(pkg.trackingNo || pkg.externalOrderNo || pkg.id)}</strong>
+          <small>${htmlSafe(pkg.sourcePlatform || pkg.platform || "Manuel")} · ${htmlSafe(orderHistoryRestaurantName(pkg))}</small>
+        </div>
+        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+      </div>
+      <div class="order-history-detail-grid">
+        <div><span>Müşteri</span><strong>${htmlSafe(pkg.recipient || "-")}</strong><small>${htmlSafe(pkg.phone || "-")}</small></div>
+        <div><span>Kurye</span><strong>${htmlSafe(pkg.assignedCourierName || "Atanmamış")}</strong><small>${pkg.assignedAt ? `Atama: ${htmlSafe(formatDate(pkg.assignedAt))}` : "Atama zamanı yok"}</small></div>
+        <div><span>Ödeme</span><strong>${htmlSafe(formatCurrency(pkg.orderAmount || 0))}</strong><small>${htmlSafe(pkg.paymentMethod || "-")} · ${htmlSafe(paymentStatusLabel(pkg.paymentStatus))}</small></div>
+        <div><span>Adres</span><strong>${htmlSafe(pkg.deliveryAddress || pkg.address || "-")}</strong><small>${htmlSafe(pkg.zone || "-")}</small></div>
+      </div>
+      <div class="order-history-card-actions">
+        <span>Paket ID: ${htmlSafe(pkg.id)}</span>
+        <button class="ghost-btn" type="button" data-order-history-detail="${htmlSafe(pkg.id)}">Tüm Detayları Gör</button>
+      </div>
+    </article>
+  `).join("");
+
+  adminRefs.orderHistoryList.querySelectorAll("[data-order-history-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const pkg = orders.find((item) => item.id === button.dataset.orderHistoryDetail);
+      if (pkg) window.showPackageDetailsModal?.({ ...pkg, restaurantName: orderHistoryRestaurantName(pkg) });
+    });
+  });
+}
+
+async function loadOrderHistory(options = {}) {
+  if (adminState.orderHistory.loading || !adminState.token) return;
+  initializeOrderHistoryDates();
+  const append = Boolean(options.append);
+  const form = new FormData(adminRefs.orderHistoryFilterForm);
+  const params = new URLSearchParams({
+    limit: "50",
+    cursor: append ? (adminState.orderHistory.pagination?.nextCursor || "0") : "0",
+  });
+  const dateFrom = String(form.get("dateFrom") || "");
+  const dateTo = String(form.get("dateTo") || "");
+  if (dateFrom) params.set("dateFrom", `${dateFrom}T00:00:00.000`);
+  if (dateTo) params.set("dateTo", `${dateTo}T23:59:59.999`);
+  ["restaurantId", "status", "search"].forEach((key) => {
+    const value = String(form.get(key) || "").trim();
+    if (value) params.set(key, value);
+  });
+  if (form.get("assignment") === "assigned") params.set("assignedOnly", "true");
+
+  adminState.orderHistory.loading = true;
+  adminRefs.orderHistoryList.setAttribute("aria-busy", "true");
+  if (!append) adminRefs.orderHistoryList.innerHTML = '<div class="empty-state">Siparişler yükleniyor...</div>';
+  try {
+    const data = await api(`/api/admin/orders?${params.toString()}`, {
+      headers: adminHeaders(),
+      retryWithRefresh: refreshAdminAccess,
+    });
+    const nextOrders = Array.isArray(data.orders) ? data.orders : [];
+    adminState.orderHistory.orders = append ? [...adminState.orderHistory.orders, ...nextOrders] : nextOrders;
+    adminState.orderHistory.pagination = data.pagination || null;
+    adminState.orderHistory.loaded = true;
+    renderOrderHistoryOrders(adminState.orderHistory.orders, adminState.orderHistory.pagination);
+  } catch (error) {
+    if (!append) adminRefs.orderHistoryList.innerHTML = `<div class="empty-state">${htmlSafe(error.message || "Sipariş arşivi yüklenemedi.")}</div>`;
+    showToast(error.message || "Sipariş arşivi yüklenemedi.", "error");
+  } finally {
+    adminState.orderHistory.loading = false;
+    adminRefs.orderHistoryList.removeAttribute("aria-busy");
+  }
 }
 
 function normalizeZoneValue(value) {
@@ -2045,6 +2185,7 @@ function hydrateAdmin(data) {
   setZoneOptions(adminRefs.courierZone, data.zones);
   setZoneOptions(adminRefs.restaurantZone, data.zones);
   renderRestaurantFilter(data.restaurants);
+  renderOrderHistoryRestaurantOptions(data.restaurants);
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
   renderCourierManagement(data.couriers);
@@ -2487,6 +2628,16 @@ document.addEventListener("visibilitychange", () => {
     requestScreenWakeLock();
   }
 });
+
+initializeOrderHistoryDates();
+adminRefs.orderHistoryLink?.addEventListener("click", () => {
+  if (!adminState.orderHistory.loaded) loadOrderHistory().catch(() => {});
+});
+adminRefs.orderHistoryFilterForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadOrderHistory().catch(() => {});
+});
+adminRefs.orderHistoryLoadMore?.addEventListener("click", () => loadOrderHistory({ append: true }).catch(() => {}));
 
 adminRefs.restaurantFilter.addEventListener("change", async (event) => {
   adminState.selectedRestaurantId = event.target.value;

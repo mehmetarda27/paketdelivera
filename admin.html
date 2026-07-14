@@ -46,6 +46,10 @@
               <i data-lucide="zap" class="link-icon"></i>
               Aktif Siparişler
             </div>
+            <div class="tree-link" data-section="adminWorkspace_ops_history">
+              <i data-lucide="history" class="link-icon"></i>
+              Son 1 Aylık Siparişler
+            </div>
             <div class="tree-link" data-section="adminWorkspace_ops_waiting">
               <i data-lucide="clock" class="link-icon"></i>
               Atama Bekleyenler & Kuryeler
@@ -283,6 +287,85 @@
         </div>
         <div id="packageList" class="package-list"></div>
       </section>
+        </div>
+
+        <div id="adminWorkspace_ops_history" class="content-section">
+          <section class="glass-panel order-history-workspace">
+            <div class="panel-head order-history-head">
+              <div>
+                <p class="eyebrow accent-teal">Operasyon / Sipariş Arşivi</p>
+                <h3>Son 1 Aylık Atanmış Paketler</h3>
+                <p class="panel-description">Veritabanındaki siparişleri değiştirmeden; kurye, restoran, müşteri, ödeme ve durum detaylarıyla inceleyin.</p>
+              </div>
+              <span id="orderHistoryTotalBadge" class="soft-badge">Yüklenmedi</span>
+            </div>
+
+            <form id="orderHistoryFilterForm" class="order-history-filters">
+              <label>
+                <span>Başlangıç</span>
+                <input id="orderHistoryDateFrom" name="dateFrom" type="date" required>
+              </label>
+              <label>
+                <span>Bitiş</span>
+                <input id="orderHistoryDateTo" name="dateTo" type="date" required>
+              </label>
+              <label>
+                <span>Restoran</span>
+                <select id="orderHistoryRestaurant" name="restaurantId">
+                  <option value="">Tüm Restoranlar</option>
+                </select>
+              </label>
+              <label>
+                <span>Durum</span>
+                <select id="orderHistoryStatus" name="status">
+                  <option value="">Tüm Durumlar</option>
+                  <option value="pending_approval">Onay Bekliyor</option>
+                  <option value="pending">Bekliyor</option>
+                  <option value="preparing">Hazırlanıyor</option>
+                  <option value="awaiting_assignment">Atama Bekliyor</option>
+                  <option value="assigned">Atandı</option>
+                  <option value="accepted_by_courier">Kurye Kabul Etti</option>
+                  <option value="on_route">Yolda</option>
+                  <option value="delivered">Teslim Edildi</option>
+                  <option value="failed">Başarısız</option>
+                  <option value="rejected">Reddedildi</option>
+                  <option value="cancelled">İptal Edildi</option>
+                </select>
+              </label>
+              <label>
+                <span>Atama</span>
+                <select id="orderHistoryAssignment" name="assignment">
+                  <option value="assigned">Yalnız Atanmışlar</option>
+                  <option value="all">Tüm Siparişler</option>
+                </select>
+              </label>
+              <label class="order-history-search">
+                <span>Sipariş, müşteri, telefon veya adres ara</span>
+                <input id="orderHistorySearch" name="search" type="search" placeholder="PKT-437332, müşteri adı..." autocomplete="off">
+              </label>
+              <button class="primary-btn" type="submit">Siparişleri Getir</button>
+            </form>
+
+            <div class="order-history-overview" aria-label="Sipariş arşivi özeti">
+              <article>
+                <span>Filtrelenen kayıt</span>
+                <strong id="orderHistoryTotalCount">0</strong>
+              </article>
+              <article>
+                <span>Yüklenen kayıt</span>
+                <strong id="orderHistoryLoadedCount">0</strong>
+              </article>
+              <article>
+                <span>Toplam tutar</span>
+                <strong id="orderHistoryAmount">₺0,00</strong>
+              </article>
+            </div>
+
+            <div id="orderHistoryList" class="order-history-list" aria-live="polite">
+              <div class="empty-state">Sipariş arşivini açtığınızda son 1 aylık atanmış paketler yüklenir.</div>
+            </div>
+            <button id="orderHistoryLoadMore" class="ghost-btn order-history-load-more hidden" type="button">Daha Fazla Göster</button>
+          </section>
         </div>
         
         <div id="adminWorkspace_ops_waiting" class="content-section">

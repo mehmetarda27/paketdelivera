@@ -470,6 +470,19 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       "delivered"
     );
 
+    const archiveDateFrom = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+    const archiveDateTo = new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString();
+    const archivedOrders = await request(
+      baseUrl,
+      `/api/admin/orders?assignedOnly=true&dateFrom=${encodeURIComponent(archiveDateFrom)}&dateTo=${encodeURIComponent(archiveDateTo)}&search=${encodeURIComponent(packageState.createdPackage.trackingNo)}`,
+      { headers: adminHeaders }
+    );
+    assert.equal(archivedOrders.pagination.total, 1);
+    assert.equal(archivedOrders.orders.length, 1);
+    assert.equal(archivedOrders.orders[0].id, packageState.createdPackage.id);
+    assert.equal(archivedOrders.orders[0].status, "delivered");
+    assert.equal(archivedOrders.orders[0].assignedCourierId, lifecycleCourierState.createdCourier.id);
+
     const secondRestaurantLogin = await request(baseUrl, "/api/restaurant/session", {
       method: "POST",
       body: JSON.stringify({ username: secondRestaurantUsername, password: secondRestaurantPassword }),
