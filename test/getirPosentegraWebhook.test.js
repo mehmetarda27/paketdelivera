@@ -31,7 +31,7 @@ async function stopServer(server) {
   });
 }
 
-test("Getir Posentegra webhook uses platformRestaurantId instead of order pid", { timeout: 20000 }, async () => {
+test("Posentegra webhooks prefer the common restaurant id and safely fall back to platform ids", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-getir-posentegra-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 40000 + Math.floor(Math.random() * 1000);
@@ -103,6 +103,31 @@ test("Getir Posentegra webhook uses platformRestaurantId instead of order pid", 
     } finally {
       verificationDb.close();
     }
+
+    const trendyolPid = `TRENDYOL-POS-${Date.now()}`;
+    const trendyolResponse = await fetch(`${baseUrl}/api/webhooks/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-webhook-secret": webhookSecret },
+      body: JSON.stringify({
+        provider: { slug: "ty", api: "tywh", kaynak: "Trendyol Yemek" },
+        pid: trendyolPid,
+        platformRestaurantId: `trendyol-seller-${Date.now()}`,
+        restaurant: { id: posentegraRestaurantId, name: "Getir Posentegra Restaurant" },
+        client: {
+          name: "Trendyol Customer",
+          clientPhoneNumber: "05550000007",
+          deliveryAddress: { address: "Trendyol address", district: "Erdemli", city: "Mersin" },
+        },
+        totalPrice: 310,
+        products: [{ id: "trendyol-item-1", name: { tr: "Tantuni" }, count: 1, price: 310, totalPrice: 310 }],
+      }),
+    });
+    const trendyolBody = await trendyolResponse.json();
+    assert.equal(trendyolResponse.status, 200);
+    assert.equal(trendyolBody.matched, true);
+    assert.equal(trendyolBody.package.restaurantId, "rst_getir_pos");
+    assert.equal(trendyolBody.package.sourcePlatform, "Trendyol Yemek");
+    assert.equal(trendyolBody.package.platformRestaurantId, posentegraRestaurantId);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

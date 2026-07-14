@@ -7181,23 +7181,31 @@ function extractWebhookRestaurantId(payload = {}) {
   const orderPayload = webhookOrderContent(payload);
   const store = orderPayload.store && typeof orderPayload.store === "object" ? orderPayload.store : {};
   return trimmed(
-    orderPayload.platformRestaurantId ||
-    orderPayload.platform_restaurant_id ||
-    orderPayload.externalRestaurantId ||
-    orderPayload.external_restaurant_id ||
     orderPayload.restaurantId ||
     orderPayload.restaurant_id ||
     orderPayload.restaurant?.id ||
     orderPayload.provider?.restaurantId ||
     orderPayload.provider?.restaurant_id ||
+    orderPayload.platformRestaurantId ||
+    orderPayload.platform_restaurant_id ||
+    orderPayload.externalRestaurantId ||
+    orderPayload.external_restaurant_id ||
     orderPayload.branchId ||
     orderPayload.branch_id ||
     orderPayload.storeId ||
     orderPayload.store_id ||
+    orderPayload.externalStoreId ||
+    orderPayload.external_store_id ||
     orderPayload.merchantId ||
     orderPayload.merchant_id ||
     orderPayload.vendorId ||
     orderPayload.vendor_id ||
+    orderPayload.sellerId ||
+    orderPayload.seller_id ||
+    orderPayload.supplierId ||
+    orderPayload.supplier_id ||
+    orderPayload.chainId ||
+    orderPayload.chain_id ||
     store.id
   );
 }
