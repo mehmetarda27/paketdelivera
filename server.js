@@ -6508,18 +6508,23 @@ function adminAssignPackageToCourier(packageId, courierId) {
     }
 
     const assignedAt = nowIso();
+    const autoAccepted = activeLoad >= 1;
+    const assignedStatus = autoAccepted ? ACCEPTED_BY_COURIER_STATUS : ASSIGNED_STATUS;
     db.prepare(`
       UPDATE packages
       SET status = ?, assignment_status = ?, assigned_courier_id = ?, assigned_courier_name = ?, assigned_at = ?,
-          assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
+          accepted_at = ?, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
       WHERE id = ?
     `).run(
-      ASSIGNED_STATUS,
+      assignedStatus,
       "assigned",
       courier.id,
       courier.name,
       assignedAt,
-      "Admin override ile belirli kuryeye atandi.",
+      autoAccepted ? assignedAt : null,
+      autoAccepted
+        ? `Admin override ile ${activeLoad + 1}. paket olarak atandi ve otomatik kabul edildi.`
+        : "Admin override ile belirli kuryeye atandi; kurye onayi bekleniyor.",
       assignedAt,
       assignedAt,
       packageId
@@ -6528,6 +6533,9 @@ function adminAssignPackageToCourier(packageId, courierId) {
     appendTriedCourier(packageId, courier.id);
     const assignedPackage = getPackageById(packageId);
     syncAssignmentRetryForPackage(assignedPackage);
+    if (autoAccepted) {
+      enqueuePosentegraStatusChange(assignedPackage, assignedStatus);
+    }
     if (isPlatformBackedPackage(target)) {
       notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
     }
@@ -6537,6 +6545,7 @@ function adminAssignPackageToCourier(packageId, courierId) {
       courierName: courier.name,
       activeLoad: activeLoad + 1,
       manualCapacity: ADMIN_MANUAL_MAX_ACTIVE_PACKAGES,
+      autoAccepted,
     };
   });
 }

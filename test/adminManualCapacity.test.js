@@ -46,7 +46,7 @@ async function stopServer(server) {
   });
 }
 
-test("only admin manual override can give a courier up to four active packages", { timeout: 20000 }, async () => {
+test("admin extra packages auto-accept while the first package still waits for courier approval", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-admin-capacity-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 39000 + Math.floor(Math.random() * 1000);
@@ -128,11 +128,14 @@ test("only admin manual override can give a courier up to four active packages",
     });
     const headers = { Authorization: `Bearer ${login.token}` };
 
-    await request(baseUrl, "/api/admin/packages/pkg_capacity_1/override", {
+    const firstAssignment = await request(baseUrl, "/api/admin/packages/pkg_capacity_1/override", {
       method: "POST",
       headers,
       body: JSON.stringify({ courierId: "cr_capacity" }),
     });
+    assert.equal(firstAssignment.packages.find((pkg) => pkg.id === "pkg_capacity_1")?.status, "assigned");
+    assert.equal(firstAssignment.packages.find((pkg) => pkg.id === "pkg_capacity_1")?.acceptedAt, null);
+
     for (let index = 2; index <= 4; index += 1) {
       const assignment = await request(baseUrl, `/api/admin/packages/pkg_capacity_${index}/override`, {
         method: "POST",
@@ -140,6 +143,8 @@ test("only admin manual override can give a courier up to four active packages",
         body: JSON.stringify({ courierId: "cr_capacity" }),
       });
       assert.equal(assignment.couriers.find((courier) => courier.id === "cr_capacity")?.activeLoad, index);
+      assert.equal(assignment.packages.find((pkg) => pkg.id === `pkg_capacity_${index}`)?.status, "accepted_by_courier");
+      assert.ok(assignment.packages.find((pkg) => pkg.id === `pkg_capacity_${index}`)?.acceptedAt);
     }
 
     await assert.rejects(
@@ -155,7 +160,11 @@ test("only admin manual override can give a courier up to four active packages",
     try {
       assert.equal(
         verificationDb.prepare("SELECT COUNT(*) AS count FROM packages WHERE assigned_courier_id = ? AND status = 'assigned'").get("cr_capacity").count,
-        4
+        1
+      );
+      assert.equal(
+        verificationDb.prepare("SELECT COUNT(*) AS count FROM packages WHERE assigned_courier_id = ? AND status = 'accepted_by_courier' AND accepted_at IS NOT NULL").get("cr_capacity").count,
+        3
       );
       assert.equal(
         verificationDb.prepare("SELECT assigned_courier_id FROM packages WHERE id = ?").get("pkg_capacity_5").assigned_courier_id,
