@@ -49,6 +49,7 @@ test("unmatched orders live under Operations and default to the pending queue", 
       renderOrderHistoryOrders,
       initializeOrderHistoryDates,
       openOrderHistoryWorkspace,
+      buildCourierOverrideOptions,
       isAdminActivePackage,
       startAdminLiveStream,
       connectLiveStream,
@@ -140,6 +141,20 @@ test("unmatched orders live under Operations and default to the pending queue", 
     assert.match(dom.window.document.getElementById("orderHistoryShortcut").textContent, /\(1\)/);
     dom.window.__operationsUi.openOrderHistoryWorkspace();
     assert.ok(dom.window.document.getElementById("adminWorkspace_ops_history").classList.contains("active-section"));
+
+    dom.window.__operationsUi.adminState.data = {
+      couriers: [
+        { id: "cr_free", name: "Bos Kurye", zone: "Merkez", status: "online", activeLoad: 0, latitude: 36.8, longitude: 34.6 },
+        { id: "cr_one", name: "Tek Paketli Kurye", zone: "Merkez", status: "busy", activeLoad: 1, latitude: 36.8, longitude: 34.6 },
+        { id: "cr_two", name: "Iki Paketli Kurye", zone: "Merkez", status: "busy", activeLoad: 2, latitude: 36.8, longitude: 34.6 },
+      ],
+    };
+    const manualCourierOptions = dom.window.__operationsUi.buildCourierOverrideOptions({ latitude: 36.8, longitude: 34.6 });
+    assert.equal(manualCourierOptions.find((option) => option.value === "cr_free").disabled, false);
+    assert.equal(manualCourierOptions.find((option) => option.value === "cr_one").disabled, false);
+    assert.match(manualCourierOptions.find((option) => option.value === "cr_one").label, /2\. paket/);
+    assert.equal(manualCourierOptions.find((option) => option.value === "cr_two").disabled, true);
+    assert.match(manualCourierOptions.find((option) => option.value === "cr_two").label, /limit/);
   } finally {
     dom.window.close();
   }

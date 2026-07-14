@@ -218,6 +218,7 @@ const PAYMENT_METHOD_LABELS = {
 const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
 const COURIER_BUSY_STATUS = "busy";
+const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 2;
 const COURIER_FAILURE_REASONS = new Set([
   "musteri_yok",
   "adres_bulunamadi",
@@ -6488,8 +6489,9 @@ function adminAssignPackageToCourier(packageId, courierId) {
       throw httpError(404, "Kurye bulunamadi.");
     }
 
-    if (normalizeCourierStatus(courier.status, Boolean(courier.available)) !== COURIER_ONLINE_STATUS) {
-      throw httpError(400, "Secilen kurye online veya musait degil.");
+    const courierStatus = normalizeCourierStatus(courier.status, Boolean(courier.available));
+    if (!Boolean(courier.available) || ![COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus)) {
+      throw httpError(400, "Secilen kurye online veya aktif durumda degil.");
     }
 
     const activeLoad = Number(
@@ -6501,8 +6503,8 @@ function adminAssignPackageToCourier(packageId, courierId) {
           AND status IN (?, ?, ?)
       `).get(courier.id, packageId, ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS)?.total || 0
     );
-    if (activeLoad >= 1) {
-      throw httpError(400, "Secilen kurye zaten aktif bir pakete sahip.");
+    if (activeLoad >= ADMIN_MANUAL_MAX_ACTIVE_PACKAGES) {
+      throw httpError(400, `Secilen kurye admin manuel atama limitine ulasti (${ADMIN_MANUAL_MAX_ACTIVE_PACKAGES} aktif paket).`);
     }
 
     const assignedAt = nowIso();
@@ -6529,7 +6531,13 @@ function adminAssignPackageToCourier(packageId, courierId) {
     if (isPlatformBackedPackage(target)) {
       notifyPlatformOrderAssigned(target.source_platform, target.external_order_id || target.external_order_no, courier.id, assignedPackage);
     }
-    return { packageId, courierId: courier.id, courierName: courier.name };
+    return {
+      packageId,
+      courierId: courier.id,
+      courierName: courier.name,
+      activeLoad: activeLoad + 1,
+      manualCapacity: ADMIN_MANUAL_MAX_ACTIVE_PACKAGES,
+    };
   });
 }
 

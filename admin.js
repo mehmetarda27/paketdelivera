@@ -8,6 +8,7 @@ const SVG_COURIER = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 const ADMIN_TOKEN_KEY = "deliveraAdminToken";
 const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
 const ADMIN_REFRESH_MS = 20_000;
+const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 2;
 
 const adminState = {
   data: null,
@@ -936,11 +937,13 @@ function buildCourierOverrideOptions(pkg) {
   const allCouriers = adminState.data?.couriers || [];
   return allCouriers
     .sort((left, right) => {
-      const leftEligible = left.status === "online" && Number(left.activeLoad || 0) < 1;
-      const rightEligible = right.status === "online" && Number(right.activeLoad || 0) < 1;
+      const leftEligible = ["online", "busy"].includes(left.status) && Number(left.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
+      const rightEligible = ["online", "busy"].includes(right.status) && Number(right.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
       if (leftEligible !== rightEligible) {
         return Number(rightEligible) - Number(leftEligible);
       }
+      const loadDifference = Number(left.activeLoad || 0) - Number(right.activeLoad || 0);
+      if (loadDifference !== 0) return loadDifference;
       const leftDistance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, left.latitude, left.longitude);
       const rightDistance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, right.latitude, right.longitude);
       if (leftDistance !== null && rightDistance !== null && leftDistance !== rightDistance) {
@@ -950,15 +953,15 @@ function buildCourierOverrideOptions(pkg) {
     })
     .map((courier) => {
       const activeLoad = Number(courier.activeLoad || 0);
-      const isEligible = courier.status === "online" && activeLoad < 1;
+      const isEligible = ["online", "busy"].includes(courier.status) && activeLoad < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
       const distance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, courier.latitude, courier.longitude);
       const reason = !isEligible
-        ? courier.status !== "online"
-          ? courier.status === "busy"
-            ? "Mesgul"
-            : "Offline"
-          : "Aktif paketi var"
-        : "Musait";
+        ? activeLoad >= ADMIN_MANUAL_MAX_ACTIVE_PACKAGES
+          ? `${ADMIN_MANUAL_MAX_ACTIVE_PACKAGES} paket limiti dolu`
+          : "Offline"
+        : activeLoad === 1
+          ? "Admin 2. paket atayabilir"
+          : "Musait";
 
       return {
         value: courier.id,
