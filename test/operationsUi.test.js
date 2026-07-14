@@ -48,6 +48,7 @@ test("unmatched orders live under Operations and default to the pending queue", 
       renderUnmatchedOrders,
       renderOrderHistoryOrders,
       initializeOrderHistoryDates,
+      openOrderHistoryWorkspace,
       isAdminActivePackage,
       startAdminLiveStream,
       connectLiveStream,
@@ -66,6 +67,7 @@ test("unmatched orders live under Operations and default to the pending queue", 
     const historyLink = dom.window.document.querySelector('[data-section="adminWorkspace_ops_history"]');
     assert.ok(operationGroup?.contains(historyLink));
     assert.ok(dom.window.document.getElementById("adminWorkspace_ops_history"));
+    assert.ok(dom.window.document.getElementById("orderHistoryShortcut"));
     dom.window.__operationsUi.initializeOrderHistoryDates();
     assert.match(dom.window.document.getElementById("orderHistoryDateFrom").value, /^\d{4}-\d{2}-\d{2}$/);
 
@@ -135,6 +137,9 @@ test("unmatched orders live under Operations and default to the pending queue", 
     assert.match(historyCard.textContent, /Test Kurye/);
     assert.match(historyCard.textContent, /Teslim Edildi/);
     assert.equal(dom.window.document.getElementById("orderHistoryTotalCount").textContent, "1");
+    assert.match(dom.window.document.getElementById("orderHistoryShortcut").textContent, /\(1\)/);
+    dom.window.__operationsUi.openOrderHistoryWorkspace();
+    assert.ok(dom.window.document.getElementById("adminWorkspace_ops_history").classList.contains("active-section"));
   } finally {
     dom.window.close();
   }

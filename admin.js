@@ -99,6 +99,7 @@ const adminRefs = {
   restaurantAccountingDetailPanel: document.getElementById("restaurantAccountingDetailPanel"),
   restaurantFilter: document.getElementById("restaurantFilter"),
   searchInput: document.getElementById("searchInput"),
+  orderHistoryShortcut: document.getElementById("orderHistoryShortcut"),
   orderHistoryLink: document.querySelector('[data-section="adminWorkspace_ops_history"]'),
   orderHistoryFilterForm: document.getElementById("orderHistoryFilterForm"),
   orderHistoryDateFrom: document.getElementById("orderHistoryDateFrom"),
@@ -800,6 +801,14 @@ function renderOrderHistoryRestaurantOptions(restaurants = []) {
   adminRefs.orderHistoryRestaurant.value = selected;
 }
 
+function openOrderHistoryWorkspace() {
+  const link = adminRefs.orderHistoryLink;
+  if (!link) return;
+  link.closest(".tree-group")?.classList.add("open");
+  link.click();
+  if (!adminState.orderHistory.loaded) loadOrderHistory().catch(() => {});
+}
+
 function orderHistoryRestaurantName(pkg) {
   return pkg.restaurantName || adminState.data?.restaurants?.find((restaurant) => restaurant.id === pkg.restaurantId)?.name || "Bilinmeyen Restoran";
 }
@@ -812,6 +821,9 @@ function renderOrderHistoryOrders(orders = [], pagination = null) {
   adminRefs.orderHistoryTotalCount.textContent = String(total);
   adminRefs.orderHistoryLoadedCount.textContent = String(orders.length);
   adminRefs.orderHistoryAmount.textContent = formatCurrency(amount);
+  if (adminRefs.orderHistoryShortcut) {
+    adminRefs.orderHistoryShortcut.textContent = `Son 1 Aylık Siparişleri Aç (${total})`;
+  }
   adminRefs.orderHistoryLoadMore.classList.toggle("hidden", !pagination?.hasMore);
 
   if (!orders.length) {
@@ -2186,6 +2198,9 @@ function hydrateAdmin(data) {
   setZoneOptions(adminRefs.restaurantZone, data.zones);
   renderRestaurantFilter(data.restaurants);
   renderOrderHistoryRestaurantOptions(data.restaurants);
+  if (!adminState.orderHistory.loaded && !adminState.orderHistory.loading) {
+    loadOrderHistory().catch(() => {});
+  }
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
   renderCourierManagement(data.couriers);
@@ -2633,6 +2648,7 @@ initializeOrderHistoryDates();
 adminRefs.orderHistoryLink?.addEventListener("click", () => {
   if (!adminState.orderHistory.loaded) loadOrderHistory().catch(() => {});
 });
+adminRefs.orderHistoryShortcut?.addEventListener("click", openOrderHistoryWorkspace);
 adminRefs.orderHistoryFilterForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   loadOrderHistory().catch(() => {});
