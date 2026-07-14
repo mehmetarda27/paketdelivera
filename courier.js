@@ -171,6 +171,7 @@ const courierRefs = {
   liveBadge: document.getElementById("courierLiveBadge"),
   dayCloseButton: document.getElementById("courierDayCloseButton"),
   notificationCenter: document.getElementById("courierNotificationCenter"),
+  enablePushButton: document.getElementById("courierEnablePushButton"),
   announcementList: document.getElementById("courierAnnouncementList"),
   packages: document.getElementById("courierPackages"),
   history: document.getElementById("courierHistory"),
@@ -625,13 +626,90 @@ function startCourierLiveStream() {
 
 function requestNotificationPermission() {
   if (typeof Notification === "undefined") {
-    return;
+    return Promise.resolve("unsupported");
   }
 
   if (Notification.permission === "default") {
-    Notification.requestPermission().catch(() => {
-      // Ignore permission request errors.
+    try {
+      return Promise.resolve(Notification.requestPermission()).catch(() => "default");
+    } catch {
+      return Promise.resolve("default");
+    }
+  }
+  return Promise.resolve(Notification.permission);
+}
+
+function pushApplicationServerKey(base64Value) {
+  const padding = "=".repeat((4 - (base64Value.length % 4)) % 4);
+  const base64 = (base64Value + padding).replaceAll("-", "+").replaceAll("_", "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+function updateCourierPushButton(enabled = false) {
+  if (!courierRefs.enablePushButton) return;
+  const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  courierRefs.enablePushButton.classList.toggle("hidden", enabled);
+  courierRefs.enablePushButton.disabled = permission === "unsupported";
+  courierRefs.enablePushButton.textContent = permission === "denied" ? "Bildirim Engelli" : "Bildirimleri Ac";
+}
+
+async function initializeCourierPush(options = {}) {
+  if (!courierState.token || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification === "undefined") {
+    updateCourierPushButton(false);
+    return false;
+  }
+
+  let permission = Notification.permission;
+  if (options.requestPermission && permission === "default") {
+    permission = await requestNotificationPermission();
+  }
+  if (permission !== "granted") {
+    updateCourierPushButton(false);
+    if (options.requestPermission && permission === "denied") {
+      showToast("Chrome bildirim izni engelli. Site ayarlarindan Bildirimler iznini ac.", "warning");
+    }
+    return false;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register("/courier-push-sw.js", { scope: "/" });
+    const keyResponse = await api("/api/courier/push/public-key", {
+      headers: authHeaders(courierState.token),
+      retryWithRefresh: refreshCourierAccess,
     });
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushApplicationServerKey(keyResponse.publicKey),
+      });
+    }
+    await api("/api/courier/push/subscriptions", {
+      method: "POST",
+      headers: authHeaders(courierState.token),
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
+      retryWithRefresh: refreshCourierAccess,
+    });
+    updateCourierPushButton(true);
+    return true;
+  } catch (error) {
+    updateCourierPushButton(false);
+    if (options.requestPermission) {
+      showToast(error.message || "Bildirimler etkinlestirilemedi.", "error");
+    }
+    return false;
+  }
+}
+
+async function currentCourierPushEndpoint() {
+  if (!("serviceWorker" in navigator)) return "";
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/courier-push-sw.js");
+    const subscription = await registration?.pushManager?.getSubscription?.();
+    return subscription?.endpoint || "";
+  } catch {
+    return "";
   }
 }
 
@@ -1647,7 +1725,11 @@ function hydrateCourierWorkspace(data) {
   clearResolvedPackageDrafts(data.packages);
   courierState.data = data;
   setLoggedIn(true);
-  requestNotificationPermission();
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    initializeCourierPush();
+  } else {
+    updateCourierPushButton(false);
+  }
   requestScreenWakeLock();
   startWorkspacePolling();
   startCourierLiveStream();
@@ -1968,6 +2050,7 @@ async function doLoadCourierWorkspace(options = {}) {
 
 courierRefs.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const notificationPermission = requestNotificationPermission();
   try {
     const formData = new FormData(courierRefs.loginForm);
     const data = await api("/api/courier/login", {
@@ -1984,6 +2067,8 @@ courierRefs.loginForm.addEventListener("submit", async (event) => {
     });
     courierRefs.loginForm.reset();
     hydrateCourierWorkspace(workspace);
+    await notificationPermission;
+    initializeCourierPush();
   } catch (error) {
     showToast(error.message || "Giris basarisiz oldu.", "error");
   }
@@ -1991,6 +2076,10 @@ courierRefs.loginForm.addEventListener("submit", async (event) => {
 
 courierRefs.connectionSwitch?.addEventListener("change", async (event) => {
   await setCourierConnection(event.currentTarget.checked);
+});
+
+courierRefs.enablePushButton?.addEventListener("click", async () => {
+  await initializeCourierPush({ requestPermission: true });
 });
 
 courierRefs.dayCloseButton?.addEventListener("click", async () => {
@@ -2027,11 +2116,12 @@ courierRefs.logoutButton?.addEventListener("click", async () => {
 
   stopLocationWatch();
   stopWorkspacePolling();
+  const pushEndpoint = await currentCourierPushEndpoint();
   if (courierState.refreshToken) {
     api("/api/courier/logout", {
       method: "POST",
       headers: authHeaders(courierState.token),
-      body: JSON.stringify({ refreshToken: courierState.refreshToken }),
+      body: JSON.stringify({ refreshToken: courierState.refreshToken, pushEndpoint }),
     }).catch(() => {
       // Local cleanup should still continue.
     });

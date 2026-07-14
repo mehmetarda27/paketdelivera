@@ -20,6 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const net = require("net");
+const webPush = require("web-push");
 
 const uploadsDir = path.resolve(process.env.DELIVERA_UPLOAD_DIR || path.join(__dirname, "uploads"));
 if (!fs.existsSync(uploadsDir)) {
@@ -106,6 +107,9 @@ const RATE_LIMITS = {
 };
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 200;
+const COURIER_PUSH_EVENT_TYPES = new Set(["package-assigned", "package-override", "package-reassign", "restaurant-confirmed"]);
+const WEB_PUSH_SETTINGS_ID = "courier_web_push_vapid";
+const WEB_PUSH_SUBJECT = trimmed(process.env.DELIVERA_VAPID_SUBJECT) || "mailto:bildirim@paketdelivera.app";
 
 const DEFAULT_ZONES = ["Akdeniz", "Yenisehir", "Mezitli", "Toroslar", "Tarsus", "Erdemli"];
 const SUPPORTED_PLATFORMS = ["Trendyol Yemek", "Yemeksepeti", "Getir Yemek", "Migros Yemek", "POS"];
@@ -3727,6 +3731,129 @@ function updateSystemSettings(newSettings) {
   return merged;
 }
 
+let courierPushVapidKeys = null;
+
+function ensureCourierPushConfigured() {
+  if (courierPushVapidKeys) {
+    return courierPushVapidKeys;
+  }
+
+  const row = db.prepare("SELECT settings_json FROM system_settings WHERE id = ?").get(WEB_PUSH_SETTINGS_ID);
+  let keys = parseJson(row?.settings_json, {});
+  if (!keys.publicKey || !keys.privateKey) {
+    const generatedKeys = webPush.generateVAPIDKeys();
+    db.prepare(`
+      INSERT INTO system_settings (id, settings_json) VALUES (?, ?)
+      ON CONFLICT(id) DO NOTHING
+    `).run(WEB_PUSH_SETTINGS_ID, json(generatedKeys));
+    keys = parseJson(
+      db.prepare("SELECT settings_json FROM system_settings WHERE id = ?").get(WEB_PUSH_SETTINGS_ID)?.settings_json,
+      generatedKeys
+    );
+  }
+
+  webPush.setVapidDetails(WEB_PUSH_SUBJECT, keys.publicKey, keys.privateKey);
+  courierPushVapidKeys = keys;
+  return courierPushVapidKeys;
+}
+
+function normalizePushSubscription(value = {}) {
+  const endpoint = trimmed(value.endpoint);
+  const p256dh = trimmed(value.keys?.p256dh);
+  const auth = trimmed(value.keys?.auth);
+  if (!endpoint.startsWith("https://") || endpoint.length > 4096 || !p256dh || !auth) {
+    throw validationError("Gecersiz bildirim aboneligi.");
+  }
+  return {
+    endpoint,
+    expirationTime: value.expirationTime ?? null,
+    keys: { p256dh, auth },
+  };
+}
+
+function saveCourierPushSubscription(courierId, subscription) {
+  const normalized = normalizePushSubscription(subscription);
+  const stamp = nowIso();
+  db.prepare(`
+    INSERT INTO courier_push_subscriptions (
+      id, courier_id, endpoint, subscription_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET
+      courier_id = excluded.courier_id,
+      subscription_json = excluded.subscription_json,
+      updated_at = excluded.updated_at
+  `).run(uid("push"), courierId, normalized.endpoint, json(normalized), stamp, stamp);
+  return normalized.endpoint;
+}
+
+function deleteCourierPushSubscription(courierId, endpoint) {
+  if (!endpoint) return;
+  db.prepare("DELETE FROM courier_push_subscriptions WHERE courier_id = ? AND endpoint = ?")
+    .run(courierId, trimmed(endpoint));
+}
+
+function courierPushPayload(event) {
+  const pkg = event.packageId ? getPackageById(event.packageId) : null;
+  const trackingNo = pkg?.trackingNo || pkg?.externalOrderNo || event.packageId || "Yeni paket";
+  const restaurantName = pkg?.restaurantName || "Delivera Express";
+  const address = pkg?.deliveryAddress || pkg?.address || pkg?.customerAddress || "Paket detaylarini acmak icin dokunun.";
+  const packageId = pkg?.id || event.packageId || "";
+  return {
+    title: `Yeni Paket - ${trackingNo}`,
+    body: `${restaurantName} - ${address}`,
+    packageId,
+    tag: packageId ? `delivera-package-${packageId}` : `delivera-courier-${event.courierId}`,
+    url: packageId ? `/courier.html?package=${encodeURIComponent(packageId)}` : "/courier.html",
+  };
+}
+
+function dispatchCourierPush(event) {
+  if (!event?.courierId || !COURIER_PUSH_EVENT_TYPES.has(event.type)) {
+    return;
+  }
+
+  let subscriptions = [];
+  try {
+    ensureCourierPushConfigured();
+    subscriptions = db.prepare(`
+      SELECT endpoint, subscription_json
+      FROM courier_push_subscriptions
+      WHERE courier_id = ?
+    `).all(event.courierId);
+  } catch (error) {
+    logger.warn("Courier push preparation failed", { courierId: event.courierId, error });
+    return;
+  }
+
+  const payload = JSON.stringify(courierPushPayload(event));
+  subscriptions.forEach((row) => {
+    try {
+      const request = webPush.sendNotification(parseJson(row.subscription_json, {}), payload, {
+        TTL: 300,
+        urgency: "high",
+      });
+      Promise.resolve(request).catch((error) => {
+        if ([404, 410].includes(Number(error?.statusCode))) {
+          db.prepare("DELETE FROM courier_push_subscriptions WHERE endpoint = ?").run(row.endpoint);
+          return;
+        }
+        logger.warn("Courier push delivery failed", {
+          courierId: event.courierId,
+          packageId: event.packageId || null,
+          statusCode: error?.statusCode || null,
+          error,
+        });
+      });
+    } catch (error) {
+      logger.warn("Courier push request failed", {
+        courierId: event.courierId,
+        packageId: event.packageId || null,
+        error,
+      });
+    }
+  });
+}
+
 function sendJson(res, statusCode, payload) {
   writeSecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -3804,6 +3931,7 @@ function broadcastLiveEvent(event) {
       closeLiveStream(stream.id);
     }
   });
+  dispatchCourierPush(event);
 }
 
 function openLiveStream(req, res, audience) {
@@ -6199,6 +6327,7 @@ async function handleAssignmentRetry(packageId) {
       syncAssignmentRetryForPackage(assignedPackage);
       broadcastLiveEvent({
         type: "package-reassign",
+        packageId,
         restaurantId: target.restaurantId,
         courierId: candidate.courier.id,
         message: `${target.trackingNo || target.id} paketi yeni kuryeye yeniden atandi.`,
@@ -6263,6 +6392,7 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
       }
       broadcastLiveEvent({
         type: "package-assigned",
+        packageId: pkg.id,
         restaurantId: pkg.restaurantId,
         courierId: candidate.courier.id,
         message: `${pkg.trackingNo || pkg.id} paketi ${candidate.courier.name} kuryesine atandi.`,
@@ -10903,6 +11033,9 @@ async function handleApi(req, res, pathname) {
       });
     }
     const { json: body } = await readRequestBody(req);
+    if (session && body.pushEndpoint) {
+      deleteCourierPushSubscription(session.courier_id, body.pushEndpoint);
+    }
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("courier_sessions", getBearerToken(req));
     db.prepare("DELETE FROM refresh_tokens WHERE actor_role = ? AND token_hash = ?").run("courier", hashOpaqueToken(refreshToken));
@@ -12331,7 +12464,9 @@ async function handleApi(req, res, pathname) {
       }
       broadcastLiveEvent({
         type: "restaurant-confirmed",
+        packageId,
         restaurantId: session.restaurant_id,
+        courierId: packageAfterAssignmentAttempt?.assignedCourierId || null,
         message: isPlatformBackedOrder ? "Platform siparisi restoran tarafinda onaylandi." : "Manuel paket restoran tarafinda onaylandi.",
       });
       sendJson(res, 200, decorateState({
@@ -13190,6 +13325,40 @@ async function handleApi(req, res, pathname) {
     }
 
     sendJson(res, 200, workspace);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/courier/push/public-key") {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Kurye oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { publicKey: ensureCourierPushConfigured().publicKey });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/courier/push/subscriptions") {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Kurye oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    saveCourierPushSubscription(session.courier_id, body.subscription || body);
+    sendJson(res, 201, { ok: true });
+    return;
+  }
+
+  if (req.method === "DELETE" && pathname === "/api/courier/push/subscriptions") {
+    const session = getCourierSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Kurye oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    deleteCourierPushSubscription(session.courier_id, body.endpoint);
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -14377,6 +14546,7 @@ async function handleApi(req, res, pathname) {
     }
 
     persistPackageAssignment(assignPackage(state, target));
+    const reassignedPackage = getPackageById(target.id);
     writeAuditLog({
       actorRole: "admin",
       actorId: adminActorId(adminSession),
@@ -14389,8 +14559,9 @@ async function handleApi(req, res, pathname) {
     });
     broadcastLiveEvent({
       type: "package-reassign",
+      packageId: target.id,
       restaurantId: target.restaurantId,
-      courierId: target.assignedCourierId || null,
+      courierId: reassignedPackage?.assignedCourierId || null,
       message: "Paket yeniden otomatik atama havuzuna alindi.",
     });
     sendJson(res, 200, {
@@ -14426,6 +14597,7 @@ async function handleApi(req, res, pathname) {
     });
     broadcastLiveEvent({
       type: "package-override",
+      packageId: overrideMatch[1],
       courierId: result.courierId,
       message: "Admin belirli paketi kuriyeye atadi.",
     });
