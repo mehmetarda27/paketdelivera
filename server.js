@@ -172,7 +172,6 @@ const PLATFORM_CONFIGS = {
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
-const COURIER_REJECT_REOFFER_COOLDOWN_MS = Number(process.env.DELIVERA_COURIER_REJECT_REOFFER_COOLDOWN_MS || 5 * 60_000);
 const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 5 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
@@ -5913,14 +5912,6 @@ function waitingPackagePriority(pkg) {
   return new Date(pkg.createdAt).getTime();
 }
 
-function courierReofferCooldownElapsed(pkg, referenceTime = Date.now()) {
-  if (COURIER_REJECT_REOFFER_COOLDOWN_MS <= 0) {
-    return true;
-  }
-  const lastAttemptAt = new Date(pkg?.lastAssignmentAttemptAt || "").getTime();
-  return !Number.isFinite(lastAttemptAt) || referenceTime - lastAttemptAt >= COURIER_REJECT_REOFFER_COOLDOWN_MS;
-}
-
 function reserveCourier(loadMap, courierId, delta) {
   if (!courierId) {
     return;
@@ -6441,14 +6432,6 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}
   }
 
   if (ranked.length === 0 && excludedCourierIds.length > 0) {
-    if (!courierReofferCooldownElapsed(pkg)) {
-      logger.info("Assignment courier round waiting for rejection cooldown", {
-        packageId: pkg.id,
-        completedCourierIds: excludedCourierIds,
-        cooldownMs: COURIER_REJECT_REOFFER_COOLDOWN_MS,
-      });
-      return false;
-    }
     const nextRound = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
     if (nextRound.length > 0) {
       logger.info("Assignment courier round restarted", {
@@ -6463,8 +6446,6 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}
         state.packages[packageIndex].assignmentTriedCourierIds = [];
       }
       ranked = nextRound;
-    } else {
-      return false;
     }
   }
 

@@ -74,7 +74,6 @@ test("automatic assignment expands 5-6-7-8 km in nearest order and restarts afte
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
-      DELIVERA_COURIER_REJECT_REOFFER_COOLDOWN_MS: "0",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });

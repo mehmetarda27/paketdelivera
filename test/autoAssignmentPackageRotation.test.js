@@ -34,17 +34,6 @@ async function waitForCourier(dbFile, packageId, courierId, timeoutMs = 10000) {
   throw new Error(`${packageId} was not assigned to ${courierId}.`);
 }
 
-async function assertPackagesStayUnassigned(dbFile, packageIds, timeoutMs = 1200) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const db = new DatabaseSync(dbFile, { readOnly: true });
-    const rows = packageIds.map((packageId) => db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId));
-    db.close();
-    rows.forEach((row) => assert.equal(row?.assigned_courier_id, null));
-    await delay(100);
-  }
-}
-
 async function rejectPackage(baseUrl, packageId, token) {
   const response = await fetch(`${baseUrl}/api/courier/packages/${packageId}/reject`, {
     method: "POST",
@@ -136,7 +125,8 @@ test("rejected package moves behind other waiting packages before returning to t
     assert.deepEqual(JSON.parse(rejectedBurger.assignment_tried_courier_ids_json), ["cr_rotation"]);
 
     await rejectPackage(baseUrl, "pkg_rotation_flash", "token-rotation");
-    await assertPackagesStayUnassigned(dbFile, ["pkg_rotation_burger", "pkg_rotation_flash"]);
+    const burgerReturnsAfterRotation = await waitForCourier(dbFile, "pkg_rotation_burger", "cr_rotation");
+    assert.equal(burgerReturnsAfterRotation.status, "assigned");
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
