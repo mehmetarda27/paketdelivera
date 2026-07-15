@@ -4619,6 +4619,17 @@ body.theme-courier .courier-mobile-app {
   -webkit-line-clamp: 1;
 }
 
+.theme-courier .courier-task-card .courier-address-block .address-value {
+  display: block !important;
+  overflow: visible !important;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset !important;
+}
+
 .theme-courier .courier-task-card .courier-card-actions {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
 }
