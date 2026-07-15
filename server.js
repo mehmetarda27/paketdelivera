@@ -6379,12 +6379,31 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
     ...(pkg.assignmentTriedCourierIds || []),
     ...(offerExpired && pkg.assignedCourierId ? [pkg.assignedCourierId] : []),
   ]);
-  const ranked = rankEligibleCouriers(
+  let ranked = rankEligibleCouriers(
     state,
     pkg,
     occupiedCourierLoads,
     excludedCourierIds.length ? { excludedCourierIds } : {}
   );
+
+  if (ranked.length === 0 && excludedCourierIds.length > 0) {
+    const nextRound = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
+    if (nextRound.length > 0) {
+      logger.info("Assignment courier round restarted", {
+        packageId: pkg.id,
+        completedCourierIds: excludedCourierIds,
+        nextCourierId: nextRound[0].courier.id,
+      });
+      setPackageTriedCouriers(pkg.id, []);
+      pkg.assignmentTriedCourierIds = [];
+      const packageIndex = state.packages.findIndex((item) => item.id === pkg.id);
+      if (packageIndex >= 0) {
+        state.packages[packageIndex].assignmentTriedCourierIds = [];
+      }
+      ranked = nextRound;
+    }
+  }
+
   if (ranked.length === 0) {
     const failure = evaluateAssignmentFailure(state, pkg);
     persistPackageAssignment(buildAssignmentFailure(pkg, failure.reason, failure.note));
