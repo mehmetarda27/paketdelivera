@@ -56,7 +56,7 @@ async function stopServer(server) {
   });
 }
 
-test("rejected package moves behind other waiting packages before returning to the same courier", { timeout: 20000 }, async () => {
+test("rejected package rotates through every waiting package before returning to the same courier", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-package-rotation-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 45000 + Math.floor(Math.random() * 1000);
@@ -111,6 +111,12 @@ test("rejected package moves behind other waiting packages before returning to t
       "Flash Customer", "5550000002", "Flash address", "Akdeniz", "15 dk", "Online Odeme", 100,
       36.7891, 34.5978, "Flash package", "awaiting_assignment", "pending", "Test setup", flashStamp, flashStamp
     );
+    const pizzaStamp = new Date(Date.now() + 2000).toISOString();
+    insertPackage.run(
+      "pkg_rotation_pizza", "PKT-ROTATION-PIZZA", "rst_rotation", "restaurant_panel", "Manuel", "ROTATION-PIZZA",
+      "Pizza Customer", "5550000003", "Pizza address", "Akdeniz", "15 dk", "Online Odeme", 100,
+      36.7891, 34.5978, "Pizza package", "awaiting_assignment", "pending", "Test setup", pizzaStamp, pizzaStamp
+    );
     db.close();
 
     await waitForCourier(dbFile, "pkg_rotation_burger", "cr_rotation");
@@ -125,6 +131,10 @@ test("rejected package moves behind other waiting packages before returning to t
     assert.deepEqual(JSON.parse(rejectedBurger.assignment_tried_courier_ids_json), ["cr_rotation"]);
 
     await rejectPackage(baseUrl, "pkg_rotation_flash", "token-rotation");
+    const pizzaOffer = await waitForCourier(dbFile, "pkg_rotation_pizza", "cr_rotation");
+    assert.equal(pizzaOffer.status, "assigned");
+
+    await rejectPackage(baseUrl, "pkg_rotation_pizza", "token-rotation");
     const burgerReturnsAfterRotation = await waitForCourier(dbFile, "pkg_rotation_burger", "cr_rotation");
     assert.equal(burgerReturnsAfterRotation.status, "assigned");
   } finally {
