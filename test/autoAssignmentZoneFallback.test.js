@@ -10,16 +10,19 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForAssignment(dbFile, packageId, timeoutMs = 10000) {
+async function waitForNoAssignment(dbFile, packageId, timeoutMs = 1500) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const db = new DatabaseSync(dbFile, { readOnly: true });
     const row = db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId);
     db.close();
-    if (row?.assigned_courier_id) return row;
+    assert.equal(row?.assigned_courier_id, null);
     await delay(100);
   }
-  throw new Error("Package was not assigned by the retry sweep.");
+  const db = new DatabaseSync(dbFile, { readOnly: true });
+  const row = db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId);
+  db.close();
+  return row;
 }
 
 async function waitForServer(baseUrl, timeoutMs = 10000) {
@@ -43,7 +46,7 @@ async function stopServer(server) {
   });
 }
 
-test("automatic assignment uses an online empty courier in the same zone when GPS distance is invalid", { timeout: 20000 }, async () => {
+test("automatic assignment never uses a same-zone courier beyond the 8 km hard limit", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-zone-fallback-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 43000 + Math.floor(Math.random() * 1000);
@@ -75,9 +78,9 @@ test("automatic assignment uses an online empty courier in the same zone when GP
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("rst_zone_fallback", "Zone Fallback Restaurant", "Akdeniz", 51.5, -0.12, "[]", "zone-api-key", "zone-secret", stamp);
     db.prepare(`
-      INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run("cr_zone_fallback", "Zone Fallback Courier", "Akdeniz", 36.78914, 34.59782, 1, "online", "zone_courier", "unused", "unused", stamp);
+      INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, last_location_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("cr_zone_fallback", "Zone Fallback Courier", "Akdeniz", 36.78914, 34.59782, 1, "online", "zone_courier", "unused", "unused", stamp, stamp);
     db.prepare(`
       INSERT INTO packages (
         id, tracking_no, restaurant_id, source, source_platform, external_order_no,
@@ -91,11 +94,11 @@ test("automatic assignment uses an online empty courier in the same zone when GP
     );
     db.close();
 
-    const assigned = await waitForAssignment(dbFile, "pkg_zone_fallback");
-    assert.equal(assigned.assigned_courier_id, "cr_zone_fallback");
-    assert.equal(assigned.status, "assigned");
-    assert.match(assigned.assignment_reason, /kontrollu bolge yedegiyle secildi/);
-    assert.ok(Number(assigned.distance_km) > 5);
+    const waiting = await waitForNoAssignment(dbFile, "pkg_zone_fallback");
+    assert.equal(waiting.status, "awaiting_assignment");
+    assert.equal(waiting.assignment_status, "pending");
+    assert.match(waiting.last_assignment_error, /mesafe disi/);
+    assert.match(waiting.assignment_reason, /8 km icinde kurye yok/);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

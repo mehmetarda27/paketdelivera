@@ -56,7 +56,7 @@ async function stopServer(server) {
   });
 }
 
-test("automatic assignment restarts from the first courier after every available courier rejects", { timeout: 20000 }, async () => {
+test("automatic assignment expands 5-6-7-8 km in nearest order and restarts after all reject", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-rejection-cycle-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 44000 + Math.floor(Math.random() * 1000);
@@ -89,13 +89,17 @@ test("automatic assignment restarts from the first courier after every available
     `).run("rst_reject_cycle", "Reject Cycle Restaurant", "Akdeniz", 36.7891, 34.5978, "[]", "reject-api", "reject-secret", stamp);
 
     const insertCourier = db.prepare(`
-      INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, last_location_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    insertCourier.run("cr_reject_a", "A Courier", "Akdeniz", 36.7891, 34.5978, 1, "online", "reject_a", "unused", "unused", stamp);
-    insertCourier.run("cr_reject_b", "B Courier", "Akdeniz", 36.7892, 34.5979, 1, "online", "reject_b", "unused", "unused", stamp);
+    insertCourier.run("cr_reject_a", "A Courier", "Akdeniz", 36.82957, 34.5978, 1, "online", "reject_a", "unused", "unused", stamp, stamp);
+    insertCourier.run("cr_reject_b", "B Courier", "Akdeniz", 36.83856, 34.5978, 1, "online", "reject_b", "unused", "unused", stamp, stamp);
+    insertCourier.run("cr_reject_c", "C Courier", "Akdeniz", 36.84755, 34.5978, 1, "online", "reject_c", "unused", "unused", stamp, stamp);
+    insertCourier.run("cr_reject_d", "D Courier", "Akdeniz", 36.85654, 34.5978, 1, "online", "reject_d", "unused", "unused", stamp, stamp);
     db.prepare("INSERT INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)").run("token-reject-a", "cr_reject_a", stamp);
     db.prepare("INSERT INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)").run("token-reject-b", "cr_reject_b", stamp);
+    db.prepare("INSERT INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)").run("token-reject-c", "cr_reject_c", stamp);
+    db.prepare("INSERT INTO courier_sessions (token, courier_id, created_at) VALUES (?, ?, ?)").run("token-reject-d", "cr_reject_d", stamp);
     db.prepare(`
       INSERT INTO packages (
         id, tracking_no, restaurant_id, source, source_platform, external_order_no,
@@ -109,10 +113,22 @@ test("automatic assignment restarts from the first courier after every available
     );
     db.close();
 
-    await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_a");
+    const firstOffer = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_a");
+    assert.ok(Number(firstOffer.distance_km) <= 5);
+    assert.match(firstOffer.assignment_reason, /5 km arama capinda/);
     await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-a");
-    await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_b");
+    const secondOffer = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_b");
+    assert.ok(Number(secondOffer.distance_km) > 5 && Number(secondOffer.distance_km) <= 6);
+    assert.match(secondOffer.assignment_reason, /6 km arama capinda/);
     await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-b");
+    const thirdOffer = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_c");
+    assert.ok(Number(thirdOffer.distance_km) > 6 && Number(thirdOffer.distance_km) <= 7);
+    assert.match(thirdOffer.assignment_reason, /7 km arama capinda/);
+    await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-c");
+    const fourthOffer = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_d");
+    assert.ok(Number(fourthOffer.distance_km) > 7 && Number(fourthOffer.distance_km) <= 8);
+    assert.match(fourthOffer.assignment_reason, /8 km arama capinda/);
+    await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-d");
     const restarted = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_a");
 
     assert.equal(restarted.status, "assigned");

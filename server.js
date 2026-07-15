@@ -231,7 +231,8 @@ const COURIER_FAILURE_REASONS = new Set([
   "teknik_sorun",
   "diger",
 ]);
-const MAX_ASSIGNMENT_DISTANCE_KM = 5;
+const ASSIGNMENT_SEARCH_RADII_KM = Object.freeze([5, 6, 7, 8]);
+const MAX_ASSIGNMENT_DISTANCE_KM = ASSIGNMENT_SEARCH_RADII_KM.at(-1);
 const LIVE_STREAM_HEARTBEAT_MS = 20_000;
 const STATUS_TRANSITIONS = {
   [PENDING_APPROVAL_STATUS]: [PREPARING_STATUS, REJECTED_STATUS, CANCELED_STATUS],
@@ -6084,43 +6085,27 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
         activeLoadMap.get(courier.id) || 0
       ),
     }))
-    .filter(({ courier, load }) => load < 1 && !excludedCourierIds.has(courier.id));
+    .filter(({ courier, distance: courierDistance, load }) =>
+      load < 1 &&
+      !excludedCourierIds.has(courier.id) &&
+      Number.isFinite(courierDistance) &&
+      courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
+    );
 
-  const nearbyFreshCandidates = availableCandidates
-    .filter(({ distance: courierDistance }) =>
-      Number.isFinite(courierDistance) && courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
-    )
-    .filter(({ freshLocation }) => freshLocation)
-    .map((candidate) => ({ ...candidate, selectionMode: "distance_fresh" }));
-
-  const packageZone = trimmed(pkg.zone).toLowerCase();
-  const zoneFreshCandidates = nearbyFreshCandidates.length > 0 || !packageZone
+  const freshCandidates = availableCandidates.filter(({ freshLocation }) => freshLocation);
+  const locationCandidates = freshCandidates.length > 0 ? freshCandidates : availableCandidates;
+  const selectedRadius = ASSIGNMENT_SEARCH_RADII_KM.find((radiusKm) =>
+    locationCandidates.some(({ distance: courierDistance }) => courierDistance <= radiusKm)
+  );
+  const selectedPool = selectedRadius === undefined
     ? []
-    : availableCandidates
-      .filter(({ courier, freshLocation }) => freshLocation && trimmed(courier.zone).toLowerCase() === packageZone)
-      .map((candidate) => ({ ...candidate, selectionMode: "zone_fallback_fresh" }));
-
-  const nearbyStaleCandidates = nearbyFreshCandidates.length > 0 || zoneFreshCandidates.length > 0
-    ? []
-    : availableCandidates
-      .filter(({ distance: courierDistance }) =>
-        Number.isFinite(courierDistance) && courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
-      )
-      .map((candidate) => ({ ...candidate, selectionMode: "distance_stale_fallback" }));
-
-  const zoneStaleCandidates = nearbyFreshCandidates.length > 0 || zoneFreshCandidates.length > 0 || nearbyStaleCandidates.length > 0 || !packageZone
-    ? []
-    : availableCandidates
-      .filter(({ courier }) => trimmed(courier.zone).toLowerCase() === packageZone)
-      .map((candidate) => ({ ...candidate, selectionMode: "zone_stale_fallback" }));
-
-  const selectedPool = nearbyFreshCandidates.length > 0
-    ? nearbyFreshCandidates
-    : zoneFreshCandidates.length > 0
-      ? zoneFreshCandidates
-      : nearbyStaleCandidates.length > 0
-        ? nearbyStaleCandidates
-        : zoneStaleCandidates;
+    : locationCandidates
+      .filter(({ distance: courierDistance }) => courierDistance <= selectedRadius)
+      .map((candidate) => ({
+        ...candidate,
+        selectionMode: freshCandidates.length > 0 ? "distance_radius_fresh" : "distance_radius_recorded",
+        searchRadiusKm: selectedRadius,
+      }));
 
   const ranked = selectedPool
     .sort((left, right) => {
@@ -6152,13 +6137,9 @@ function candidateDistance(candidate) {
 }
 
 function candidateAssignmentReason(pkg, candidate) {
-  if (candidate?.selectionMode?.startsWith("zone_")) {
-    return `${pkg.zone} bolgesinde online ve bos kurye, GPS mesafe filtresi disinda kaldigi icin kontrollu bolge yedegiyle secildi.`;
-  }
-  if (candidate?.selectionMode === "distance_stale_fallback") {
-    return `${pkg.zone} bolgesinde guncel GPS sinyali bulunamadigi icin en yakin son bilinen online kurye secildi.`;
-  }
-  return `${pkg.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde en uygun aktif kurye secildi.`;
+  const searchRadiusKm = Number(candidate?.searchRadiusKm || MAX_ASSIGNMENT_DISTANCE_KM);
+  const locationLabel = candidate?.selectionMode === "distance_radius_fresh" ? "guncel GPS" : "kayitli konum";
+  return `${pkg.zone} bolgesinde ${searchRadiusKm} km arama capinda ${locationLabel} verisine gore en yakin online ve bos kurye secildi.`;
 }
 
 function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
