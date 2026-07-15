@@ -6042,7 +6042,7 @@ function evaluateAssignmentFailure(state, pkg) {
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
   const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
-  const ranked = state.couriers
+  const availableCandidates = state.couriers
     .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS)
     .map((courier) => ({
       courier,
@@ -6052,12 +6052,27 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
         activeLoadMap.get(courier.id) || 0
       ),
     }))
-    .filter(({ courier, distance: courierDistance, load }) =>
-      courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM &&
-        load < 1 &&
-        !excludedCourierIds.has(courier.id)
+    .filter(({ courier, load }) => load < 1 && !excludedCourierIds.has(courier.id));
+
+  const nearbyCandidates = availableCandidates
+    .filter(({ distance: courierDistance }) =>
+      Number.isFinite(courierDistance) && courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     )
-    .sort((left, right) => left.distance - right.distance || left.load - right.load);
+    .map((candidate) => ({ ...candidate, selectionMode: "distance" }));
+
+  const packageZone = trimmed(pkg.zone).toLowerCase();
+  const zoneFallbackCandidates = nearbyCandidates.length > 0 || !packageZone
+    ? []
+    : availableCandidates
+      .filter(({ courier }) => trimmed(courier.zone).toLowerCase() === packageZone)
+      .map((candidate) => ({ ...candidate, selectionMode: "zone_fallback" }));
+
+  const ranked = (nearbyCandidates.length > 0 ? nearbyCandidates : zoneFallbackCandidates)
+    .sort((left, right) => {
+      const leftDistance = Number.isFinite(left.distance) ? left.distance : Number.POSITIVE_INFINITY;
+      const rightDistance = Number.isFinite(right.distance) ? right.distance : Number.POSITIVE_INFINITY;
+      return left.load - right.load || leftDistance - rightDistance || left.courier.name.localeCompare(right.courier.name, "tr");
+    });
 
   if (ASSIGNMENT_DEBUG_LOGS) {
     logger.debug("Assignment courier distance check", {
@@ -6069,10 +6084,22 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       skippedCourierIds: [...excludedCourierIds],
       courierCount: state.couriers.length,
       eligibleCourierIds: ranked.map((item) => item.courier.id),
+      selectionMode: ranked[0]?.selectionMode || "none",
     });
   }
 
   return ranked;
+}
+
+function candidateDistance(candidate) {
+  return Number.isFinite(candidate?.distance) ? Number(candidate.distance.toFixed(2)) : null;
+}
+
+function candidateAssignmentReason(pkg, candidate) {
+  if (candidate?.selectionMode === "zone_fallback") {
+    return `${pkg.zone} bolgesinde online ve bos kurye, GPS mesafe filtresi disinda kaldigi icin kontrollu bolge yedegiyle secildi.`;
+  }
+  return `${pkg.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde en uygun aktif kurye secildi.`;
 }
 
 function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
@@ -6098,12 +6125,12 @@ function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
     assignedCourierId: best.courier.id,
     assignedCourierName: best.courier.name,
     assignedAt: assignmentAttemptAt,
-    distanceKm: Number(best.distance.toFixed(2)),
+    distanceKm: candidateDistance(best),
     status: ASSIGNED_STATUS,
     assignmentStatus: "assigned",
     lastAssignmentAttemptAt: assignmentAttemptAt,
     lastAssignmentError: "",
-    assignmentReason: `${pkg.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde en uygun aktif kurye secildi.`,
+    assignmentReason: candidateAssignmentReason(pkg, best),
   };
 }
 
@@ -6236,8 +6263,8 @@ function tryAssignPackageAtomically(pkg, candidate) {
       targetCourier.id,
       targetCourier.name,
       assignmentAttemptAt,
-      Number(candidate.distance.toFixed(2)),
-      `${freshPackage.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde en uygun aktif kurye secildi.`,
+      candidateDistance(candidate),
+      candidateAssignmentReason({ zone: freshPackage.zone }, candidate),
       assignmentAttemptAt,
       assignmentAttemptAt,
       pkg.id,
@@ -6266,7 +6293,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
       packageId: pkg.id,
       courierId: targetCourier.id,
       courierStatus,
-      distanceKm: Number(candidate.distance.toFixed(3)),
+      distanceKm: candidateDistance(candidate),
     });
     if (isPlatformBackedPackage(freshPackage)) {
       notifyPlatformOrderAssigned(freshPackage.source_platform, freshPackage.external_order_id || freshPackage.external_order_no, targetCourier.id, assignedPackage);
@@ -6377,7 +6404,7 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
           assignedCourierId: candidate.courier.id,
           assignedCourierName: candidate.courier.name,
           assignedAt: nowIso(),
-          distanceKm: Number(candidate.distance.toFixed(2)),
+          distanceKm: candidateDistance(candidate),
           lastAssignmentAttemptAt: nowIso(),
           lastAssignmentError: "",
           assignmentTriedCourierIds: normalizeIdList([...(state.packages[packageIndex].assignmentTriedCourierIds || []), candidate.courier.id]),
