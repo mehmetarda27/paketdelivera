@@ -86,6 +86,7 @@ test("rejected package rotates through every waiting package before returning to
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
       DELIVERA_COURIER_REJECTION_COOLDOWN_MS: "300",
+      DELIVERA_PACKAGE_REJECTION_COOLDOWN_MS: "100",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });

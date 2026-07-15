@@ -173,6 +173,7 @@ const PLATFORM_CONFIGS = {
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
 const COURIER_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_COURIER_REJECTION_COOLDOWN_MS || 30_000);
+const PACKAGE_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_PACKAGE_REJECTION_COOLDOWN_MS || 5_000);
 const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 5 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
@@ -5929,7 +5930,7 @@ function activeCourierRejectionCooldownIds(referenceTime = Date.now()) {
 }
 
 function packageRejectionCooldownRemainingMs(packageId, referenceTime = Date.now()) {
-  if (!packageId || COURIER_REJECTION_COOLDOWN_MS <= 0) {
+  if (!packageId || PACKAGE_REJECTION_COOLDOWN_MS <= 0) {
     return 0;
   }
   const latestRejection = db.prepare(`
@@ -5943,7 +5944,7 @@ function packageRejectionCooldownRemainingMs(packageId, referenceTime = Date.now
   if (!Number.isFinite(rejectedAt)) {
     return 0;
   }
-  return Math.max(0, COURIER_REJECTION_COOLDOWN_MS - (referenceTime - rejectedAt));
+  return Math.max(0, PACKAGE_REJECTION_COOLDOWN_MS - (referenceTime - rejectedAt));
 }
 
 function reserveCourier(loadMap, courierId, delta) {
@@ -6930,8 +6931,8 @@ function scheduleRebalancePackages() {
   });
 }
 
-function scheduleRebalanceAfterCourierRejection() {
-  const delayMs = Math.max(0, COURIER_REJECTION_COOLDOWN_MS) + 25;
+function scheduleRebalanceAfterRejectionCooldown() {
+  const delayMs = Math.max(0, PACKAGE_REJECTION_COOLDOWN_MS) + 25;
   const timer = setTimeout(() => {
     try {
       rebalancePackages();
@@ -13896,11 +13897,12 @@ async function handleApi(req, res, pathname) {
       details: {
         from: ASSIGNED_STATUS,
         to: AWAITING_ASSIGNMENT_STATUS,
-        cooldownMs: COURIER_REJECTION_COOLDOWN_MS,
+        courierCooldownMs: COURIER_REJECTION_COOLDOWN_MS,
+        packageCooldownMs: PACKAGE_REJECTION_COOLDOWN_MS,
       },
     });
     rebalancePackages();
-    scheduleRebalanceAfterCourierRejection();
+    scheduleRebalanceAfterRejectionCooldown();
     const workspace = buildCourierWorkspace(session.courier_id);
     broadcastLiveEvent({
       type: "assignment-waiting",
