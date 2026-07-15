@@ -172,6 +172,7 @@ const PLATFORM_CONFIGS = {
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
+const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 5 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
 const PREPARING_STATUS = "preparing";
@@ -5882,6 +5883,30 @@ function distance(aLat, aLng, bLat, bLng) {
   return 2 * earthRadiusKm * Math.asin(Math.sqrt(haversine));
 }
 
+function courierLocationIsFresh(courier, referenceTime = Date.now()) {
+  const locationTime = new Date(courier?.lastLocationAt || "").getTime();
+  if (!Number.isFinite(locationTime)) {
+    return false;
+  }
+  const ageMs = referenceTime - locationTime;
+  return ageMs >= -60_000 && ageMs <= COURIER_LOCATION_FRESHNESS_MS;
+}
+
+function packageAssignmentCoordinates(state, pkg) {
+  const restaurant = state.restaurants.find((item) => item.id === pkg.restaurantId);
+  const restaurantLatitude = Number(restaurant?.latitude);
+  const restaurantLongitude = Number(restaurant?.longitude);
+  if (coordinatesAreValid(restaurantLatitude, restaurantLongitude)) {
+    return { latitude: restaurantLatitude, longitude: restaurantLongitude, source: "restaurant_current" };
+  }
+
+  return {
+    latitude: Number(pkg.latitude),
+    longitude: Number(pkg.longitude),
+    source: "package_snapshot",
+  };
+}
+
 function waitingPackagePriority(pkg) {
   return new Date(pkg.createdAt).getTime();
 }
@@ -6042,11 +6067,18 @@ function evaluateAssignmentFailure(state, pkg) {
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
   const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
+  const assignmentCoordinates = packageAssignmentCoordinates(state, pkg);
   const availableCandidates = state.couriers
     .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS)
     .map((courier) => ({
       courier,
-      distance: distance(courier.latitude, courier.longitude, pkg.latitude, pkg.longitude),
+      distance: distance(
+        courier.latitude,
+        courier.longitude,
+        assignmentCoordinates.latitude,
+        assignmentCoordinates.longitude
+      ),
+      freshLocation: courierLocationIsFresh(courier),
       load: Math.max(
         occupiedCourierLoads.get(courier.id) || 0,
         activeLoadMap.get(courier.id) || 0
@@ -6054,24 +6086,47 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     }))
     .filter(({ courier, load }) => load < 1 && !excludedCourierIds.has(courier.id));
 
-  const nearbyCandidates = availableCandidates
+  const nearbyFreshCandidates = availableCandidates
     .filter(({ distance: courierDistance }) =>
       Number.isFinite(courierDistance) && courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     )
-    .map((candidate) => ({ ...candidate, selectionMode: "distance" }));
+    .filter(({ freshLocation }) => freshLocation)
+    .map((candidate) => ({ ...candidate, selectionMode: "distance_fresh" }));
 
   const packageZone = trimmed(pkg.zone).toLowerCase();
-  const zoneFallbackCandidates = nearbyCandidates.length > 0 || !packageZone
+  const zoneFreshCandidates = nearbyFreshCandidates.length > 0 || !packageZone
+    ? []
+    : availableCandidates
+      .filter(({ courier, freshLocation }) => freshLocation && trimmed(courier.zone).toLowerCase() === packageZone)
+      .map((candidate) => ({ ...candidate, selectionMode: "zone_fallback_fresh" }));
+
+  const nearbyStaleCandidates = nearbyFreshCandidates.length > 0 || zoneFreshCandidates.length > 0
+    ? []
+    : availableCandidates
+      .filter(({ distance: courierDistance }) =>
+        Number.isFinite(courierDistance) && courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
+      )
+      .map((candidate) => ({ ...candidate, selectionMode: "distance_stale_fallback" }));
+
+  const zoneStaleCandidates = nearbyFreshCandidates.length > 0 || zoneFreshCandidates.length > 0 || nearbyStaleCandidates.length > 0 || !packageZone
     ? []
     : availableCandidates
       .filter(({ courier }) => trimmed(courier.zone).toLowerCase() === packageZone)
-      .map((candidate) => ({ ...candidate, selectionMode: "zone_fallback" }));
+      .map((candidate) => ({ ...candidate, selectionMode: "zone_stale_fallback" }));
 
-  const ranked = (nearbyCandidates.length > 0 ? nearbyCandidates : zoneFallbackCandidates)
+  const selectedPool = nearbyFreshCandidates.length > 0
+    ? nearbyFreshCandidates
+    : zoneFreshCandidates.length > 0
+      ? zoneFreshCandidates
+      : nearbyStaleCandidates.length > 0
+        ? nearbyStaleCandidates
+        : zoneStaleCandidates;
+
+  const ranked = selectedPool
     .sort((left, right) => {
       const leftDistance = Number.isFinite(left.distance) ? left.distance : Number.POSITIVE_INFINITY;
       const rightDistance = Number.isFinite(right.distance) ? right.distance : Number.POSITIVE_INFINITY;
-      return left.load - right.load || leftDistance - rightDistance || left.courier.name.localeCompare(right.courier.name, "tr");
+      return leftDistance - rightDistance || left.load - right.load || left.courier.name.localeCompare(right.courier.name, "tr");
     });
 
   if (ASSIGNMENT_DEBUG_LOGS) {
@@ -6085,6 +6140,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       courierCount: state.couriers.length,
       eligibleCourierIds: ranked.map((item) => item.courier.id),
       selectionMode: ranked[0]?.selectionMode || "none",
+      coordinateSource: assignmentCoordinates.source,
     });
   }
 
@@ -6096,8 +6152,11 @@ function candidateDistance(candidate) {
 }
 
 function candidateAssignmentReason(pkg, candidate) {
-  if (candidate?.selectionMode === "zone_fallback") {
+  if (candidate?.selectionMode?.startsWith("zone_")) {
     return `${pkg.zone} bolgesinde online ve bos kurye, GPS mesafe filtresi disinda kaldigi icin kontrollu bolge yedegiyle secildi.`;
+  }
+  if (candidate?.selectionMode === "distance_stale_fallback") {
+    return `${pkg.zone} bolgesinde guncel GPS sinyali bulunamadigi icin en yakin son bilinen online kurye secildi.`;
   }
   return `${pkg.zone} bolgesinde ${MAX_ASSIGNMENT_DISTANCE_KM} km icinde en uygun aktif kurye secildi.`;
 }
@@ -6858,6 +6917,7 @@ function decorateState(filter = {}) {
   const paginatedFilter = { ...filter, pagination };
   const state = currentState(paginatedFilter);
   const restaurantMap = new Map(state.restaurants.map((item) => [item.id, item.name]));
+  const restaurantLocationMap = new Map(state.restaurants.map((item) => [item.id, item]));
   const activeLoadMap = buildActiveLoadMap(state.packages);
 
   const couriers = state.couriers.map((courier) => ({
@@ -6868,6 +6928,8 @@ function decorateState(filter = {}) {
   const packages = state.packages.map((pkg) => ({
     ...pkg,
     restaurantName: restaurantMap.get(pkg.restaurantId) || "Bilinmeyen Restoran",
+    restaurantLat: restaurantLocationMap.get(pkg.restaurantId)?.latitude ?? pkg.restaurantLat ?? pkg.latitude,
+    restaurantLng: restaurantLocationMap.get(pkg.restaurantId)?.longitude ?? pkg.restaurantLng ?? pkg.longitude,
   }));
 
   const zones = state.zones.map((zone) => ({
