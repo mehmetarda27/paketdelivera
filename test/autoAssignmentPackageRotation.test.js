@@ -34,6 +34,17 @@ async function waitForCourier(dbFile, packageId, courierId, timeoutMs = 10000) {
   throw new Error(`${packageId} was not assigned to ${courierId}.`);
 }
 
+async function assertCourierHasNoAssignmentFor(dbFile, courierId, durationMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < durationMs) {
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    const row = db.prepare("SELECT id FROM packages WHERE assigned_courier_id = ? LIMIT 1").get(courierId);
+    db.close();
+    assert.equal(row, undefined, `${courierId} received another package before the rejection cooldown ended.`);
+    await delay(25);
+  }
+}
+
 async function rejectPackage(baseUrl, packageId, token) {
   const response = await fetch(`${baseUrl}/api/courier/packages/${packageId}/reject`, {
     method: "POST",
@@ -74,6 +85,7 @@ test("rejected package rotates through every waiting package before returning to
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
+      DELIVERA_COURIER_REJECTION_COOLDOWN_MS: "300",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -121,6 +133,7 @@ test("rejected package rotates through every waiting package before returning to
 
     await waitForCourier(dbFile, "pkg_rotation_burger", "cr_rotation");
     await rejectPackage(baseUrl, "pkg_rotation_burger", "token-rotation");
+    await assertCourierHasNoAssignmentFor(dbFile, "cr_rotation", 150);
     const flashOffer = await waitForCourier(dbFile, "pkg_rotation_flash", "cr_rotation");
     assert.equal(flashOffer.status, "assigned");
 
@@ -131,10 +144,12 @@ test("rejected package rotates through every waiting package before returning to
     assert.deepEqual(JSON.parse(rejectedBurger.assignment_tried_courier_ids_json), ["cr_rotation"]);
 
     await rejectPackage(baseUrl, "pkg_rotation_flash", "token-rotation");
+    await assertCourierHasNoAssignmentFor(dbFile, "cr_rotation", 150);
     const pizzaOffer = await waitForCourier(dbFile, "pkg_rotation_pizza", "cr_rotation");
     assert.equal(pizzaOffer.status, "assigned");
 
     await rejectPackage(baseUrl, "pkg_rotation_pizza", "token-rotation");
+    await assertCourierHasNoAssignmentFor(dbFile, "cr_rotation", 150);
     const burgerReturnsAfterRotation = await waitForCourier(dbFile, "pkg_rotation_burger", "cr_rotation");
     assert.equal(burgerReturnsAfterRotation.status, "assigned");
   } finally {

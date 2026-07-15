@@ -34,6 +34,17 @@ async function waitForCourier(dbFile, packageId, courierId, timeoutMs = 10000) {
   throw new Error(`Package was not assigned to ${courierId}.`);
 }
 
+async function assertPackageUnassignedFor(dbFile, packageId, durationMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < durationMs) {
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    const row = db.prepare("SELECT assigned_courier_id FROM packages WHERE id = ?").get(packageId);
+    db.close();
+    assert.equal(row?.assigned_courier_id, null, `${packageId} was reassigned before the rejection cooldown ended.`);
+    await delay(25);
+  }
+}
+
 async function rejectPackage(baseUrl, packageId, token) {
   const response = await fetch(`${baseUrl}/api/courier/packages/${packageId}/reject`, {
     method: "POST",
@@ -74,6 +85,7 @@ test("automatic assignment expands 5-6-7-8 km in nearest order and restarts afte
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
+      DELIVERA_COURIER_REJECTION_COOLDOWN_MS: "300",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -117,6 +129,7 @@ test("automatic assignment expands 5-6-7-8 km in nearest order and restarts afte
     assert.ok(Number(firstOffer.distance_km) <= 5);
     assert.match(firstOffer.assignment_reason, /5 km arama capinda/);
     await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-a");
+    await assertPackageUnassignedFor(dbFile, "pkg_reject_cycle", 150);
     const secondOffer = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_b");
     assert.ok(Number(secondOffer.distance_km) > 5 && Number(secondOffer.distance_km) <= 6);
     assert.match(secondOffer.assignment_reason, /6 km arama capinda/);
@@ -129,6 +142,7 @@ test("automatic assignment expands 5-6-7-8 km in nearest order and restarts afte
     assert.ok(Number(fourthOffer.distance_km) > 7 && Number(fourthOffer.distance_km) <= 8);
     assert.match(fourthOffer.assignment_reason, /8 km arama capinda/);
     await rejectPackage(baseUrl, "pkg_reject_cycle", "token-reject-d");
+    await assertPackageUnassignedFor(dbFile, "pkg_reject_cycle", 150);
     const restarted = await waitForCourier(dbFile, "pkg_reject_cycle", "cr_reject_a");
 
     assert.equal(restarted.status, "assigned");

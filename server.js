@@ -172,6 +172,7 @@ const PLATFORM_CONFIGS = {
 };
 const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETRY_MS || 15_000);
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
+const COURIER_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_COURIER_REJECTION_COOLDOWN_MS || 30_000);
 const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 5 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
@@ -5912,6 +5913,39 @@ function waitingPackagePriority(pkg) {
   return new Date(pkg.createdAt).getTime();
 }
 
+function activeCourierRejectionCooldownIds(referenceTime = Date.now()) {
+  if (COURIER_REJECTION_COOLDOWN_MS <= 0) {
+    return [];
+  }
+  const cutoff = new Date(referenceTime - COURIER_REJECTION_COOLDOWN_MS).toISOString();
+  return db.prepare(`
+    SELECT DISTINCT actor_id
+    FROM audit_logs
+    WHERE actor_role = 'courier'
+      AND action = ?
+      AND actor_id IS NOT NULL
+      AND created_at >= ?
+  `).all("courier_package_rejected", cutoff).map((row) => row.actor_id);
+}
+
+function packageRejectionCooldownRemainingMs(packageId, referenceTime = Date.now()) {
+  if (!packageId || COURIER_REJECTION_COOLDOWN_MS <= 0) {
+    return 0;
+  }
+  const latestRejection = db.prepare(`
+    SELECT created_at
+    FROM audit_logs
+    WHERE action = ? AND package_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get("courier_package_rejected", packageId);
+  const rejectedAt = new Date(latestRejection?.created_at || "").getTime();
+  if (!Number.isFinite(rejectedAt)) {
+    return 0;
+  }
+  return Math.max(0, COURIER_REJECTION_COOLDOWN_MS - (referenceTime - rejectedAt));
+}
+
 function reserveCourier(loadMap, courierId, delta) {
   if (!courierId) {
     return;
@@ -6067,6 +6101,7 @@ function evaluateAssignmentFailure(state, pkg) {
 
 function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
+  const cooldownCourierIds = new Set(options.cooldownCourierIds || activeCourierRejectionCooldownIds());
   const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
   const assignmentCoordinates = packageAssignmentCoordinates(state, pkg);
   const availableCandidates = state.couriers
@@ -6088,6 +6123,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     .filter(({ courier, distance: courierDistance, load }) =>
       load < 1 &&
       !excludedCourierIds.has(courier.id) &&
+      !cooldownCourierIds.has(courier.id) &&
       Number.isFinite(courierDistance) &&
       courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     );
@@ -6122,6 +6158,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       packageLat: pkg.latitude,
       packageLng: pkg.longitude,
       skippedCourierIds: [...excludedCourierIds],
+      cooldownCourierIds: [...cooldownCourierIds],
       courierCount: state.couriers.length,
       eligibleCourierIds: ranked.map((item) => item.courier.id),
       selectionMode: ranked[0]?.selectionMode || "none",
@@ -6150,6 +6187,10 @@ function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
       status: packageStatus,
       assignmentStatus: assignmentStatusForOrder(packageStatus),
     };
+  }
+
+  if (packageRejectionCooldownRemainingMs(pkg.id) > 0) {
+    return pkg;
   }
 
   const ranked = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
@@ -6415,6 +6456,15 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}
     return false;
   }
 
+  const rejectionCooldownRemainingMs = packageRejectionCooldownRemainingMs(pkg.id);
+  if (rejectionCooldownRemainingMs > 0) {
+    logger.debug("Assignment waiting after courier rejection", {
+      packageId: pkg.id,
+      remainingMs: rejectionCooldownRemainingMs,
+    });
+    return false;
+  }
+
   const excludedCourierIds = normalizeIdList([
     ...(pkg.assignmentTriedCourierIds || []),
     ...(offerExpired && pkg.assignedCourierId ? [pkg.assignedCourierId] : []),
@@ -6423,7 +6473,10 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}
     state,
     pkg,
     occupiedCourierLoads,
-    excludedCourierIds.length ? { excludedCourierIds } : {}
+    {
+      ...(excludedCourierIds.length ? { excludedCourierIds } : {}),
+      cooldownCourierIds: options.cooldownCourierIds,
+    }
   );
 
   if (ranked.length === 0 && excludedCourierIds.length > 0 && options.allowRoundRestart === false) {
@@ -6432,7 +6485,9 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}
   }
 
   if (ranked.length === 0 && excludedCourierIds.length > 0) {
-    const nextRound = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
+    const nextRound = rankEligibleCouriers(state, pkg, occupiedCourierLoads, {
+      cooldownCourierIds: options.cooldownCourierIds,
+    });
     if (nextRound.length > 0) {
       logger.info("Assignment courier round restarted", {
         packageId: pkg.id,
@@ -6838,11 +6893,13 @@ function rebalancePackages() {
     })
     .sort((left, right) => waitingPackagePriority(left) - waitingPackagePriority(right));
 
+  const cooldownCourierIds = activeCourierRejectionCooldownIds();
   const deferredRoundPackageIds = new Set();
   candidatePackages.forEach((pkg) => {
     attemptPackageAssignment(state, pkg, occupiedCourierLoads, {
       allowRoundRestart: false,
       deferredRoundPackageIds,
+      cooldownCourierIds,
     });
   });
 
@@ -6851,7 +6908,7 @@ function rebalancePackages() {
     if (!deferredPackage || deferredPackage.assignedCourierId) {
       return;
     }
-    attemptPackageAssignment(state, deferredPackage, occupiedCourierLoads);
+    attemptPackageAssignment(state, deferredPackage, occupiedCourierLoads, { cooldownCourierIds });
   });
 
   } finally {
@@ -6871,6 +6928,18 @@ function scheduleRebalancePackages() {
       logger.warn("Scheduled rebalance failed", { error });
     }
   });
+}
+
+function scheduleRebalanceAfterCourierRejection() {
+  const delayMs = Math.max(0, COURIER_REJECTION_COOLDOWN_MS) + 25;
+  const timer = setTimeout(() => {
+    try {
+      rebalancePackages();
+    } catch (error) {
+      logger.warn("Post-rejection assignment retry failed", { error });
+    }
+  }, delayMs);
+  timer.unref?.();
 }
 
 function retryAwaitingAssignmentPackages() {
@@ -13818,8 +13887,6 @@ async function handleApi(req, res, pathname) {
       packageId
     );
 
-    rebalancePackages();
-    const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
       actorRole: "courier",
       actorId: session.courier_id,
@@ -13829,8 +13896,12 @@ async function handleApi(req, res, pathname) {
       details: {
         from: ASSIGNED_STATUS,
         to: AWAITING_ASSIGNMENT_STATUS,
+        cooldownMs: COURIER_REJECTION_COOLDOWN_MS,
       },
     });
+    rebalancePackages();
+    scheduleRebalanceAfterCourierRejection();
+    const workspace = buildCourierWorkspace(session.courier_id);
     broadcastLiveEvent({
       type: "assignment-waiting",
       courierId: session.courier_id,
