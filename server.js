@@ -6408,7 +6408,7 @@ async function handleAssignmentRetry(packageId) {
   setPackageTriedCouriers(packageId, []);
 }
 
-function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
+function attemptPackageAssignment(state, pkg, occupiedCourierLoads, options = {}) {
   const packageStatus = normalizeStatus(pkg.status);
   const offerExpired = isCourierOfferExpired(pkg);
   if (!isAssignableOrderStatus(packageStatus) || (packageStatus === ASSIGNED_STATUS && !offerExpired)) {
@@ -6425,6 +6425,11 @@ function attemptPackageAssignment(state, pkg, occupiedCourierLoads) {
     occupiedCourierLoads,
     excludedCourierIds.length ? { excludedCourierIds } : {}
   );
+
+  if (ranked.length === 0 && excludedCourierIds.length > 0 && options.allowRoundRestart === false) {
+    options.deferredRoundPackageIds?.add(pkg.id);
+    return false;
+  }
 
   if (ranked.length === 0 && excludedCourierIds.length > 0) {
     const nextRound = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
@@ -6833,8 +6838,20 @@ function rebalancePackages() {
     })
     .sort((left, right) => waitingPackagePriority(left) - waitingPackagePriority(right));
 
+  const deferredRoundPackageIds = new Set();
   candidatePackages.forEach((pkg) => {
-    attemptPackageAssignment(state, pkg, occupiedCourierLoads);
+    attemptPackageAssignment(state, pkg, occupiedCourierLoads, {
+      allowRoundRestart: false,
+      deferredRoundPackageIds,
+    });
+  });
+
+  deferredRoundPackageIds.forEach((packageId) => {
+    const deferredPackage = state.packages.find((pkg) => pkg.id === packageId);
+    if (!deferredPackage || deferredPackage.assignedCourierId) {
+      return;
+    }
+    attemptPackageAssignment(state, deferredPackage, occupiedCourierLoads);
   });
 
   } finally {
