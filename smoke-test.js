@@ -1282,10 +1282,36 @@ async function run() {
     bootstrap = await request("/api/admin/bootstrap", {
       headers: adminHeaders,
     });
-    const failedPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
-    if (!failedPackage || failedPackage.status !== "failed" || failedPackage.failureReason !== "teknik_sorun") {
+    const issueCancelledPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
+    if (
+      !issueCancelledPackage
+      || issueCancelledPackage.status !== "cancelled"
+      || issueCancelledPackage.failureReason !== "teknik_sorun"
+      || issueCancelledPackage.assignedCourierId !== createdCourier3.id
+    ) {
       throw new Error("Kurye reddetme/sorun bildirme akisi beklenen sekilde calismadi.");
     }
+
+    const retryAddress = `Mersin yeniden atama teslim noktasi ${Date.now()} no 51`;
+    const retryPackageState = await request("/api/restaurant/packages", {
+      method: "POST",
+      headers: restaurantHeaders,
+      body: JSON.stringify({
+        restaurantId: createdRestaurantRecord.id,
+        deliveryAddress: retryAddress,
+        packageType: "Yeniden Atama Test",
+        orderAmount: 145,
+        customerName: "Yeniden Atama Musteri",
+        phone: "05550000005",
+      }),
+    });
+    const retryPackage = retryPackageState.packages.find((pkg) => pkg.deliveryAddress === retryAddress);
+    if (!retryPackage) {
+      throw new Error("Yeniden atama test paketi olusturulamadi.");
+    }
+    bootstrap = await request("/api/admin/bootstrap", {
+      headers: adminHeaders,
+    });
 
     // Yeniden atama testi tek paketi olcmeli. Onceki senaryolardan kalan
     // atanabilir paketler ayni bos kuryeyi kaparak testi rastlantisal hale
@@ -1301,18 +1327,13 @@ async function run() {
       "failed",
     ]);
     for (const candidate of bootstrap.packages) {
-      if (candidate.id === overridePackage.id || !assignableSmokeStatuses.has(candidate.status)) continue;
+      if (candidate.id === retryPackage.id || !assignableSmokeStatuses.has(candidate.status)) continue;
       await request(`/api/admin/packages/${candidate.id}/status`, {
         method: "PATCH",
         headers: adminHeaders,
         body: JSON.stringify({ status: "cancelled" }),
       });
     }
-    await request(`/api/admin/packages/${overridePackage.id}/status`, {
-      method: "PATCH",
-      headers: adminHeaders,
-      body: JSON.stringify({ status: "awaiting_assignment" }),
-    });
     await request(`/api/admin/couriers/${createdCourier.id}/availability`, {
       method: "PATCH",
       headers: adminHeaders,
@@ -1334,7 +1355,7 @@ async function run() {
       body: JSON.stringify({ available: false }),
     });
 
-    await request(`/api/admin/packages/${overridePackage.id}/unassign`, {
+    await request(`/api/admin/packages/${retryPackage.id}/unassign`, {
       method: "POST",
       headers: adminHeaders,
       body: "{}",
@@ -1343,7 +1364,7 @@ async function run() {
     bootstrap = await request("/api/admin/bootstrap", {
       headers: adminHeaders,
     });
-    const retriedPackage = bootstrap.packages.find((pkg) => pkg.id === overridePackage.id);
+    const retriedPackage = bootstrap.packages.find((pkg) => pkg.id === retryPackage.id);
     if (!retriedPackage || retriedPackage.status !== "assigned") {
       throw new Error("Unassign sonrasi yeniden atama mantigi calismadi.");
     }

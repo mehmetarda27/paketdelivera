@@ -9,6 +9,13 @@ const ADMIN_TOKEN_KEY = "deliveraAdminToken";
 const ADMIN_REFRESH_TOKEN_KEY = "deliveraAdminRefreshToken";
 const ADMIN_REFRESH_MS = 20_000;
 const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 4;
+const ADMIN_COURIER_ISSUE_LABELS = {
+  musteri_yok: "Müşteri yok",
+  adres_bulunamadi: "Adres sorunu",
+  restoran_hazir_degil: "Restoran hazır değil",
+  teknik_sorun: "Teknik sorun",
+  diger: "Diğer",
+};
 
 const adminState = {
   data: null,
@@ -814,6 +821,11 @@ function orderHistoryRestaurantName(pkg) {
   return pkg.restaurantName || adminState.data?.restaurants?.find((restaurant) => restaurant.id === pkg.restaurantId)?.name || "Bilinmeyen Restoran";
 }
 
+function orderHistoryIssueLabel(pkg) {
+  if (String(pkg?.status || "").toLowerCase() !== "cancelled") return "";
+  return ADMIN_COURIER_ISSUE_LABELS[String(pkg?.failureReason || "").toLowerCase()] || "";
+}
+
 function renderOrderHistoryOrders(orders = [], pagination = null) {
   if (!adminRefs.orderHistoryList) return;
   const total = Number(pagination?.total ?? orders.length);
@@ -840,7 +852,10 @@ function renderOrderHistoryOrders(orders = [], pagination = null) {
           <strong>${htmlSafe(pkg.trackingNo || pkg.externalOrderNo || pkg.id)}</strong>
           <small>${htmlSafe(pkg.sourcePlatform || pkg.platform || "Manuel")} · ${htmlSafe(orderHistoryRestaurantName(pkg))}</small>
         </div>
-        <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+        <span class="order-history-status-stack">
+          <span class="status-badge ${statusClassName(pkg.status)}">${statusLabel(pkg.status)}</span>
+          ${orderHistoryIssueLabel(pkg) ? `<span class="order-history-issue-note">${htmlSafe(orderHistoryIssueLabel(pkg))}</span>` : ""}
+        </span>
       </div>
       <div class="order-history-detail-grid">
         <div><span>Müşteri</span><strong>${htmlSafe(pkg.recipient || "-")}</strong><small>${htmlSafe(pkg.phone || "-")}</small></div>

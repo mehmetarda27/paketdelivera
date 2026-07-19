@@ -1372,7 +1372,9 @@ function renderPackages(packages) {
         });
         courierState.packageActionDrafts.delete(pkg.id);
         hydrateCourierWorkspace(updatedWorkspace);
-        showToast("Paket durumu güncellendi.");
+        showToast(status === "failed"
+          ? "Paket sorun nedeniyle iptal edildi. Paket ücreti hakedişe eklendi."
+          : "Paket durumu güncellendi.");
       } catch (error) {
         showToast(error.message || "Durum güncellenemedi.", "error");
       }
@@ -1572,7 +1574,7 @@ function renderCourierHistory(packages, historySource = null) {
         </div>
         <div>
           <span>Sorun</span>
-          <strong>${pkg.failureReason || "-"}</strong>
+          <strong>${courierFailureReasonLabel(pkg.failureReason)}</strong>
         </div>
       </div>
     `;

@@ -2388,6 +2388,20 @@ function normalizeCourierFailureReason(value) {
   return COURIER_FAILURE_REASONS.has(normalized) ? normalized : "";
 }
 
+function isCourierIssueCancellation(pkg) {
+  return normalizeStatus(pkg?.status) === CANCELED_STATUS && Boolean(
+    normalizeCourierFailureReason(pkg?.failureReason || pkg?.failure_reason || "")
+  );
+}
+
+function countsForCourierPackageFee(pkg) {
+  return normalizeStatus(pkg?.status) === DELIVERED_STATUS || isCourierIssueCancellation(pkg);
+}
+
+function courierPackageFeeTimestamp(pkg) {
+  return pkg?.deliveredAt || pkg?.delivered_at || pkg?.failedAt || pkg?.failed_at || pkg?.updatedAt || pkg?.updated_at || pkg?.createdAt || pkg?.created_at;
+}
+
 function normalizeOrderSource(source, sourcePlatform = "") {
   const incoming = trimmed(source).toLowerCase();
   if (incoming === "manual" || incoming === "external_manual" || incoming === "restaurant_panel") {
@@ -5177,8 +5191,8 @@ function closeCourierShift(courierId, endedAt = nowIso()) {
 
 function summarizeCourierPackagesForRange(packages, start, end, perPackageFee = null) {
   const result = packages
-    .filter((pkg) => pkg.status === DELIVERED_STATUS)
-    .filter((pkg) => isWithinRange(pkg.deliveredAt || pkg.updatedAt || pkg.createdAt, start, end))
+    .filter((pkg) => countsForCourierPackageFee(pkg))
+    .filter((pkg) => isWithinRange(courierPackageFeeTimestamp(pkg), start, end))
     .reduce((summary, pkg) => {
       const amount = normalizeMoney(pkg.orderAmount);
       summary.deliveredCount += 1;
@@ -5356,9 +5370,9 @@ function buildCourierWorkspace(courierId, options = {}) {
   const historyPackages = getCourierHistoryPackages(courierId);
   const deliveredPackages = mapPackageRowsWithRestaurants(db.prepare(`
     SELECT * FROM packages
-    WHERE assigned_courier_id = ? AND status = ?
+    WHERE assigned_courier_id = ? AND status IN (?, ?)
     ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
-  `).all(courierId, DELIVERED_STATUS));
+  `).all(courierId, DELIVERED_STATUS, CANCELED_STATUS)).filter(countsForCourierPackageFee);
   const packagesPagination = pageMeta(countTable("packages", "assigned_courier_id = ?", [courierId]), pagination);
   const todayPackages = deliveredPackagesForCourierOnDate(courierId, dayKey());
   const daySummary = summarizeCourierDay(todayPackages);
@@ -5566,11 +5580,11 @@ function deliveredPackagesForCourierEarnings(courierId, reportDate = dayKey()) {
   const rows = db.prepare(`
     SELECT * FROM packages
     WHERE assigned_courier_id = ?
-      AND status = ?
+      AND status IN (?, ?)
       AND substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) = ?
     ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC
-  `).all(courierId, DELIVERED_STATUS, reportDate);
-  return mapPackageRowsWithRestaurants(rows);
+  `).all(courierId, DELIVERED_STATUS, CANCELED_STATUS, reportDate);
+  return mapPackageRowsWithRestaurants(rows).filter(countsForCourierPackageFee);
 }
 
 function mapCourierEarningItemRow(row, packageRow = null) {
@@ -5594,6 +5608,7 @@ function mapCourierEarningItemRow(row, packageRow = null) {
       paymentMethod: pkg.paymentMethod,
       deliveredAt: pkg.deliveredAt,
       status: pkg.status,
+      failureReason: pkg.failureReason || "",
       courierNote: pkg.courierCollectionNote || pkg.customerNote || pkg.note || "",
     } : null,
     createdAt: row.created_at,
@@ -13717,7 +13732,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    const nextStatus = normalizeStatus(body.status || target.status);
+    const requestedStatus = normalizeStatus(body.status || target.status);
     const currentStatus = normalizeStatus(target.status);
     const paymentMethodCode = normalizePaymentMethodCode(target.payment_method);
     let nextPaymentStatus = body.paymentStatus
@@ -13730,18 +13745,21 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    if (!COURIER_ALLOWED_STATUSES.has(nextStatus)) {
+    if (!COURIER_ALLOWED_STATUSES.has(requestedStatus)) {
       sendJson(res, 400, { error: "Kurye bu duruma gecis yapamaz." });
       return;
     }
+
+    const failureReason = normalizeCourierFailureReason(body.failureReason || body.failure_reason || "");
+    const courierIssueReported = requestedStatus === FAILED_STATUS && Boolean(failureReason);
+    const nextStatus = courierIssueReported ? CANCELED_STATUS : requestedStatus;
 
     if (!canTransitionStatus(currentStatus, nextStatus)) {
       sendJson(res, 400, { error: `Gecersiz durum gecisi: ${currentStatus} -> ${nextStatus}` });
       return;
     }
 
-    const failureReason = normalizeCourierFailureReason(body.failureReason || body.failure_reason || "");
-    if (nextStatus === FAILED_STATUS && !failureReason) {
+    if (requestedStatus === FAILED_STATUS && !failureReason) {
       sendJson(res, 400, {
         error: "Basarisiz durumuna gecmek icin gecerli bir sorun nedeni secilmelidir.",
         allowedFailureReasons: [...COURIER_FAILURE_REASONS],
@@ -13787,7 +13805,7 @@ async function handleApi(req, res, pathname) {
 
     updatePackageLifecycle(packageId, {
       status: nextStatus,
-      failureReason: nextStatus === FAILED_STATUS ? failureReason : "",
+      failureReason: courierIssueReported ? failureReason : "",
       paymentStatus: nextPaymentStatus,
       paymentCollectedBy: normalizeCollectedBy(nextPaymentStatus, target.payment_collected_by),
       collectedAmount: nextPaymentStatus === PAYMENT_ISSUE_STATUS ? 0 : target.order_amount,
@@ -13819,6 +13837,10 @@ async function handleApi(req, res, pathname) {
         await notifyPlatformOrderDelivered(target.source_platform, target.external_order_id || target.external_order_no, deliveredPackage);
       }
     }
+    if (courierIssueReported) {
+      const cancelledPackage = getPackageById(packageId);
+      updatePlatformOrderStatusByPackage(cancelledPackage || target, "cancelled");
+    }
 
     const workspace = buildCourierWorkspace(session.courier_id);
     writeAuditLog({
@@ -13830,6 +13852,8 @@ async function handleApi(req, res, pathname) {
       details: {
         from: currentStatus,
         to: nextStatus,
+        failureReason: courierIssueReported ? failureReason : null,
+        courierPackageFeeEligible: courierIssueReported,
       },
     });
     broadcastLiveEvent({
