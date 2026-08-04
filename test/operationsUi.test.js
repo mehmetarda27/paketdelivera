@@ -176,6 +176,7 @@ test("restaurant active views exclude closed orders and listen for live order ev
     };`);
     await new Promise((resolve) => dom.window.setTimeout(resolve, 20));
 
+    const recentTimestamp = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const activePackage = {
       id: "pkg_active",
       trackingNo: "PKT-ACTIVE",
@@ -184,8 +185,8 @@ test("restaurant active views exclude closed orders and listen for live order ev
       sourcePlatform: "Trendyol Yemek",
       restaurantName: "FLASH HAN TANTUNİ",
       recipient: "Aktif Musteri",
-      createdAt: "2026-07-13T18:00:00.000Z",
-      updatedAt: "2026-07-13T18:00:00.000Z",
+      createdAt: recentTimestamp,
+      updatedAt: recentTimestamp,
       items: [],
     };
     const deliveredPackage = {
@@ -194,8 +195,8 @@ test("restaurant active views exclude closed orders and listen for live order ev
       trackingNo: "PKT-DELIVERED",
       status: "delivered",
       recipient: "Teslim Musteri",
-      updatedAt: "2026-07-13T18:05:00.000Z",
-      deliveredAt: "2026-07-13T18:05:00.000Z",
+      updatedAt: recentTimestamp,
+      deliveredAt: recentTimestamp,
     };
     const data = {
       packages: [activePackage, deliveredPackage],

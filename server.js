@@ -7863,7 +7863,6 @@ function createOrGetExternalPlatformOrder(body, req) {
   }
   const restaurant = findRestaurantByExternalRestaurantId(order.platformRestaurantId, order.platform);
   if (!restaurant) {
-    const error = validationError("Platform restoran ID ile eslesen restoran bulunamadi.");
     logger.warn("platform_restaurant_not_matched", {
       request_id: req.requestId,
       platform: order.platformKey,
@@ -7878,7 +7877,15 @@ function createOrGetExternalPlatformOrder(body, req) {
       platform_restaurant_id: order.platformRestaurantId,
       platform_order_id: order.platformOrderId,
     });
-    throw error;
+    const unmatchedOrder = canonicalPlatformOrderToUnmatched(order, body);
+    const unmatchedOrderId = persistUnmatchedIncomingOrder(unmatchedOrder, req);
+    return {
+      unmatched: true,
+      unmatchedOrderId,
+      duplicate: false,
+      platformOrder: null,
+      package: null,
+    };
   }
   logger.info("platform_restaurant_matched", {
     request_id: req.requestId,
@@ -8443,6 +8450,62 @@ function upsertUnmatchedOrder(order) {
     stamp
   );
   return id;
+}
+
+function canonicalPlatformOrderToUnmatched(order = {}, rawPayload = null) {
+  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : (order.rawPayload || {});
+  const normalizedPayload = normalizeWebhookOrderPayload(payload);
+  return {
+    ...normalizedPayload,
+    externalOrderId: trimmed(
+      order.externalOrderId ||
+      order.platformOrderId ||
+      order.orderId ||
+      order.posentegraId ||
+      normalizedPayload.externalOrderId
+    ),
+    posentegraId: trimmed(order.posentegraId || normalizedPayload.posentegraId),
+    confirmationId: trimmed(order.confirmationId || normalizedPayload.confirmationId),
+    externalRestaurantId: trimmed(
+      order.externalRestaurantId ||
+      order.platformRestaurantId ||
+      normalizedPayload.externalRestaurantId
+    ),
+    platform: trimmed(order.platform || normalizedPayload.platform) || "Diger",
+    platformSlug: trimmed(order.platformKey || order.platformSlug || normalizedPayload.platformSlug),
+    providerName: trimmed(order.providerName || normalizedPayload.providerName || order.platform),
+    customerName: trimmed(order.customerName || normalizedPayload.customerName),
+    customerPhone: trimmed(order.customerPhone || order.phone || normalizedPayload.customerPhone),
+    totalPrice: normalizeMoney(order.totalAmount ?? order.totalPrice ?? normalizedPayload.totalPrice),
+    rawPayload: payload,
+  };
+}
+
+function persistUnmatchedIncomingOrder(order, req = null, options = {}) {
+  const unmatchedId = upsertUnmatchedOrder(order);
+  logPlatformRestaurantNotMatched(order, req);
+  if (options.logApiAttempt !== false) {
+    logApiWebhookAttempt({
+      req,
+      order,
+      isMatched: false,
+      httpStatus: Number(options.httpStatus || 202),
+      status: "unmatched",
+    });
+  }
+  broadcastLiveEvent({
+    type: "order:unmatched",
+    message: `Eslestirilemeyen platform siparisi alindi: ${order.externalRestaurantId || "-"}`,
+  });
+  logger.warn("unmatched_order_persisted", {
+    request_id: req?.requestId || null,
+    unmatched_order_id: unmatchedId,
+    platform: platformApiKey(order.platform || order.platformSlug || order.providerName),
+    platform_restaurant_id: order.externalRestaurantId || null,
+    platform_order_id: order.externalOrderId || order.confirmationId || null,
+    pid: order.posentegraId || null,
+  });
+  return unmatchedId;
 }
 
 function resolveUnmatchedOrderForMatchedPackage(order, restaurantId, packageId) {
@@ -9723,6 +9786,38 @@ function findPlatformRestaurant(platform, platformRestaurantId) {
   return { account, restaurant };
 }
 
+function requestHasGlobalWebhookSecret(req) {
+  if (!WEBHOOK_SECRET) return false;
+  return [
+    req.headers["x-webhook-secret"],
+    req.headers["x-platform-secret"],
+    req.headers["x-api-key"],
+    getBearerToken(req),
+  ].some((value) => timingSafeStringEqual(value, WEBHOOK_SECRET));
+}
+
+function findAuthorizedPlatformWebhookAccount(platform, req, rawBody) {
+  const normalizedPlatform = normalizePlatformInput(platform);
+  const accounts = getPlatformAccounts().filter((account) =>
+    account.active && normalizePlatformInput(account.platform) === normalizedPlatform
+  );
+  for (const account of accounts) {
+    const restaurant = getRestaurants({ restaurantId: account.restaurantId })[0] || null;
+    if (!restaurant) continue;
+    const adapter = getPlatformAdapter(normalizePlatformKey(account.platform));
+    const signature = verifyPlatformSignature({ req, account, restaurant, rawBody });
+    if (
+      signature.ok ||
+      adapter.verifyWebhook(req, account) ||
+      verifySimplePlatformSecret(account, restaurant, req) ||
+      verifyPlatformWebhookAuth(account, req, rawBody)
+    ) {
+      return { account, restaurant };
+    }
+  }
+  return null;
+}
+
 function createSimplePlatformPayload(order, restaurant) {
   const source = order.source === "platform_polling" ? "platform_polling" : "platform_webhook";
   return {
@@ -10377,6 +10472,15 @@ async function handleApi(req, res, pathname) {
     if (!requireExternalApiKey(req, res)) return;
     const { json: body } = await readRequestBody(req);
     const result = createOrGetExternalPlatformOrder(body, req);
+    if (result.unmatched) {
+      sendJson(res, 202, {
+        ok: true,
+        matched: false,
+        unmatchedOrderId: result.unmatchedOrderId,
+        message: "Siparis alindi ve Eslestirilemeyen Siparisler kuyruguna kaydedildi.",
+      });
+      return;
+    }
     sendJson(res, result.duplicate ? 200 : 201, {
       ok: true,
       duplicate: result.duplicate,
@@ -10476,13 +10580,7 @@ async function handleApi(req, res, pathname) {
     try {
       const restaurant = findRestaurantByExternalRestaurantId(order.externalRestaurantId, order.platformSlug || order.platform);
       if (!restaurant) {
-        const unmatchedId = upsertUnmatchedOrder(order);
-        logPlatformRestaurantNotMatched(order, req);
-        logApiWebhookAttempt({ req, order, isMatched: false, httpStatus: 200, status: "unmatched" });
-        broadcastLiveEvent({
-          type: "order:unmatched",
-          message: `Eslestirilemeyen platform siparisi alindi: ${order.externalRestaurantId || "-"}`,
-        });
+        const unmatchedId = persistUnmatchedIncomingOrder(order, req, { httpStatus: 200 });
         sendWebhookPosTicket(res, unmatchedId, {
           success: true,
           matched: false,
@@ -13112,6 +13210,43 @@ async function handleApi(req, res, pathname) {
     const match = findPlatformRestaurant(order.platform, order.platformRestaurantId);
 
     if (!match) {
+      const authorizedFallback = requestHasGlobalWebhookSecret(req) || findAuthorizedPlatformWebhookAccount(order.platform, req, raw);
+      if (authorizedFallback) {
+        const unmatchedOrder = canonicalPlatformOrderToUnmatched(order, body);
+        const unmatchedOrderId = persistUnmatchedIncomingOrder(unmatchedOrder, req, { logApiAttempt: false, httpStatus: 202 });
+        logWebhookAttempt({
+          restaurantId: null,
+          sourcePlatform: order.platform,
+          externalOrderNo: order.orderId,
+          signatureValid: true,
+          responseStatus: 202,
+          requestBody: raw,
+          requestId: req.requestId,
+          externalRestaurantId: order.platformRestaurantId,
+          externalOrderId: order.orderId,
+          isMatched: false,
+          status: "unmatched",
+        });
+        logPlatformEvent({
+          platform: order.platform,
+          restaurantId: null,
+          platformAccountId: authorizedFallback.account?.id || null,
+          eventType: "webhook",
+          requestId: req.requestId,
+          status: "unmatched",
+          httpStatus: 202,
+          errorCode: HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED,
+          errorMessage: "Restaurant/platform match failed; order persisted as unmatched",
+          metadata: { platformRestaurantId: order.platformRestaurantId, orderId: order.orderId, unmatchedOrderId },
+        });
+        sendJson(res, 202, {
+          ok: true,
+          matched: false,
+          unmatchedOrderId,
+          message: "Order accepted as unmatched",
+        });
+        return;
+      }
       logWebhookAttempt({
         restaurantId: null,
         sourcePlatform: order.platform,
@@ -13288,6 +13423,47 @@ async function handleApi(req, res, pathname) {
     const { raw, json: body } = await readRequestBody(req);
     const account = resolvePlatformAccountForWebhook(normalizedPlatform, req, body);
     if (!account) {
+      const authorizedFallback = requestHasGlobalWebhookSecret(req) || findAuthorizedPlatformWebhookAccount(normalizedPlatform, req, raw);
+      if (authorizedFallback) {
+        const unmatchedOrder = normalizeWebhookOrderPayload({ ...body, platform: normalizedPlatform });
+        const unmatchedOrderId = persistUnmatchedIncomingOrder(unmatchedOrder, req, { logApiAttempt: false, httpStatus: 202 });
+        logWebhookAttempt({
+          restaurantId: null,
+          sourcePlatform: normalizedPlatform,
+          externalOrderNo: unmatchedOrder.externalOrderId || unmatchedOrder.confirmationId,
+          signatureValid: true,
+          responseStatus: 202,
+          requestBody: raw,
+          requestId: req.requestId,
+          externalRestaurantId: unmatchedOrder.externalRestaurantId,
+          externalOrderId: unmatchedOrder.externalOrderId,
+          isMatched: false,
+          status: "unmatched",
+        });
+        logPlatformEvent({
+          platform: normalizedPlatform,
+          restaurantId: null,
+          platformAccountId: authorizedFallback.account?.id || null,
+          eventType: "webhook",
+          requestId: req.requestId,
+          status: "unmatched",
+          httpStatus: 202,
+          errorCode: HEALTH_ERROR_CODES.PROVIDER_NOT_CONFIGURED,
+          errorMessage: "Store/vendor match failed; order persisted as unmatched",
+          metadata: {
+            externalRestaurantId: unmatchedOrder.externalRestaurantId,
+            externalOrderId: unmatchedOrder.externalOrderId,
+            unmatchedOrderId,
+          },
+        });
+        sendJson(res, 202, {
+          ok: true,
+          matched: false,
+          unmatchedOrderId,
+          message: "Order accepted as unmatched",
+        });
+        return;
+      }
       logWebhookAttempt({
         restaurantId: body.restaurantId,
         sourcePlatform: normalizedPlatform,
@@ -13343,7 +13519,27 @@ async function handleApi(req, res, pathname) {
 
     const restaurant = getRestaurants({ restaurantId: account.restaurantId })[0];
     if (!restaurant) {
-      sendJson(res, 404, { error: "Restoran bulunamadi." });
+      const unmatchedOrder = normalizeWebhookOrderPayload({ ...body, platform: normalizedPlatform });
+      const unmatchedOrderId = persistUnmatchedIncomingOrder(unmatchedOrder, req, { logApiAttempt: false, httpStatus: 202 });
+      logWebhookAttempt({
+        restaurantId: null,
+        sourcePlatform: normalizedPlatform,
+        externalOrderNo: unmatchedOrder.externalOrderId || unmatchedOrder.confirmationId,
+        signatureValid: true,
+        responseStatus: 202,
+        requestBody: raw,
+        requestId: req.requestId,
+        externalRestaurantId: unmatchedOrder.externalRestaurantId,
+        externalOrderId: unmatchedOrder.externalOrderId,
+        isMatched: false,
+        status: "unmatched",
+      });
+      sendJson(res, 202, {
+        ok: true,
+        matched: false,
+        unmatchedOrderId,
+        message: "Order accepted as unmatched",
+      });
       return;
     }
 
