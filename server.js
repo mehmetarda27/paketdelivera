@@ -8582,6 +8582,25 @@ function updateRestaurantPlatformIds(restaurantId, body = {}) {
   return getRestaurants({ restaurantId })[0];
 }
 
+function updateRestaurantLocation(restaurantId, body = {}) {
+  const current = db.prepare("SELECT id, x, y FROM restaurants WHERE id = ?").get(restaurantId);
+  if (!current) {
+    throw httpError(404, "Restoran bulunamadi.");
+  }
+  const { latitude, longitude } = parseLatitudeLongitude(body);
+  if (!coordinatesAreValid(latitude, longitude)) {
+    throw validationError("Restoran koordinatlari gecersiz.");
+  }
+  db.prepare("UPDATE restaurants SET x = ?, y = ? WHERE id = ?").run(latitude, longitude, restaurantId);
+  return {
+    restaurant: getRestaurants({ restaurantId })[0],
+    previousLocation: {
+      latitude: Number(current.x),
+      longitude: Number(current.y),
+    },
+  };
+}
+
 function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId, options = {}) {
   const incoming = trimmed(externalRestaurantId);
   if (!incoming) return null;
@@ -10988,6 +11007,45 @@ async function handleApi(req, res, pathname) {
       restaurants: getRestaurants({ pagination }).map((restaurant) => sanitizeRestaurant(restaurant, true)),
       pagination: restaurantsPagination({}, pagination),
     });
+    return;
+  }
+
+  const adminRestaurantLocationMatch = pathname.match(/^\/api\/admin\/restaurants\/([^/]+)\/location$/);
+  if (req.method === "PUT" && adminRestaurantLocationMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const restaurantId = decodeURIComponent(adminRestaurantLocationMatch[1]);
+      const { restaurant, previousLocation } = dbFacade.transaction(() => updateRestaurantLocation(restaurantId, body));
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "restaurant_location_updated",
+        restaurantId: restaurant.id,
+        details: {
+          previousLocation,
+          latitude: restaurant.latitude,
+          longitude: restaurant.longitude,
+        },
+      });
+      scheduleRebalancePackages();
+      broadcastLiveEvent({
+        type: "restaurant-location-updated",
+        restaurantId: restaurant.id,
+        message: "Restoran konumu admin tarafindan guncellendi.",
+      });
+      sendJson(res, 200, {
+        ok: true,
+        restaurant: sanitizeRestaurant(restaurant, true),
+        ...decorateState(),
+      });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
     return;
   }
 

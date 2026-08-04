@@ -211,6 +211,35 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
       posentegraRestaurantId
     );
 
+    const updatedLatitude = 36.612345;
+    const updatedLongitude = 34.323456;
+    const locationUpdateState = await request(baseUrl, `/api/admin/restaurants/${restaurantState.createdRestaurant.id}/location`, {
+      method: "PUT",
+      headers: adminHeaders,
+      body: JSON.stringify({ latitude: updatedLatitude, longitude: updatedLongitude }),
+    });
+    assert.equal(locationUpdateState.restaurant.latitude, updatedLatitude);
+    assert.equal(locationUpdateState.restaurant.longitude, updatedLongitude);
+    const persistedRestaurantLocation = readRow(dbFile, "SELECT x, y FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id);
+    assert.equal(persistedRestaurantLocation.x, updatedLatitude);
+    assert.equal(persistedRestaurantLocation.y, updatedLongitude);
+    const bootstrapAfterLocationUpdate = await request(baseUrl, "/api/admin/bootstrap", { headers: adminHeaders });
+    const updatedBootstrapRestaurant = bootstrapAfterLocationUpdate.restaurants.find((item) => item.id === restaurantState.createdRestaurant.id);
+    assert.equal(updatedBootstrapRestaurant.latitude, updatedLatitude);
+    assert.equal(updatedBootstrapRestaurant.longitude, updatedLongitude);
+
+    await assert.rejects(
+      () => request(baseUrl, `/api/admin/restaurants/${restaurantState.createdRestaurant.id}/location`, {
+        method: "PUT",
+        headers: adminHeaders,
+        body: JSON.stringify({ latitude: 999, longitude: updatedLongitude }),
+      }),
+      (error) => error.status === 400 && error.body.error === "Restoran koordinatlari gecersiz."
+    );
+    const locationAfterRejectedUpdate = readRow(dbFile, "SELECT x, y FROM restaurants WHERE id = ?", restaurantState.createdRestaurant.id);
+    assert.equal(locationAfterRejectedUpdate.x, updatedLatitude);
+    assert.equal(locationAfterRejectedUpdate.y, updatedLongitude);
+
     const courierState = await request(baseUrl, "/couriers", {
       method: "POST",
       headers: adminHeaders,
@@ -323,6 +352,10 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
     assert.ok(
       readRow(dbFile, "SELECT posentegra_id FROM packages WHERE id = ?", packageState.createdPackage.id).posentegra_id
     );
+    const bootstrapWithPackage = await request(baseUrl, "/api/admin/bootstrap", { headers: adminHeaders });
+    const packageAfterRestaurantLocationUpdate = bootstrapWithPackage.packages.find((item) => item.id === packageState.createdPackage.id);
+    assert.equal(packageAfterRestaurantLocationUpdate.restaurantLat, updatedLatitude);
+    assert.equal(packageAfterRestaurantLocationUpdate.restaurantLng, updatedLongitude);
 
     const courierLogin = await request(baseUrl, "/api/courier/login", {
       method: "POST",

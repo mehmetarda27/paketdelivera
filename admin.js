@@ -128,6 +128,10 @@ const adminRefs = {
   courierEditModal: document.getElementById("adminCourierEditModal"),
   courierEditForm: document.getElementById("adminCourierEditForm"),
   courierEditTitle: document.getElementById("adminCourierEditTitle"),
+  restaurantLocationTableBody: document.getElementById("adminRestaurantLocationTableBody"),
+  restaurantLocationModal: document.getElementById("adminRestaurantLocationModal"),
+  restaurantLocationForm: document.getElementById("adminRestaurantLocationForm"),
+  restaurantLocationTitle: document.getElementById("adminRestaurantLocationTitle"),
   financialSettingsForm: document.getElementById("adminFinancialSettingsForm"),
 };
 
@@ -775,6 +779,50 @@ function packageVisible(pkg) {
     pkg.assignedCourierName || "",
     pkg.status,
   ].join(" ").toLowerCase().includes(query);
+}
+
+function renderRestaurantLocationManagement(restaurants) {
+  const tbody = adminRefs.restaurantLocationTableBody;
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!Array.isArray(restaurants) || restaurants.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="soft-copy" style="text-align: center;">Henüz restoran bulunmuyor.</td></tr>';
+    return;
+  }
+
+  restaurants.forEach((restaurant) => {
+    const latitude = Number(restaurant.latitude);
+    const longitude = Number(restaurant.longitude);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><strong>${htmlSafe(restaurant.name)}</strong></td>
+      <td><code>${htmlSafe(restaurant.id)}</code></td>
+      <td>${htmlSafe(restaurant.zone || "-")}</td>
+      <td><code>${Number.isFinite(latitude) ? latitude.toFixed(6) : "-"}</code></td>
+      <td><code>${Number.isFinite(longitude) ? longitude.toFixed(6) : "-"}</code></td>
+      <td style="text-align: right;">
+        <button type="button" class="ghost-btn restaurant-location-edit-btn" style="padding: 6px 10px;">
+          <i data-lucide="map-pin"></i> Konumu Düzenle
+        </button>
+      </td>
+    `;
+
+    tr.querySelector(".restaurant-location-edit-btn")?.addEventListener("click", () => {
+      if (!adminRefs.restaurantLocationForm || !adminRefs.restaurantLocationModal) return;
+      adminRefs.restaurantLocationForm.reset();
+      adminRefs.restaurantLocationTitle.textContent = `${restaurant.name} Konumu`;
+      adminRefs.restaurantLocationForm.elements.restaurantId.value = restaurant.id;
+      adminRefs.restaurantLocationForm.elements.latitude.value = Number.isFinite(latitude) ? latitude.toFixed(6) : "";
+      adminRefs.restaurantLocationForm.elements.longitude.value = Number.isFinite(longitude) ? longitude.toFixed(6) : "";
+      adminRefs.restaurantLocationModal.showModal();
+    });
+    tbody.appendChild(tr);
+  });
+
+  if (window.lucide) {
+    window.lucide.createIcons({ root: tbody });
+  }
 }
 
 function isAdminActivePackage(pkg) {
@@ -2182,7 +2230,7 @@ function renderRestaurantAccountingDetails(item, details) {
 function hydrateAdmin(data) {
   const nextSignature = JSON.stringify({
     stats: data.stats,
-    restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.updatedAt]),
+    restaurants: (data.restaurants || []).map((item) => [item.id, item.name, item.zone, item.latitude, item.longitude, item.updatedAt]),
     couriers: (data.couriers || []).map((item) => [item.id, item.name, item.status, item.available, item.zone, item.updatedAt, item.lastLocationAt, item.perPackageFee]),
     packages: (data.packages || []).map((item) => [item.id, item.status, item.assignmentStatus, item.assignedCourierId, item.paymentStatus, item.updatedAt]),
     webhookLogs: (data.webhookLogs || []).map((item) => [item.id, item.status, item.createdAt]),
@@ -2222,6 +2270,7 @@ function hydrateAdmin(data) {
   renderRestaurantStats(data.restaurants, data.stats, data.packages);
   renderAdminCouriers(data.couriers);
   renderCourierManagement(data.couriers);
+  renderRestaurantLocationManagement(data.restaurants || []);
   renderIntegrationIdentities(data.restaurants || [], data.couriers || []);
   renderZoneBoard(data.zones);
   renderZoneAlerts(data.zoneAlerts || []);
@@ -2383,6 +2432,39 @@ if (adminRefs.courierEditModal) {
     adminRefs.courierEditModal.close();
   });
 }
+
+if (adminRefs.restaurantLocationForm) {
+  adminRefs.restaurantLocationForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(adminRefs.restaurantLocationForm);
+    const restaurantId = String(formData.get("restaurantId") || "");
+    const payload = {
+      latitude: formData.get("latitude"),
+      longitude: formData.get("longitude"),
+    };
+    const submitButton = adminRefs.restaurantLocationForm.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const data = await api(`/api/admin/restaurants/${encodeURIComponent(restaurantId)}/location`, {
+        method: "PUT",
+        headers: adminHeaders(),
+        body: JSON.stringify(payload),
+        retryWithRefresh: refreshAdminAccess,
+      });
+      adminRefs.restaurantLocationModal?.close();
+      hydrateAdmin(data);
+      showToast("Restoran konumu güncellendi. Otomatik atama artık yeni koordinatları kullanacak.");
+    } catch (error) {
+      showToast(error.message || "Restoran konumu güncellenemedi.", "error");
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+}
+
+adminRefs.restaurantLocationModal?.querySelector(".close-modal-btn")?.addEventListener("click", () => {
+  adminRefs.restaurantLocationModal.close();
+});
 
 adminRefs.restaurantForm.addEventListener("submit", async (event) => {
   event.preventDefault();
