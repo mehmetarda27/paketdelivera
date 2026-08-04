@@ -91,6 +91,7 @@ test("package detail modal renders raw platform payload safely", () => {
     phone: "<b>0555</b>",
     deliveryAddress: "<iframe srcdoc='<script>addressUnsafe()</script>'></iframe>",
     customerNote: "<script>noteUnsafe()</script>",
+    items: [{ name: "<img src=x onerror=itemUnsafe()>", quantity: 2, price: 125 }],
     rawPayload: { customerNote: "<script>unsafe()</script>" },
   }));
   assert.match(shell.innerHTML, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
@@ -99,4 +100,6 @@ test("package detail modal renders raw platform payload safely", () => {
   assert.doesNotMatch(shell.innerHTML, /<img src=x onerror=/);
   assert.doesNotMatch(shell.innerHTML, /<svg onload=/);
   assert.doesNotMatch(shell.innerHTML, /<iframe srcdoc=/);
+  assert.match(shell.innerHTML, /&lt;img src=x onerror=itemUnsafe\(\)&gt;/);
+  assert.doesNotMatch(shell.innerHTML, /<img src=x onerror=itemUnsafe/);
 });

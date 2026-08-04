@@ -636,6 +636,84 @@ function sharedHtmlSafe(value) {
     .replaceAll("'", "&#039;");
 }
 
+function sharedLocalizedItemText(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value).trim();
+  const preferred = value.tr || value.en || value.default || value.text || value.name;
+  if (preferred !== null && preferred !== undefined && typeof preferred !== "object") {
+    return String(preferred).trim();
+  }
+  const firstText = Object.values(value).find((item) => typeof item === "string" && item.trim());
+  return firstText ? String(firstText).trim() : "";
+}
+
+function sharedOrderItems(pkg = {}) {
+  const raw = pkg.rawPayload && typeof pkg.rawPayload === "object" ? pkg.rawPayload : {};
+  const candidates = [
+    pkg.items,
+    raw.items,
+    raw.products,
+    raw.lines,
+    raw.order?.items,
+    raw.order?.products,
+    raw.data?.items,
+    raw.data?.products,
+  ];
+  const source = candidates.find((items) => Array.isArray(items) && items.length) || [];
+  return source.map((item, index) => {
+    const safeItem = item && typeof item === "object" ? item : { name: item };
+    const quantityValue = Number(safeItem.quantity ?? safeItem.qty ?? safeItem.count ?? 1);
+    const amountValue = safeItem.totalPrice ?? safeItem.total_price ?? safeItem.priceWithOption ?? safeItem.price_with_option ?? safeItem.price;
+    const extraSource = safeItem.extraIngredients ?? safeItem.extra_ingredients ?? safeItem.extras ?? safeItem.options ?? safeItem.modifiers ?? [];
+    const removedSource = safeItem.removedIngredients ?? safeItem.removed_ingredients ?? [];
+    const normalizeChoices = (choices) => (Array.isArray(choices) ? choices : [])
+      .map((choice) => sharedLocalizedItemText(choice?.name ?? choice?.title ?? choice?.displayInfo ?? choice))
+      .filter(Boolean);
+    return {
+      name: sharedLocalizedItemText(safeItem.name ?? safeItem.productName ?? safeItem.title ?? safeItem.product) || `Ürün ${index + 1}`,
+      quantity: Number.isFinite(quantityValue) && quantityValue > 0 ? quantityValue : 1,
+      amount: amountValue === null || amountValue === undefined || amountValue === "" ? null : Number(amountValue),
+      note: sharedLocalizedItemText(safeItem.note ?? safeItem.description),
+      extras: normalizeChoices(extraSource),
+      removed: normalizeChoices(removedSource),
+    };
+  });
+}
+
+window.renderOrderItemsBox = function(pkg, options = {}) {
+  const items = sharedOrderItems(pkg);
+  const compactClass = options.compact ? " order-items-box-compact" : "";
+  const rows = items.length
+    ? items.map((item) => {
+      const details = [
+        item.extras.length ? `Ekstra: ${item.extras.join(", ")}` : "",
+        item.removed.length ? `Çıkarılan: ${item.removed.join(", ")}` : "",
+        item.note ? `Not: ${item.note}` : "",
+      ].filter(Boolean);
+      const amount = Number.isFinite(item.amount) ? formatCurrency(item.amount) : "";
+      return `
+        <div class="order-item-row">
+          <span class="order-item-quantity">${sharedHtmlSafe(item.quantity)}×</span>
+          <div class="order-item-content">
+            <strong>${sharedHtmlSafe(item.name)}</strong>
+            ${details.length ? `<small>${sharedHtmlSafe(details.join(" · "))}</small>` : ""}
+          </div>
+          ${amount ? `<span class="order-item-price">${sharedHtmlSafe(amount)}</span>` : ""}
+        </div>
+      `;
+    }).join("")
+    : '<div class="order-items-empty">Ürün bilgisi platformdan gelmedi.</div>';
+  return `
+    <section class="order-items-box${compactClass}" aria-label="Sipariş ürünleri">
+      <div class="order-items-heading">
+        <strong>Ürünler</strong>
+        <span>${items.length ? `${items.length} kalem` : "Bilgi yok"}</span>
+      </div>
+      <div class="order-items-list">${rows}</div>
+    </section>
+  `;
+};
+
 window.showPackageDetailsModal = function(pkg) {
   const shell = document.createElement("div");
   shell.className = "modal-shell";
@@ -680,6 +758,8 @@ window.showPackageDetailsModal = function(pkg) {
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Oluşturulma</span><br><strong>${formatDate(pkg.createdAt)}</strong></div>
             <div><span style="color: var(--ink-soft); font-size: 0.85rem;">Güncellenme</span><br><strong>${formatDate(pkg.updatedAt || pkg.createdAt)}</strong></div>
           </div>
+
+          ${window.renderOrderItemsBox(pkg)}
 
           ${pkg.customerNote || pkg.note ? `
           <div style="background: rgba(242, 122, 26, 0.08); padding: 16px; border-radius: 12px; border: 1px solid rgba(242, 122, 26, 0.2);">

@@ -1254,7 +1254,7 @@ function renderPackages(packages) {
   const activePackages = packages.filter(isActiveCourierPackage);
   const mapsKey = courierState.data?.mapsConfig?.googleMapsEmbedApiKey || "";
   const livePositionKey = `${courierState.data?.courier?.latitude || ""},${courierState.data?.courier?.longitude || ""}`;
-  const signature = `${mapsKey}|${livePositionKey}|${listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError", "deliveryAddress", "address", "customerAddress", "customerLat", "customerLng", "customerLatitude", "customerLongitude"])}`;
+  const signature = `${mapsKey}|${livePositionKey}|${listRenderSignature(activePackages, ["id", "trackingNo", "externalOrderNo", "status", "assignedAt", "paymentStatus", "failureReason", "updatedAt", "eta", "lastAssignmentError", "deliveryAddress", "address", "customerAddress", "customerLat", "customerLng", "customerLatitude", "customerLongitude", "items"])}`;
   if (courierRefs.packages.__deliveraRenderSignature === signature) {
     return;
   }
@@ -1304,6 +1304,10 @@ function renderPackages(packages) {
     node.querySelector(".zone-name").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(pkg.zone)}`;
     node.querySelector(".eta-value").textContent = presentCourierText(pkg.eta, "ETA yok");
     node.querySelector(".payment-method").textContent = `${paymentText} - ${presentCourierAmount(pkg.orderAmount)}`;
+    const courierOrderItems = node.querySelector(".courier-order-items");
+    if (courierOrderItems) {
+      courierOrderItems.innerHTML = window.renderOrderItemsBox?.(pkg, { compact: true }) || "";
+    }
     node.querySelector(".address-value").innerHTML = `${COURIER_PIN_ICON} ${escapeCourierHtml(deliveryAddress)}`;
     renderPackageMapPreview(node.querySelector(".courier-package-map-preview"), pkg, { hideWhenUnavailable: true });
     node.querySelector(".note-text").textContent =

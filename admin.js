@@ -1102,6 +1102,10 @@ function buildPackageCard(pkg) {
   node.querySelector(".courier-name").innerHTML = `${SVG_COURIER} ${htmlSafe(pkg.assignedCourierName || "Kurye bekleniyor")}`;
   node.querySelector(".distance-value").textContent = pkg.distanceKm === null ? "-" : `${pkg.distanceKm} km`;
   node.querySelector(".payment-method").textContent = `${pkg.paymentMethod} - ${paymentStatusLabel(pkg.paymentStatus)} - ${formatCurrency(pkg.orderAmount)}`;
+  const orderItemsSlot = node.querySelector(".order-items-slot");
+  if (orderItemsSlot) {
+    orderItemsSlot.innerHTML = window.renderOrderItemsBox?.(pkg, { compact: true }) || "";
+  }
   node.querySelector(".address-value").innerHTML = `${SVG_PIN} ${htmlSafe(pkg.deliveryAddress || pkg.address)}`;
 
   if (!node.querySelector(".details-btn-injected")) {
