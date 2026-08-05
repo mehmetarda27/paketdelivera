@@ -226,11 +226,13 @@ const COURIER_OFFLINE_STATUS = "offline";
 const COURIER_ONLINE_STATUS = "online";
 const COURIER_BUSY_STATUS = "busy";
 const ADMIN_MANUAL_MAX_ACTIVE_PACKAGES = 4;
+const AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES = 2;
 const COURIER_FAILURE_REASONS = new Set([
   "musteri_yok",
   "adres_bulunamadi",
   "restoran_hazir_degil",
   "teknik_sorun",
+  "ters_yon",
   "diger",
 ]);
 const ASSIGNMENT_SEARCH_RADII_KM = Object.freeze([5, 6, 7, 8]);
@@ -5860,6 +5862,23 @@ function activeAssignmentsForCourier(packages, courierId, excludePackageId = nul
   ).length;
 }
 
+function sameRestaurantContinuationForCourier(packages, courierId, pkg, excludePackageId = null) {
+  if (!courierId || !pkg?.restaurantId) {
+    return false;
+  }
+  const activeAssignments = packages.filter((item) =>
+    item.assignedCourierId === courierId &&
+    item.id !== excludePackageId &&
+    isCapacityBlockingPackage(item)
+  );
+  if (activeAssignments.length !== AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES - 1) {
+    return false;
+  }
+  const existingPackage = activeAssignments[0];
+  return existingPackage.restaurantId === pkg.restaurantId &&
+    [ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(existingPackage.status));
+}
+
 function buildActiveLoadMap(packages, excludePackageId = null) {
   const loadMap = new Map();
   packages.forEach((item) => {
@@ -6093,7 +6112,10 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const onlineCouriers = allCouriers.filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS);
+  const onlineCouriers = allCouriers.filter((courier) =>
+    Boolean(courier.available) &&
+    [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(normalizeCourierStatus(courier.status, courier.available))
+  );
   if (onlineCouriers.length === 0) {
     return {
       reason: "online kurye yok",
@@ -6101,7 +6123,13 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const freeOnlineCouriers = onlineCouriers.filter((courier) => activeAssignmentsForCourier(state.packages, courier.id, pkg.id) < 1);
+  const freeOnlineCouriers = onlineCouriers.filter((courier) => {
+    const activeLoad = activeAssignmentsForCourier(state.packages, courier.id, pkg.id);
+    return activeLoad < 1 || (
+      activeLoad < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
+      sameRestaurantContinuationForCourier(state.packages, courier.id, pkg, pkg.id)
+    );
+  });
   if (freeOnlineCouriers.length === 0) {
     return {
       reason: "tum kuryeler busy",
@@ -6121,9 +6149,9 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
   const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
   const assignmentCoordinates = packageAssignmentCoordinates(state, pkg);
   const availableCandidates = state.couriers
-    .filter((courier) => normalizeCourierStatus(courier.status, courier.available) === COURIER_ONLINE_STATUS)
     .map((courier) => ({
       courier,
+      courierStatus: normalizeCourierStatus(courier.status, courier.available),
       distance: distance(
         courier.latitude,
         courier.longitude,
@@ -6135,17 +6163,29 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
         occupiedCourierLoads.get(courier.id) || 0,
         activeLoadMap.get(courier.id) || 0
       ),
+      sameRestaurantContinuation: sameRestaurantContinuationForCourier(state.packages, courier.id, pkg, pkg.id),
     }))
-    .filter(({ courier, distance: courierDistance, load }) =>
-      load < 1 &&
+    .filter(({ courier, courierStatus, distance: courierDistance, load, sameRestaurantContinuation }) =>
+      Boolean(courier.available) &&
+      [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus) &&
+      (load < 1 || (
+        load < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
+        sameRestaurantContinuation
+      )) &&
       !excludedCourierIds.has(courier.id) &&
       !cooldownCourierIds.has(courier.id) &&
       Number.isFinite(courierDistance) &&
       courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     );
 
-  const freshCandidates = availableCandidates.filter(({ freshLocation }) => freshLocation);
-  const locationCandidates = freshCandidates.length > 0 ? freshCandidates : availableCandidates;
+  const freshContinuationCandidates = availableCandidates.filter(({ freshLocation, sameRestaurantContinuation }) =>
+    freshLocation && sameRestaurantContinuation
+  );
+  const preferredCandidates = freshContinuationCandidates.length > 0
+    ? freshContinuationCandidates
+    : availableCandidates;
+  const freshCandidates = preferredCandidates.filter(({ freshLocation }) => freshLocation);
+  const locationCandidates = freshCandidates.length > 0 ? freshCandidates : preferredCandidates;
   const selectedRadius = ASSIGNMENT_SEARCH_RADII_KM.find((radiusKm) =>
     locationCandidates.some(({ distance: courierDistance }) => courierDistance <= radiusKm)
   );
@@ -6163,7 +6203,8 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     .sort((left, right) => {
       const leftDistance = Number.isFinite(left.distance) ? left.distance : Number.POSITIVE_INFINITY;
       const rightDistance = Number.isFinite(right.distance) ? right.distance : Number.POSITIVE_INFINITY;
-      return leftDistance - rightDistance || left.load - right.load || left.courier.name.localeCompare(right.courier.name, "tr");
+      return Number(right.sameRestaurantContinuation) - Number(left.sameRestaurantContinuation) ||
+        leftDistance - rightDistance || left.load - right.load || left.courier.name.localeCompare(right.courier.name, "tr");
     });
 
   if (ASSIGNMENT_DEBUG_LOGS) {
@@ -6192,6 +6233,9 @@ function candidateDistance(candidate) {
 function candidateAssignmentReason(pkg, candidate) {
   const searchRadiusKm = Number(candidate?.searchRadiusKm || MAX_ASSIGNMENT_DISTANCE_KM);
   const locationLabel = candidate?.selectionMode === "distance_radius_fresh" ? "guncel GPS" : "kayitli konum";
+  if (candidate?.sameRestaurantContinuation) {
+    return `${pkg.zone} bolgesinde ayni restorandan ikinci paket, ${searchRadiusKm} km icindeki mevcut kuryeye atandi.`;
+  }
   return `${pkg.zone} bolgesinde ${searchRadiusKm} km arama capinda ${locationLabel} verisine gore en yakin online ve bos kurye secildi.`;
 }
 
@@ -6307,14 +6351,13 @@ function tryAssignPackageAtomically(pkg, candidate) {
     }
 
     const courierStatus = normalizeCourierStatus(targetCourier.status, Boolean(targetCourier.available));
-    if (courierStatus !== COURIER_ONLINE_STATUS) {
+    if (!Boolean(targetCourier.available) || ![COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus)) {
       updatePackageAssignmentFailure(pkg.id, "uygun kurye yok", "Kurye online olmadigi icin atama yapilamadi.");
       return { ok: false, reason: "uygun kurye yok", note: "Kurye online olmadigi icin atama yapilamadi." };
     }
 
-    const activeLoad = Number(
-      db.prepare(`
-        SELECT COUNT(*) AS total
+    const activePackages = db.prepare(`
+        SELECT restaurant_id, status
         FROM packages
         WHERE assigned_courier_id = ?
           AND id != ?
@@ -6324,7 +6367,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
             AND assigned_at IS NOT NULL
             AND (strftime('%s','now') - strftime('%s', assigned_at)) * 1000 >= ?
           )
-      `).get(
+      `).all(
         targetCourier.id,
         pkg.id,
         ASSIGNED_STATUS,
@@ -6332,10 +6375,13 @@ function tryAssignPackageAtomically(pkg, candidate) {
         ON_ROUTE_STATUS,
         ASSIGNED_STATUS,
         COURIER_OFFER_TIMEOUT_MS
-      )?.total || 0
-    );
+      );
+    const activeLoad = activePackages.length;
+    const sameRestaurantContinuation = activeLoad === AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES - 1 &&
+      activePackages[0]?.restaurant_id === freshPackage.restaurant_id &&
+      [ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalizeStatus(activePackages[0]?.status));
 
-    if (activeLoad >= 1) {
+    if (activeLoad >= 1 && !sameRestaurantContinuation) {
       updatePackageAssignmentFailure(pkg.id, "tum kuryeler busy", "Secilen kurye zaten aktif bir pakete sahip.");
       return { ok: false, reason: "tum kuryeler busy", note: "Secilen kurye zaten aktif bir pakete sahip." };
     }
@@ -6361,7 +6407,7 @@ function tryAssignPackageAtomically(pkg, candidate) {
       targetCourier.name,
       assignmentAttemptAt,
       candidateDistance(candidate),
-      candidateAssignmentReason({ zone: freshPackage.zone }, candidate),
+      candidateAssignmentReason({ zone: freshPackage.zone }, { ...candidate, sameRestaurantContinuation }),
       assignmentAttemptAt,
       assignmentAttemptAt,
       pkg.id,
@@ -14006,6 +14052,78 @@ async function handleApi(req, res, pathname) {
 
     const failureReason = normalizeCourierFailureReason(body.failureReason || body.failure_reason || "");
     const courierIssueReported = requestedStatus === FAILED_STATUS && Boolean(failureReason);
+    const directionConflictReported = courierIssueReported && failureReason === "ters_yon";
+
+    if (directionConflictReported) {
+      if (![ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(currentStatus)) {
+        sendJson(res, 400, { error: "Bu durumdaki paket ters yon nedeniyle havuza alinamaz." });
+        return;
+      }
+      const courierActivePackageCount = Number(db.prepare(`
+        SELECT COUNT(*) AS total
+        FROM packages
+        WHERE assigned_courier_id = ? AND status IN (?, ?, ?)
+      `).get(
+        session.courier_id,
+        ASSIGNED_STATUS,
+        ACCEPTED_BY_COURIER_STATUS,
+        ON_ROUTE_STATUS
+      )?.total || 0);
+      if (courierActivePackageCount < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES) {
+        sendJson(res, 400, { error: "Ters yon bildirimi icin kuryede en az iki aktif paket olmalidir." });
+        return;
+      }
+
+      clearAssignmentRetry(packageId);
+      appendTriedCourier(packageId, session.courier_id);
+      const directionStamp = nowIso();
+      db.prepare(`
+        UPDATE packages
+        SET status = ?, assignment_status = ?, assigned_courier_id = NULL, assigned_courier_name = NULL,
+            assigned_at = NULL, accepted_at = NULL, on_route_at = NULL, failed_at = NULL,
+            distance_km = NULL, failure_reason = NULL, assignment_reason = ?,
+            last_assignment_attempt_at = ?, last_assignment_error = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        AWAITING_ASSIGNMENT_STATUS,
+        "pending",
+        `${target.assigned_courier_name || "Kurye"} teslimat yonlerinin ters oldugunu bildirdi; paket yeniden atama havuzuna alindi.`,
+        directionStamp,
+        "ters yon nedeniyle yeniden atama",
+        directionStamp,
+        packageId
+      );
+
+      writeAuditLog({
+        actorRole: "courier",
+        actorId: session.courier_id,
+        action: "courier_package_rejected",
+        packageId,
+        restaurantId: target.restaurant_id,
+        details: {
+          from: currentStatus,
+          to: AWAITING_ASSIGNMENT_STATUS,
+          failureReason,
+          directionConflict: true,
+          courierPackageFeeEligible: false,
+          courierCooldownMs: COURIER_REJECTION_COOLDOWN_MS,
+          packageCooldownMs: PACKAGE_REJECTION_COOLDOWN_MS,
+        },
+      });
+      rebalancePackages();
+      scheduleRebalanceAfterRejectionCooldown();
+      const directionWorkspace = buildCourierWorkspace(session.courier_id);
+      broadcastLiveEvent({
+        type: "assignment-waiting",
+        courierId: session.courier_id,
+        restaurantId: target.restaurant_id,
+        packageId,
+        message: `${target.tracking_no || target.id} paketi ters yon nedeniyle havuza dondu; yeniden kurye araniyor.`,
+      });
+      sendJson(res, 200, directionWorkspace || { courier: null, packages: [] });
+      return;
+    }
+
     const nextStatus = courierIssueReported ? CANCELED_STATUS : requestedStatus;
 
     if (!canTransitionStatus(currentStatus, nextStatus)) {

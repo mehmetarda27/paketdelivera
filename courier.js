@@ -37,6 +37,7 @@ const COURIER_FAILURE_REASON_OPTIONS = [
   { value: "adres_bulunamadi", label: "Adres bulunamadi" },
   { value: "restoran_hazir_degil", label: "Restoran hazir degil" },
   { value: "teknik_sorun", label: "Teknik sorun" },
+  { value: "ters_yon", label: "Ters yon" },
   { value: "diger", label: "Diger" },
 ];
 const COURIER_CLOSED_STATUSES = ["delivered", "failed", "cancelled"];
@@ -1377,7 +1378,9 @@ function renderPackages(packages) {
         courierState.packageActionDrafts.delete(pkg.id);
         hydrateCourierWorkspace(updatedWorkspace);
         showToast(status === "failed"
-          ? "Paket sorun nedeniyle iptal edildi. Paket ücreti hakedişe eklendi."
+          ? (failureReason === "ters_yon"
+            ? "Paket ters yön nedeniyle yeniden atama havuzuna alındı."
+            : "Paket sorun nedeniyle iptal edildi. Paket ücreti hakedişe eklendi.")
           : "Paket durumu güncellendi.");
       } catch (error) {
         showToast(error.message || "Durum güncellenemedi.", "error");
@@ -1489,8 +1492,11 @@ function renderPackages(packages) {
     if (["assigned", "accepted_by_courier", "on_route"].includes(pkg.status)) {
       const failureSelect = document.createElement("select");
       failureSelect.className = "status-select courier-action-select";
+      const availableFailureReasons = activePackages.length >= 2
+        ? COURIER_FAILURE_REASON_OPTIONS
+        : COURIER_FAILURE_REASON_OPTIONS.filter((item) => item.value !== "ters_yon");
       failureSelect.innerHTML = ['<option value="">Sorun nedeni sec</option>']
-        .concat(COURIER_FAILURE_REASON_OPTIONS.map((item) => `<option value="${item.value}">${item.label}</option>`))
+        .concat(availableFailureReasons.map((item) => `<option value="${item.value}">${item.label}</option>`))
         .join("");
       failureSelect.value = selectedFailureReason;
       failureSelect.addEventListener("change", () => {
