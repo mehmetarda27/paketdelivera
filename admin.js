@@ -1000,8 +1000,8 @@ function buildCourierOverrideOptions(pkg) {
   const allCouriers = adminState.data?.couriers || [];
   return allCouriers
     .sort((left, right) => {
-      const leftEligible = ["online", "busy"].includes(left.status) && Number(left.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
-      const rightEligible = ["online", "busy"].includes(right.status) && Number(right.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
+      const leftEligible = left.id !== pkg.assignedCourierId && ["online", "busy"].includes(left.status) && Number(left.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
+      const rightEligible = right.id !== pkg.assignedCourierId && ["online", "busy"].includes(right.status) && Number(right.activeLoad || 0) < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
       if (leftEligible !== rightEligible) {
         return Number(rightEligible) - Number(leftEligible);
       }
@@ -1016,15 +1016,19 @@ function buildCourierOverrideOptions(pkg) {
     })
     .map((courier) => {
       const activeLoad = Number(courier.activeLoad || 0);
-      const isEligible = ["online", "busy"].includes(courier.status) && activeLoad < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
+      const isCurrentCourier = courier.id === pkg.assignedCourierId;
+      const isEligible = !isCurrentCourier && ["online", "busy"].includes(courier.status) && activeLoad < ADMIN_MANUAL_MAX_ACTIVE_PACKAGES;
       const distance = distanceKm(pkg.restaurantLat ?? pkg.latitude, pkg.restaurantLng ?? pkg.longitude, courier.latitude, courier.longitude);
-      const reason = !isEligible
-        ? activeLoad >= ADMIN_MANUAL_MAX_ACTIVE_PACKAGES
-          ? `${ADMIN_MANUAL_MAX_ACTIVE_PACKAGES} paket limiti dolu`
-          : "Offline"
-        : activeLoad > 0
-          ? `Admin ${activeLoad + 1}. paket atayabilir`
-          : "Musait";
+      let reason = "Musait";
+      if (isCurrentCourier) {
+        reason = "Mevcut kurye";
+      } else if (activeLoad >= ADMIN_MANUAL_MAX_ACTIVE_PACKAGES) {
+        reason = `${ADMIN_MANUAL_MAX_ACTIVE_PACKAGES} paket limiti dolu`;
+      } else if (!["online", "busy"].includes(courier.status)) {
+        reason = "Offline";
+      } else if (activeLoad > 0) {
+        reason = `Admin ${activeLoad + 1}. paket atayabilir`;
+      }
 
       return {
         value: courier.id,

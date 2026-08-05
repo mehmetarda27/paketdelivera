@@ -6912,8 +6912,12 @@ function adminAssignPackageToCourier(packageId, courierId) {
     }
 
     const targetStatus = normalizeStatus(target.status);
-    if ([PENDING_APPROVAL_STATUS, REJECTED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
+    if ([PENDING_APPROVAL_STATUS, REJECTED_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
       throw httpError(400, "Bu durumdaki paket manuel override ile atanamaz.");
+    }
+
+    if (targetStatus === ACCEPTED_BY_COURIER_STATUS && target.assigned_courier_id === courierId) {
+      throw httpError(400, "Paket zaten secilen kuryede.");
     }
 
     const courier = db.prepare("SELECT * FROM couriers WHERE id = ?").get(courierId);
@@ -6945,7 +6949,8 @@ function adminAssignPackageToCourier(packageId, courierId) {
     db.prepare(`
       UPDATE packages
       SET status = ?, assignment_status = ?, assigned_courier_id = ?, assigned_courier_name = ?, assigned_at = ?,
-          accepted_at = ?, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
+          accepted_at = ?, on_route_at = NULL, delivered_at = NULL, failed_at = NULL, distance_km = NULL,
+          failure_reason = NULL, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = '', updated_at = ?
       WHERE id = ?
     `).run(
       assignedStatus,
@@ -6973,6 +6978,8 @@ function adminAssignPackageToCourier(packageId, courierId) {
     }
     return {
       packageId,
+      restaurantId: target.restaurant_id || null,
+      previousCourierId: target.assigned_courier_id || null,
       courierId: courier.id,
       courierName: courier.name,
       activeLoad: activeLoad + 1,
@@ -6990,27 +6997,36 @@ function adminUnassignPackage(packageId) {
     }
 
     const targetStatus = normalizeStatus(target.status);
-    if ([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
+    if ([ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(targetStatus)) {
       throw httpError(400, "Bu durumdaki paketin atamasi kaldirilamaz.");
     }
+
+    const previousCourierId = target.assigned_courier_id || null;
+    const stamp = nowIso();
 
     db.prepare(`
       UPDATE packages
       SET status = ?, assignment_status = ?, assigned_courier_id = NULL, assigned_courier_name = NULL, assigned_at = NULL,
-          assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = ?, updated_at = ?
+          accepted_at = NULL, on_route_at = NULL, delivered_at = NULL, failed_at = NULL, distance_km = NULL,
+          failure_reason = NULL, assignment_reason = ?, last_assignment_attempt_at = ?, last_assignment_error = ?, updated_at = ?
       WHERE id = ?
     `).run(
       AWAITING_ASSIGNMENT_STATUS,
       "pending",
       "Admin mevcut atamayi kaldirdi ve siparisi havuza geri aldi.",
-      nowIso(),
+      stamp,
       "admin override ile atama kaldirildi",
-      nowIso(),
+      stamp,
       packageId
     );
     clearAssignmentRetry(packageId);
-    setPackageTriedCouriers(packageId, []);
-    return { packageId };
+    setPackageTriedCouriers(packageId, previousCourierId ? [previousCourierId] : []);
+    return {
+      packageId,
+      restaurantId: target.restaurant_id || null,
+      previousCourierId,
+      previousStatus: targetStatus,
+    };
   });
 }
 
@@ -15324,9 +15340,19 @@ async function handleApi(req, res, pathname) {
     broadcastLiveEvent({
       type: "package-override",
       packageId: overrideMatch[1],
+      restaurantId: result.restaurantId,
       courierId: result.courierId,
       message: "Admin belirli paketi kuriyeye atadi.",
     });
+    if (result.previousCourierId && result.previousCourierId !== result.courierId) {
+      broadcastLiveEvent({
+        type: "package-unassign",
+        packageId: overrideMatch[1],
+        restaurantId: result.restaurantId,
+        courierId: result.previousCourierId,
+        message: "Admin paketi baska bir kuryeye aktardi.",
+      });
+    }
     sendJson(res, 200, {
       ...decorateState(),
       auditLogs: getAuditLogs(20),
@@ -15353,6 +15379,9 @@ async function handleApi(req, res, pathname) {
     });
     broadcastLiveEvent({
       type: "package-unassign",
+      packageId: result.packageId,
+      restaurantId: result.restaurantId,
+      courierId: result.previousCourierId,
       message: "Paketin kurye atamasi kaldirildi.",
     });
     sendJson(res, 200, {
