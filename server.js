@@ -108,6 +108,7 @@ const RATE_LIMITS = {
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 200;
 const COURIER_PUSH_EVENT_TYPES = new Set(["package-assigned", "package-override", "package-reassign", "restaurant-confirmed"]);
+const RESTAURANT_PUSH_EVENT_TYPES = new Set(["package-created", "platform-order-pending", "integration-order", "order:new", "restaurant-push-test"]);
 const WEB_PUSH_SETTINGS_ID = "courier_web_push_vapid";
 const WEB_PUSH_SUBJECT = trimmed(process.env.DELIVERA_VAPID_SUBJECT) || "mailto:bildirim@paketdelivera.app";
 
@@ -3812,6 +3813,27 @@ function deleteCourierPushSubscription(courierId, endpoint) {
     .run(courierId, trimmed(endpoint));
 }
 
+function saveRestaurantPushSubscription(restaurantId, subscription) {
+  const normalized = normalizePushSubscription(subscription);
+  const stamp = nowIso();
+  db.prepare(`
+    INSERT INTO restaurant_push_subscriptions (
+      id, restaurant_id, endpoint, subscription_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET
+      restaurant_id = excluded.restaurant_id,
+      subscription_json = excluded.subscription_json,
+      updated_at = excluded.updated_at
+  `).run(uid("push"), restaurantId, normalized.endpoint, json(normalized), stamp, stamp);
+  return normalized.endpoint;
+}
+
+function deleteRestaurantPushSubscription(restaurantId, endpoint) {
+  if (!endpoint) return;
+  db.prepare("DELETE FROM restaurant_push_subscriptions WHERE restaurant_id = ? AND endpoint = ?")
+    .run(restaurantId, trimmed(endpoint));
+}
+
 function courierPushPayload(event) {
   const pkg = event.packageId ? getPackageById(event.packageId) : null;
   const trackingNo = pkg?.trackingNo || pkg?.externalOrderNo || event.packageId || "Yeni paket";
@@ -3868,6 +3890,77 @@ function dispatchCourierPush(event) {
       logger.warn("Courier push request failed", {
         courierId: event.courierId,
         packageId: event.packageId || null,
+        error,
+      });
+    }
+  });
+}
+
+function restaurantPushPayload(event) {
+  const packageId = event.packageId || event.orderId || "";
+  const pkg = packageId ? getPackageById(packageId) : null;
+  if (event.type === "restaurant-push-test") {
+    return {
+      title: "Delivera Bildirim Testi",
+      body: "Bildirimler acik. Yeni siparisler bu cihaza bildirilecek.",
+      packageId: "",
+      tag: `delivera-restaurant-test-${event.restaurantId}`,
+      url: "/restaurant.html",
+    };
+  }
+  const trackingNo = pkg?.trackingNo || pkg?.externalOrderNo || packageId || "Yeni siparis";
+  const platform = pkg?.sourcePlatform || event.platform || "Delivera";
+  const customer = pkg?.recipient || event.customerName || "Yeni musteri siparisi";
+  return {
+    title: `Yeni Siparis - ${trackingNo}`,
+    body: `${platform} - ${customer}. Siparisi acmak icin dokunun.`,
+    packageId,
+    tag: packageId ? `delivera-restaurant-package-${packageId}` : `delivera-restaurant-${event.restaurantId}`,
+    url: packageId ? `/restaurant.html?package=${encodeURIComponent(packageId)}` : "/restaurant.html",
+  };
+}
+
+function dispatchRestaurantPush(event) {
+  if (!event?.restaurantId || !RESTAURANT_PUSH_EVENT_TYPES.has(event.type)) {
+    return;
+  }
+
+  let subscriptions = [];
+  try {
+    ensureCourierPushConfigured();
+    subscriptions = db.prepare(`
+      SELECT endpoint, subscription_json
+      FROM restaurant_push_subscriptions
+      WHERE restaurant_id = ?
+    `).all(event.restaurantId);
+  } catch (error) {
+    logger.warn("Restaurant push preparation failed", { restaurantId: event.restaurantId, error });
+    return;
+  }
+
+  const payload = JSON.stringify(restaurantPushPayload(event));
+  subscriptions.forEach((row) => {
+    try {
+      const request = webPush.sendNotification(parseJson(row.subscription_json, {}), payload, {
+        TTL: 300,
+        urgency: "high",
+      });
+      Promise.resolve(request).catch((error) => {
+        if ([404, 410].includes(Number(error?.statusCode))) {
+          db.prepare("DELETE FROM restaurant_push_subscriptions WHERE endpoint = ?").run(row.endpoint);
+          return;
+        }
+        logger.warn("Restaurant push delivery failed", {
+          restaurantId: event.restaurantId,
+          packageId: event.packageId || event.orderId || null,
+          statusCode: error?.statusCode || null,
+          error,
+        });
+      });
+    } catch (error) {
+      logger.warn("Restaurant push request failed", {
+        restaurantId: event.restaurantId,
+        packageId: event.packageId || event.orderId || null,
         error,
       });
     }
@@ -3952,6 +4045,7 @@ function broadcastLiveEvent(event) {
     }
   });
   dispatchCourierPush(event);
+  dispatchRestaurantPush(event);
 }
 
 function openLiveStream(req, res, audience) {
@@ -9960,6 +10054,7 @@ function handleSimplePlatformOrder(order, isManual = false, options = {}) {
   broadcastLiveEvent({
     type: "platform-order-pending",
     restaurantId: match.restaurant.id,
+    packageId: created?.id || null,
     message: "Yeni platform siparisi geldi.",
   });
 
@@ -11406,7 +11501,11 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/restaurant/logout") {
+    const session = getRestaurantSession(req);
     const { json: body } = await readRequestBody(req);
+    if (session && body.pushEndpoint) {
+      deleteRestaurantPushSubscription(session.restaurant_id, body.pushEndpoint);
+    }
     const { refreshToken } = validateRefreshDraft(body);
     revokeAccessToken("restaurant_sessions", getBearerToken(req));
     db.prepare("DELETE FROM refresh_tokens WHERE actor_role = ? AND token_hash = ?").run("restaurant", hashOpaqueToken(refreshToken));
@@ -12614,6 +12713,7 @@ async function handleApi(req, res, pathname) {
     broadcastLiveEvent({
       type: "package-created",
       restaurantId: session.restaurant_id,
+      packageId: pkg.id,
       message: "Manuel paket operasyon havuzuna alindi.",
     });
     sendJson(res, 201, {
@@ -12732,6 +12832,7 @@ async function handleApi(req, res, pathname) {
     broadcastLiveEvent({
       type: "package-created",
       restaurantId: session.restaurant_id,
+      packageId: pkg.id,
       message: `${pkg.sourcePlatform} uzantisindan hizli siparis alindi.`,
     });
 
@@ -13263,6 +13364,7 @@ async function handleApi(req, res, pathname) {
       type: "integration-order",
       restaurantId: restaurant.id,
       courierId: created?.assignedCourierId || null,
+      packageId: pkg.id,
       message: `${pkg.sourcePlatform} siparisi otomatik akisa alindi.`,
     });
 
@@ -13826,6 +13928,55 @@ async function handleApi(req, res, pathname) {
       return;
     }
     sendJson(res, 200, { publicKey: ensureCourierPushConfigured().publicKey });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/restaurant/push/public-key") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, { publicKey: ensureCourierPushConfigured().publicKey });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/push/subscriptions") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    saveRestaurantPushSubscription(session.restaurant_id, body.subscription || body);
+    sendJson(res, 201, { ok: true });
+    return;
+  }
+
+  if (req.method === "DELETE" && pathname === "/api/restaurant/push/subscriptions") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    deleteRestaurantPushSubscription(session.restaurant_id, body.endpoint);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/restaurant/push/test") {
+    const session = getRestaurantSession(req);
+    if (!session) {
+      sendJson(res, 401, { error: "Restoran oturumu bulunamadi." });
+      return;
+    }
+    broadcastLiveEvent({
+      type: "restaurant-push-test",
+      restaurantId: session.restaurant_id,
+      message: "Restoran bildirim testi gonderildi.",
+    });
+    sendJson(res, 200, { ok: true });
     return;
   }
 

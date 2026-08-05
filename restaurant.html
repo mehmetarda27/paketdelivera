@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=1782067000000">
+  <link rel="stylesheet" href="/styles.css?v=1785997200000">
 </head>
 <body class="theme-restaurant app-unauthenticated">
   <div class="app-layout">
@@ -616,6 +616,7 @@
             <p class="eyebrow accent-coral">Bildirim Merkezi</p>
             <h3>Son siparis ve atama olaylari</h3>
           </div>
+          <button id="restaurantEnablePushButton" class="ghost-btn" type="button">Bildirimleri ve Sesi Ac</button>
         </div>
         <div id="restaurantNotificationCenter" class="stack-list compact-stack-list"></div>
       </section>
@@ -718,11 +719,18 @@
       </section>
     </main>
   </div>
+  <div id="restaurantOrderAlarm" class="restaurant-order-alarm hidden" role="alert" aria-live="assertive">
+    <div>
+      <strong>Yeni siparis geldi!</strong>
+      <span id="restaurantOrderAlarmMessage">Siparis detaylarini kontrol edin.</span>
+    </div>
+    <button id="restaurantOrderAlarmAcknowledge" class="primary-btn" type="button">Gordum, Sesi Durdur</button>
+  </div>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   
   
 <script src="/shared.js?v=1785839500000"></script>
-  <script src="/restaurant.js?v=1782067000000"></script>
+  <script src="/restaurant.js?v=1785997200000"></script>
 </body>
 
 

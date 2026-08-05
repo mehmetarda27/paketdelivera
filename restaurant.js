@@ -22,6 +22,8 @@ const restaurantState = {
   packageCursor: "0",
   workspacePollId: null,
   liveStream: null,
+  orderAlarmTimer: null,
+  orderAlarmKey: "",
   workspaceLoadPromise: null,
   queuedWorkspaceLoad: null,
   activeWorkspaceCard: "restaurant-integration-wizard",
@@ -250,6 +252,10 @@ const restaurantRefs = {
   performanceBoard: document.getElementById("restaurantPerformanceBoard"),
   liveBadge: document.getElementById("restaurantLiveBadge"),
   notificationCenter: document.getElementById("restaurantNotificationCenter"),
+  enablePushButton: document.getElementById("restaurantEnablePushButton"),
+  orderAlarm: document.getElementById("restaurantOrderAlarm"),
+  orderAlarmMessage: document.getElementById("restaurantOrderAlarmMessage"),
+  orderAlarmAcknowledge: document.getElementById("restaurantOrderAlarmAcknowledge"),
   activeOrders: document.getElementById("activeOrders"),
   orderHistory: document.getElementById("orderHistory"),
   historyMeta: document.getElementById("restaurantHistoryMeta"),
@@ -404,6 +410,7 @@ function clearRestaurantAuth() {
   stopRestaurantWorkspacePolling();
   restaurantState.liveStream?.close?.();
   restaurantState.liveStream = null;
+  stopRestaurantOrderAlarm();
   clearRestaurantAccessInfo();
 }
 
@@ -534,6 +541,34 @@ function startRestaurantWorkspacePolling() {
   }, RESTAURANT_WORKSPACE_REFRESH_MS);
 }
 
+function stopRestaurantOrderAlarm() {
+  if (restaurantState.orderAlarmTimer !== null) {
+    window.clearInterval(restaurantState.orderAlarmTimer);
+    restaurantState.orderAlarmTimer = null;
+  }
+  restaurantState.orderAlarmKey = "";
+  restaurantRefs.orderAlarm?.classList.add("hidden");
+}
+
+function startRestaurantOrderAlarm(event = {}) {
+  const alarmKey = String(event.packageId || event.orderId || `${event.type || "order"}:${event.createdAt || Date.now()}`);
+  if (restaurantState.orderAlarmKey === alarmKey && restaurantState.orderAlarmTimer !== null) {
+    return;
+  }
+  if (restaurantState.orderAlarmTimer !== null) {
+    window.clearInterval(restaurantState.orderAlarmTimer);
+  }
+  restaurantState.orderAlarmKey = alarmKey;
+  if (restaurantRefs.orderAlarmMessage) {
+    restaurantRefs.orderAlarmMessage.textContent = event.message || "Siparis detaylarini kontrol edin.";
+  }
+  restaurantRefs.orderAlarm?.classList.remove("hidden");
+  playSignal("assignment-long");
+  restaurantState.orderAlarmTimer = window.setInterval(() => {
+    playSignal("assignment-long");
+  }, 8000);
+}
+
 function startRestaurantLiveStream() {
   if (restaurantState.liveStream || !restaurantState.token) {
     return;
@@ -544,7 +579,7 @@ function startRestaurantLiveStream() {
       if (event?.message) {
         showToast(event.message, notificationTone(event.type));
         if (["package-created", "platform-order", "platform-order-pending", "integration-order", "order:new"].includes(event.type)) {
-          playSignal("assignment");
+          startRestaurantOrderAlarm(event);
         } else if (event.type === "assignment-waiting") {
           playSignal("critical");
         } else if (event.type === "package-status") {
@@ -1002,6 +1037,105 @@ function quickPasteLineMap(text) {
       hasLabel: Boolean(match),
     };
   });
+}
+
+function requestRestaurantNotificationPermission() {
+  if (typeof Notification === "undefined") {
+    return Promise.resolve("unsupported");
+  }
+  if (Notification.permission === "default") {
+    try {
+      return Promise.resolve(Notification.requestPermission()).catch(() => "default");
+    } catch {
+      return Promise.resolve("default");
+    }
+  }
+  return Promise.resolve(Notification.permission);
+}
+
+function restaurantPushApplicationServerKey(base64Value) {
+  const padding = "=".repeat((4 - (base64Value.length % 4)) % 4);
+  const base64 = (base64Value + padding).replaceAll("-", "+").replaceAll("_", "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+function updateRestaurantPushButton(enabled = false) {
+  if (!restaurantRefs.enablePushButton) return;
+  const permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  restaurantRefs.enablePushButton.disabled = permission === "unsupported";
+  restaurantRefs.enablePushButton.textContent = permission === "denied"
+    ? "Bildirim Engelli"
+    : (enabled ? "Bildirim Acik - Sesi Test Et" : "Bildirimleri ve Sesi Ac");
+}
+
+async function initializeRestaurantPush(options = {}) {
+  if (!restaurantState.token || !('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === "undefined") {
+    updateRestaurantPushButton(false);
+    return false;
+  }
+
+  let permission = Notification.permission;
+  if (options.requestPermission && permission === "default") {
+    permission = await requestRestaurantNotificationPermission();
+  }
+  if (permission !== "granted") {
+    updateRestaurantPushButton(false);
+    if (options.requestPermission && permission === "denied") {
+      showToast("Chrome bildirim izni engelli. Adres cubugundaki kilit simgesinden Bildirimler iznini acin.", "warning");
+    }
+    return false;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register("/courier-push-sw.js", { scope: "/" });
+    const keyResponse = await api("/api/restaurant/push/public-key", {
+      headers: restaurantAuthHeaders(),
+      retryWithRefresh: refreshRestaurantAccess,
+    });
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: restaurantPushApplicationServerKey(keyResponse.publicKey),
+      });
+    }
+    await api("/api/restaurant/push/subscriptions", {
+      method: "POST",
+      headers: restaurantAuthHeaders(),
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
+      retryWithRefresh: refreshRestaurantAccess,
+    });
+    updateRestaurantPushButton(true);
+    if (options.requestPermission) {
+      await api("/api/restaurant/push/test", {
+        method: "POST",
+        headers: restaurantAuthHeaders(),
+        body: JSON.stringify({}),
+        retryWithRefresh: refreshRestaurantAccess,
+      });
+      playSignal("assignment-long");
+      showToast("Bildirimler acildi. Duydugunuz ses yeni siparis alarmidir.", "success");
+    }
+    return true;
+  } catch (error) {
+    updateRestaurantPushButton(false);
+    if (options.requestPermission) {
+      showToast(error.message || "Bildirimler etkinlestirilemedi.", "error");
+    }
+    return false;
+  }
+}
+
+async function currentRestaurantPushEndpoint() {
+  if (!("serviceWorker" in navigator)) return "";
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const subscription = await registration?.pushManager?.getSubscription?.();
+    return subscription?.endpoint || "";
+  } catch {
+    return "";
+  }
 }
 
 function quickPasteValue(text, labels = []) {
@@ -2010,6 +2144,11 @@ function hydrateRestaurant(data, explicitIntegration = null) {
   restaurantState.lastHydrateSignature = nextSignature;
   restaurantState.data = data;
   restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    initializeRestaurantPush();
+  } else {
+    updateRestaurantPushButton(false);
+  }
   if (data.restaurants?.[0]) {
     persistRestaurantAccessInfo({
       restaurantId: data.restaurants[0].id,
@@ -2178,6 +2317,9 @@ restaurantRefs.accessForm.addEventListener("submit", async (event) => {
     restaurantRefs.accessForm.reset();
     hydrateRestaurant(data.state);
     startRestaurantLiveStream();
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      initializeRestaurantPush();
+    }
   } catch (error) {
     restaurantRefs.summary.textContent = error.message.includes("Restoran kimligi")
       ? "Restoran oturumu bulunamadi, lutfen tekrar giris yapin"
@@ -2374,12 +2516,22 @@ restaurantRefs.mainQuickPasteParseButton?.addEventListener("click", () => {
   showToast("Form otomatik dolduruldu. Lutfen kontrol edip Paket Olustur'a basin.");
 });
 
-restaurantRefs.logoutButton?.addEventListener("click", () => {
+restaurantRefs.enablePushButton?.addEventListener("click", async () => {
+  await initializeRestaurantPush({ requestPermission: true });
+});
+
+restaurantRefs.orderAlarmAcknowledge?.addEventListener("click", () => {
+  stopRestaurantOrderAlarm();
+  showToast("Yeni siparis bildirimi goruldu olarak kapatildi.", "success");
+});
+
+restaurantRefs.logoutButton?.addEventListener("click", async () => {
+  const pushEndpoint = await currentRestaurantPushEndpoint();
   if (restaurantState.refreshToken) {
     api("/api/restaurant/logout", {
       method: "POST",
       headers: restaurantAuthHeaders(),
-      body: JSON.stringify({ refreshToken: restaurantState.refreshToken }),
+      body: JSON.stringify({ refreshToken: restaurantState.refreshToken, pushEndpoint }),
     }).catch(() => {
       // Local cleanup should still continue.
     });
