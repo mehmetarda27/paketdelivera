@@ -10532,11 +10532,11 @@ function notifyPlatformOrderDelivered(platform, orderId, packageRecord = null) {
   const target = packageRecord || getPackageById(orderId);
   const targetPlatform = normalizePlatformName(target?.sourcePlatform || platform);
   const posentegraId = resolvePackagePosentegraId(target);
-  if (target && targetPlatform === "Trendyol Yemek" && posentegraId && posentegraClient.configured()) {
+  if (target && targetPlatform && isPlatformBackedPackage(target) && posentegraId && posentegraClient.configured()) {
     const dedupeKey = `order.status:${target.id}:${DELIVERED_STATUS}`;
     const outboxRow = db.prepare("SELECT * FROM posentegra_outbox WHERE dedupe_key = ?").get(dedupeKey)
       || enqueuePosentegraStatusChange(target, DELIVERED_STATUS);
-    logger.info("Trendyol delivery status queued for Posentegra", {
+    logger.info("Platform delivery status queued for Posentegra", {
       platform: targetPlatform,
       orderId,
       packageId: target.id,
@@ -10546,7 +10546,7 @@ function notifyPlatformOrderDelivered(platform, orderId, packageRecord = null) {
     });
     appendPlatformStatusLog(target.id, {
       status: DELIVERED_STATUS,
-      message: "Trendyol teslim durumu Posentegra kuyruguna alindi.",
+      message: `${targetPlatform} teslim durumu Posentegra kuyruguna alindi.`,
       platform: targetPlatform,
       meta: {
         callbackMode: "posentegra_outbox",

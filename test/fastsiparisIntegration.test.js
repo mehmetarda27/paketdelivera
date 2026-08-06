@@ -96,7 +96,7 @@ function startMockPosentegra() {
         res.end(JSON.stringify({ ok: true }));
         return;
       }
-      if (req.method === "POST" && req.url === "/web-api/v1/orders/change-status/test-pid-001") {
+      if (req.method === "POST" && req.url.startsWith("/web-api/v1/orders/change-status/")) {
         res.end(JSON.stringify({ ok: true }));
         return;
       }
@@ -115,7 +115,7 @@ function startMockPosentegra() {
   });
 }
 
-test("Trendyol webhook and courier delivery sync use Posentegra ids", { timeout: 30000 }, async () => {
+test("all supported platform deliveries sync through Posentegra ids", { timeout: 30000 }, async () => {
   const mock = await startMockPosentegra();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-fastsiparis-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
@@ -170,7 +170,7 @@ test("Trendyol webhook and courier delivery sync use Posentegra ids", { timeout:
         zone: "Erdemli",
         latitude: 36.601,
         longitude: 34.32,
-        platforms: ["Trendyol Yemek"],
+        platforms: ["Trendyol Yemek", "Yemeksepeti", "Getir Yemek", "Migros Yemek"],
       }),
     });
 
@@ -351,6 +351,63 @@ test("Trendyol webhook and courier delivery sync use Posentegra ids", { timeout:
       webhookOrder.package.id
     );
     assert.match(deliveredPackageWithLogs.platform_status_logs_json, /posentegra_outbox/);
+
+    const additionalPlatforms = [
+      { slug: "ys", api: "yswh", name: "Yemek Sepeti", pid: "test-pid-yemeksepeti" },
+      { slug: "getir", api: "getirwh", name: "Getir Yemek", pid: "test-pid-getir" },
+      { slug: "migros", api: "migroswh", name: "Migros Yemek", pid: "test-pid-migros" },
+    ];
+    for (const platformCase of additionalPlatforms) {
+      const platformOrder = await request(baseUrl, "/api/webhooks/orders", {
+        method: "POST",
+        headers: { "x-webhook-secret": "test-webhook-secret" },
+        body: JSON.stringify({
+          provider: { slug: platformCase.slug, api: platformCase.api, kaynak: platformCase.name },
+          pid: platformCase.pid,
+          restaurantId: "987654321",
+          restaurant: { id: "987654321", name: "FastSiparis Test Restaurant" },
+          customerName: `${platformCase.name} Customer`,
+          customerPhone: "05550000008",
+          addressText: `${platformCase.name} webhook address`,
+          totalPrice: 240,
+          paymentMethod: "PAY_WITH_CARD",
+          products: [{ id: `product-${platformCase.slug}`, name: "Menu", quantity: 1, price: 240, totalPrice: 240 }],
+        }),
+      });
+      assert.equal(platformOrder.matched, true);
+      runSql(
+        dbFile,
+        "UPDATE packages SET status = 'assigned', assignment_status = 'assigned', assigned_courier_id = ?, assigned_courier_name = ?, assigned_at = datetime('now') WHERE id = ?",
+        courierState.createdCourier.id,
+        courierState.createdCourier.name,
+        platformOrder.package.id
+      );
+      for (const status of ["accepted_by_courier", "on_route", "delivered"]) {
+        await request(baseUrl, `/api/courier/packages/${platformOrder.package.id}/status`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${courierLogin.token}` },
+          body: JSON.stringify({ status }),
+        });
+      }
+      let platformDeliveredCall = null;
+      for (let attempt = 0; attempt < 40 && !platformDeliveredCall; attempt += 1) {
+        platformDeliveredCall = mock.calls.find((call) =>
+          call.method === "POST" &&
+          call.url === `/web-api/v1/orders/change-status/${platformCase.pid}` &&
+          call.body?.status === "delivered"
+        );
+        if (!platformDeliveredCall) await delay(50);
+      }
+      assert.ok(platformDeliveredCall, `${platformCase.name} teslim bildirimi Posentegra'ya gitmedi.`);
+      assert.equal(
+        readRow(
+          dbFile,
+          "SELECT status FROM posentegra_outbox WHERE dedupe_key = ?",
+          `order.status:${platformOrder.package.id}:delivered`
+        ).status,
+        "completed"
+      );
+    }
     assert.equal(
       readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
       0
