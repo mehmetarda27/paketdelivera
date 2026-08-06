@@ -172,7 +172,14 @@ test("restaurant active views exclude closed orders and listen for live order ev
       renderOrderHistory,
       activeOrderPackages,
       startRestaurantLiveStream,
-      connectLiveStream
+      connectLiveStream,
+      buildThermalReceiptHtml,
+      isAutoPrintEnabledForRestaurant,
+      setAutoPrintEnabledForRestaurant,
+      hasAutoPrintedPackage,
+      markPackageAutoPrinted,
+      queueAutomaticPackagePrint,
+      restaurantState
     };`);
     await new Promise((resolve) => dom.window.setTimeout(resolve, 20));
 
@@ -213,9 +220,44 @@ test("restaurant active views exclude closed orders and listen for live order ev
     assert.match(dom.window.document.getElementById("activeOrders").textContent, /PKT-ACTIVE/);
     assert.doesNotMatch(dom.window.document.getElementById("activeOrders").textContent, /PKT-DELIVERED/);
     assert.match(dom.window.document.getElementById("orderHistory").textContent, /PKT-DELIVERED/);
+    assert.match(dom.window.document.getElementById("activeOrders").textContent, /58 mm Fiş Yazdır/);
+    assert.match(dom.window.document.getElementById("orderHistory").textContent, /Fişi Tekrar Yazdır/);
     assert.equal(dom.window.__restaurantOperationsUi.activeOrderPackages(data.packages).length, 1);
     assert.match(String(dom.window.__restaurantOperationsUi.startRestaurantLiveStream), /order:new/);
     assert.match(String(dom.window.__restaurantOperationsUi.connectLiveStream), /order:new/);
+
+    const receiptHtml = dom.window.__restaurantOperationsUi.buildThermalReceiptHtml({
+      ...activePackage,
+      externalOrderNo: "TY-123",
+      recipient: "<script>alert(1)</script>",
+      address: "Test adresi",
+      phone: "05550000000",
+      paymentMethod: "Online",
+      orderAmount: 250,
+      items: [{ name: "Tantuni", quantity: 2, price: 125 }],
+    }, "Test Restoran");
+    assert.match(receiptHtml, /@page \{ size: 58mm auto/);
+    assert.match(receiptHtml, /2×/);
+    assert.match(receiptHtml, /Tantuni/);
+    assert.doesNotMatch(receiptHtml, /<script>alert\(1\)<\/script>/);
+    assert.match(receiptHtml, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+
+    const printState = dom.window.__restaurantOperationsUi.restaurantState;
+    printState.selectedRestaurantId = "rst_flash";
+    assert.equal(dom.window.__restaurantOperationsUi.isAutoPrintEnabledForRestaurant("rst_flash"), false);
+    assert.equal(dom.window.__restaurantOperationsUi.queueAutomaticPackagePrint({ packageId: "pkg_active" }), false);
+    assert.equal(dom.window.__restaurantOperationsUi.setAutoPrintEnabledForRestaurant("rst_flash", true), true);
+    assert.equal(dom.window.__restaurantOperationsUi.isAutoPrintEnabledForRestaurant("rst_flash"), true);
+    assert.equal(dom.window.__restaurantOperationsUi.queueAutomaticPackagePrint({ packageId: "pkg_active" }), true);
+    assert.equal(printState.pendingAutoPrintKeys.has("pkg_active"), true);
+    assert.equal(dom.window.__restaurantOperationsUi.hasAutoPrintedPackage("rst_flash", "pkg_active"), false);
+    dom.window.__restaurantOperationsUi.markPackageAutoPrinted("rst_flash", "pkg_active");
+    dom.window.__restaurantOperationsUi.markPackageAutoPrinted("rst_flash", "pkg_active");
+    assert.equal(dom.window.__restaurantOperationsUi.hasAutoPrintedPackage("rst_flash", "pkg_active"), true);
+    assert.deepEqual(
+      JSON.parse(dom.window.localStorage.getItem("deliveraRestaurantPrintedPackages:rst_flash")),
+      ["pkg_active"]
+    );
   } finally {
     dom.window.close();
   }

@@ -9,6 +9,9 @@ const RESTAURANT_TOKEN_KEY = "deliveraRestaurantToken";
 const RESTAURANT_REFRESH_TOKEN_KEY = "deliveraRestaurantRefreshToken";
 const RESTAURANT_ID_KEY = "deliveraRestaurantId";
 const RESTAURANT_API_KEY_KEY = "deliveraRestaurantApiKey";
+const RESTAURANT_AUTO_PRINT_KEY = "deliveraRestaurantAutoPrintByRestaurant";
+const RESTAURANT_PRINTED_PACKAGES_KEY = "deliveraRestaurantPrintedPackages";
+const RESTAURANT_PRINTED_PACKAGE_LIMIT = 250;
 const RESTAURANT_WORKSPACE_REFRESH_MS = 12_000;
 
 const restaurantState = {
@@ -24,6 +27,8 @@ const restaurantState = {
   liveStream: null,
   orderAlarmTimer: null,
   orderAlarmKey: "",
+  autoPrintEnabled: false,
+  pendingAutoPrintKeys: new Set(),
   workspaceLoadPromise: null,
   queuedWorkspaceLoad: null,
   activeWorkspaceCard: "restaurant-integration-wizard",
@@ -253,6 +258,8 @@ const restaurantRefs = {
   liveBadge: document.getElementById("restaurantLiveBadge"),
   notificationCenter: document.getElementById("restaurantNotificationCenter"),
   enablePushButton: document.getElementById("restaurantEnablePushButton"),
+  autoPrintStatus: document.getElementById("restaurantAutoPrintStatus"),
+  autoPrintToggle: document.getElementById("restaurantAutoPrintToggle"),
   orderAlarm: document.getElementById("restaurantOrderAlarm"),
   orderAlarmMessage: document.getElementById("restaurantOrderAlarmMessage"),
   orderAlarmAcknowledge: document.getElementById("restaurantOrderAlarmAcknowledge"),
@@ -576,9 +583,10 @@ function startRestaurantLiveStream() {
 
   restaurantState.liveStream = connectLiveStream("/api/restaurant/stream", restaurantState.token, {
     onMessage(event) {
+      const isNewOrderEvent = ["package-created", "platform-order", "platform-order-pending", "integration-order", "order:new"].includes(event?.type);
       if (event?.message) {
         showToast(event.message, notificationTone(event.type));
-        if (["package-created", "platform-order", "platform-order-pending", "integration-order", "order:new"].includes(event.type)) {
+        if (isNewOrderEvent) {
           startRestaurantOrderAlarm(event);
         } else if (event.type === "assignment-waiting") {
           playSignal("critical");
@@ -587,7 +595,12 @@ function startRestaurantLiveStream() {
         }
       }
       if (event?.type !== "courier-location") {
-        loadRestaurantWorkspace({ silent: true, force: true });
+        if (isNewOrderEvent) {
+          queueAutomaticPackagePrint(event);
+        }
+        loadRestaurantWorkspace({ silent: true, force: true })
+          .then(() => flushAutomaticPackagePrintQueue())
+          .catch(() => {});
       }
     },
     onError() {
@@ -939,59 +952,243 @@ function normalizePlatformSlug(value) {
     .replaceAll("-", "_");
 }
 
-function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
-  const win = window.open("", "_blank", "width=720,height=840");
-  if (!win) {
-    showToast("Yazdirma penceresi acilamadi.", "error");
-    return;
+function readJsonStorage(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "") || fallback;
+  } catch {
+    return fallback;
   }
+}
 
-  const items = Array.isArray(pkg.items) && pkg.items.length
-    ? pkg.items.map((item) => `
-      <tr>
-        <td>${escapeHtml(item.name || "-")}</td>
-        <td>${escapeHtml(item.quantity || 1)}</td>
-        <td>${escapeHtml(formatCurrency(item.price || 0))}</td>
-      </tr>
-    `).join("")
-    : '<tr><td colspan="3">Urun bilgisi paylasilmadi.</td></tr>';
+function writeJsonStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
 
-  win.document.write(`
-    <html>
-      <head>
-        <title>${escapeHtml(pkg.externalOrderNo || pkg.trackingNo || "Siparis")} Fis</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
-          h1 { margin: 0 0 12px; font-size: 24px; }
-          h2 { margin: 18px 0 8px; font-size: 16px; }
-          p { margin: 4px 0; }
-          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-          th, td { border-bottom: 1px solid #ddd; padding: 8px 4px; text-align: left; }
-        </style>
-      </head>
-      <body>
-        <h1>${escapeHtml(restaurantName)}</h1>
-        <p>Platform: ${escapeHtml(pkg.sourcePlatform || "-")}</p>
-        <p style="display: flex; align-items: center; gap: 4px;">${SVG_PACKAGE} Siparis No: ${escapeHtml(pkg.externalOrderNo || pkg.trackingNo || "-")}</p>
-        <p>Musteri: ${escapeHtml(pkg.recipient || "-")}</p>
-        <p>Telefon: ${escapeHtml(pkg.phone || "-")}</p>
-        <p>Adres: ${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</p>
-        <h2>Urunler</h2>
-        <table>
-          <thead><tr><th>Urun</th><th>Adet</th><th>Tutar</th></tr></thead>
-          <tbody>${items}</tbody>
-        </table>
-        <h2>Odeme</h2>
-        <p>Odeme Tipi: ${escapeHtml(pkg.paymentMethod || "-")}</p>
-        <p>Toplam Tutar: ${escapeHtml(formatCurrency(pkg.orderAmount || 0))}</p>
-        <p>Notlar: ${escapeHtml(pkg.customerNote || pkg.note || "-")}</p>
-        <p>Tarih Saat: ${escapeHtml(formatDate(pkg.createdAt))}</p>
-      </body>
-    </html>
-  `);
+function autoPrintPreferenceMap() {
+  const stored = readJsonStorage(RESTAURANT_AUTO_PRINT_KEY, {});
+  return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+}
+
+function isAutoPrintEnabledForRestaurant(restaurantId) {
+  return Boolean(restaurantId && autoPrintPreferenceMap()[restaurantId]);
+}
+
+function updateAutoPrintControls() {
+  const restaurantId = restaurantState.selectedRestaurantId;
+  const ready = Boolean(restaurantId);
+  restaurantState.autoPrintEnabled = ready && isAutoPrintEnabledForRestaurant(restaurantId);
+  if (restaurantRefs.autoPrintToggle) {
+    restaurantRefs.autoPrintToggle.disabled = !ready;
+    restaurantRefs.autoPrintToggle.textContent = restaurantState.autoPrintEnabled ? "Otomatik Fişi Kapat" : "Otomatik Fişi Aç";
+    restaurantRefs.autoPrintToggle.setAttribute("aria-pressed", restaurantState.autoPrintEnabled ? "true" : "false");
+  }
+  if (restaurantRefs.autoPrintStatus) {
+    restaurantRefs.autoPrintStatus.textContent = restaurantState.autoPrintEnabled
+      ? "58 mm otomatik fiş açık"
+      : "58 mm otomatik fiş kapalı";
+  }
+}
+
+function setAutoPrintEnabledForRestaurant(restaurantId, enabled) {
+  if (!restaurantId) return false;
+  const preferences = autoPrintPreferenceMap();
+  if (enabled) {
+    preferences[restaurantId] = true;
+  } else {
+    delete preferences[restaurantId];
+  }
+  writeJsonStorage(RESTAURANT_AUTO_PRINT_KEY, preferences);
+  restaurantState.autoPrintEnabled = Boolean(enabled);
+  updateAutoPrintControls();
+  return restaurantState.autoPrintEnabled;
+}
+
+function printedPackageStorageKey(restaurantId) {
+  return `${RESTAURANT_PRINTED_PACKAGES_KEY}:${restaurantId || "unknown"}`;
+}
+
+function printedPackageIds(restaurantId) {
+  const stored = readJsonStorage(printedPackageStorageKey(restaurantId), []);
+  return Array.isArray(stored) ? stored.map((id) => String(id)).filter(Boolean) : [];
+}
+
+function hasAutoPrintedPackage(restaurantId, packageId) {
+  return Boolean(packageId && printedPackageIds(restaurantId).includes(String(packageId)));
+}
+
+function markPackageAutoPrinted(restaurantId, packageId) {
+  if (!restaurantId || !packageId) return;
+  const next = printedPackageIds(restaurantId).filter((id) => id !== String(packageId));
+  next.push(String(packageId));
+  writeJsonStorage(printedPackageStorageKey(restaurantId), next.slice(-RESTAURANT_PRINTED_PACKAGE_LIMIT));
+}
+
+function thermalReceiptItemsHtml(pkg) {
+  if (!Array.isArray(pkg.items) || pkg.items.length === 0) {
+    return '<div class="empty-line">Ürün bilgisi platformdan gelmedi.</div>';
+  }
+  return pkg.items.map((item) => {
+    const quantity = Math.max(1, Number(item.quantity || item.count || 1));
+    const unitPrice = Number(item.price ?? item.unitPrice ?? 0);
+    const lineTotal = Number(item.total ?? item.totalPrice ?? (unitPrice * quantity));
+    const priceText = lineTotal > 0 ? formatCurrency(lineTotal) : "";
+    return `
+      <div class="item-row">
+        <span class="item-quantity">${escapeHtml(quantity)}×</span>
+        <span class="item-name">${escapeHtml(item.name || item.productName || "Ürün")}</span>
+        <strong>${escapeHtml(priceText)}</strong>
+      </div>
+      ${item.note || item.description ? `<div class="item-note">${escapeHtml(item.note || item.description)}</div>` : ""}
+    `;
+  }).join("");
+}
+
+function buildThermalReceiptHtml(pkg, restaurantName = "Delivera Express") {
+  const orderCode = pkg.externalOrderNo || pkg.platformOrderId || pkg.trackingNo || pkg.id || "Sipariş";
+  const trackingCode = pkg.trackingNo || pkg.id || "-";
+  const note = pkg.customerNote || pkg.note || "-";
+  return `<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${escapeHtml(orderCode)} - 58 mm Fiş</title>
+    <style>
+      @page { size: 58mm auto; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { width: 58mm; margin: 0; padding: 0; background: #fff; color: #000; }
+      body { width: 54mm; padding: 2mm; font-family: Arial, Helvetica, sans-serif; font-size: 10.5px; line-height: 1.28; }
+      h1 { margin: 0; text-align: center; font-size: 15px; line-height: 1.15; }
+      .center { text-align: center; }
+      .order-code { margin: 2mm 0 1mm; font-size: 15px; font-weight: 800; text-align: center; overflow-wrap: anywhere; }
+      .divider { margin: 1.5mm 0; border-top: 1px dashed #000; }
+      .row { display: flex; justify-content: space-between; gap: 2mm; margin: 0.7mm 0; }
+      .row span:first-child { flex: 0 0 18mm; }
+      .row strong { flex: 1; text-align: right; overflow-wrap: anywhere; }
+      .block { margin: 1mm 0; overflow-wrap: anywhere; }
+      .label { display: block; margin-bottom: 0.4mm; font-weight: 700; }
+      .items-title { font-size: 12px; font-weight: 800; }
+      .item-row { display: grid; grid-template-columns: 6mm 1fr auto; gap: 1mm; align-items: start; margin: 1mm 0; }
+      .item-name { font-weight: 700; overflow-wrap: anywhere; }
+      .item-note { margin: -0.5mm 0 1mm 7mm; font-size: 9px; }
+      .empty-line { margin: 1mm 0; font-style: italic; }
+      .total { font-size: 14px; font-weight: 800; }
+      .footer { margin-top: 2mm; text-align: center; font-size: 9px; }
+      @media screen { body { margin: 0 auto; border: 1px solid #ddd; } }
+      @media print { html, body { width: 58mm !important; } body { width: 54mm !important; } }
+    </style>
+  </head>
+  <body>
+    <h1>${escapeHtml(restaurantName)}</h1>
+    <div class="center">${escapeHtml(pkg.sourcePlatform || packageSourceLabel(pkg) || "Restoran Siparişi")}</div>
+    <div class="order-code">${escapeHtml(orderCode)}</div>
+    <div class="center">Paket: ${escapeHtml(trackingCode)}</div>
+    <div class="divider"></div>
+    <div class="row"><span>Tarih</span><strong>${escapeHtml(formatDate(pkg.createdAt))}</strong></div>
+    <div class="row"><span>Müşteri</span><strong>${escapeHtml(pkg.recipient || "-")}</strong></div>
+    <div class="row"><span>Telefon</span><strong>${escapeHtml(pkg.phone || "-")}</strong></div>
+    <div class="block"><span class="label">Adres</span>${escapeHtml(pkg.deliveryAddress || pkg.address || "-")}</div>
+    <div class="divider"></div>
+    <div class="items-title">ÜRÜNLER</div>
+    ${thermalReceiptItemsHtml(pkg)}
+    <div class="divider"></div>
+    <div class="row"><span>Ödeme</span><strong>${escapeHtml(pkg.paymentMethod || "-")}</strong></div>
+    <div class="row total"><span>TOPLAM</span><strong>${escapeHtml(formatCurrency(pkg.orderAmount || 0))}</strong></div>
+    <div class="divider"></div>
+    <div class="block"><span class="label">Müşteri Notu</span>${escapeHtml(note)}</div>
+    <div class="footer">Delivera Express · 58 mm restoran fişi</div>
+  </body>
+</html>`;
+}
+
+function printThermalReceiptInFrame(pkg, restaurantName = "Delivera Express") {
+  const frame = document.createElement("iframe");
+  frame.setAttribute("title", "58 mm sipariş fişi");
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.position = "fixed";
+  frame.style.width = "1px";
+  frame.style.height = "1px";
+  frame.style.opacity = "0";
+  frame.style.pointerEvents = "none";
+  frame.style.left = "-10000px";
+  document.body.appendChild(frame);
+  const printWindow = frame.contentWindow;
+  if (!printWindow?.document) {
+    frame.remove();
+    return false;
+  }
+  printWindow.document.open();
+  printWindow.document.write(buildThermalReceiptHtml(pkg, restaurantName));
+  printWindow.document.close();
+  window.setTimeout(() => {
+    try {
+      printWindow.focus();
+      printWindow.print();
+    } catch {
+      showToast("58 mm fiş yazdırılamadı; sipariş kartındaki tekrar yazdır butonunu kullanın.", "error");
+    } finally {
+      window.setTimeout(() => frame.remove(), 3000);
+    }
+  }, 180);
+  return true;
+}
+
+function openPackagePrintWindow(pkg, restaurantName = "Delivera Express") {
+  let win = null;
+  try {
+    win = window.open("", "_blank", "width=390,height=760");
+  } catch {}
+  if (!win) {
+    const fallbackStarted = printThermalReceiptInFrame(pkg, restaurantName);
+    showToast(
+      fallbackStarted ? "58 mm fiş yazdırma ekranına gönderildi." : "Yazdırma penceresi açılamadı.",
+      fallbackStarted ? "warning" : "error"
+    );
+    return fallbackStarted;
+  }
+  win.document.open();
+  win.document.write(buildThermalReceiptHtml(pkg, restaurantName));
   win.document.close();
+  win.onafterprint = () => win.close();
   win.focus();
-  window.setTimeout(() => win.print(), 150);
+  window.setTimeout(() => win.print(), 180);
+  return true;
+}
+
+function queueAutomaticPackagePrint(event = {}) {
+  if (!restaurantState.autoPrintEnabled) return false;
+  const printKey = String(event.packageId || event.orderId || "").trim();
+  if (!printKey) return false;
+  restaurantState.pendingAutoPrintKeys.add(printKey);
+  return true;
+}
+
+function flushAutomaticPackagePrintQueue() {
+  if (!restaurantState.autoPrintEnabled || !restaurantState.data || restaurantState.pendingAutoPrintKeys.size === 0) {
+    return 0;
+  }
+  const restaurantId = restaurantState.selectedRestaurantId || restaurantState.data.restaurants?.[0]?.id || "";
+  const restaurantName = restaurantState.data.restaurants?.[0]?.name || "Delivera Express";
+  let printedCount = 0;
+  [...restaurantState.pendingAutoPrintKeys].forEach((printKey) => {
+    const pkg = (restaurantState.data.packages || []).find((item) =>
+      [item.id, item.externalOrderId, item.externalOrderNo, item.platformOrderId, item.trackingNo]
+        .filter(Boolean)
+        .map(String)
+        .includes(printKey)
+    );
+    if (!pkg) return;
+    restaurantState.pendingAutoPrintKeys.delete(printKey);
+    if (hasAutoPrintedPackage(restaurantId, pkg.id)) return;
+    if (printThermalReceiptInFrame(pkg, restaurantName)) {
+      markPackageAutoPrinted(restaurantId, pkg.id);
+      printedCount += 1;
+      showToast(`${packageDisplayCode(pkg)} için 58 mm fiş yazıcıya gönderildi.`);
+    }
+  });
+  return printedCount;
 }
 
 function normalizedPasteText(value) {
@@ -1670,6 +1867,15 @@ function renderRecentOrders(packages) {
     card.querySelector('.details-btn')?.addEventListener('click', () => {
       window.showPackageDetailsModal?.(pkg);
     });
+    const quickPrintButton = document.createElement("button");
+    quickPrintButton.type = "button";
+    quickPrintButton.className = "primary-btn compact-action-btn";
+    quickPrintButton.textContent = "58 mm Fiş Yazdır";
+    quickPrintButton.setAttribute("aria-label", `${packageDisplayCode(pkg)} 58 mm fiş yazdır`);
+    quickPrintButton.addEventListener("click", () => {
+      openPackagePrintWindow(pkg, restaurantState.data?.restaurants?.[0]?.name || "Delivera Express");
+    });
+    card.querySelector(".order-card-footer")?.appendChild(quickPrintButton);
     restaurantRefs.recentOrders.appendChild(card);
   });
 }
@@ -1707,8 +1913,6 @@ function renderActiveOrders(data) {
           : "Atama Bekliyor";
     const assignmentTone = pkg.assignedCourierId ? "soft-badge" : "soft-badge status-awaiting-assignment";
     const prepCode = `DLV-${String(pkg.id || "").slice(-4).toUpperCase()}`;
-    const isPlatformOrder = pkg.source !== "external_manual" && pkg.source !== "manual";
-    const isConfirmed = String(pkg.assignmentReason || "").toLowerCase().includes("onay");
 
     const card = document.createElement("article");
     card.className = `stack-card order-summary-card restaurant-order-card modern-card ${pkg.status === "preparing" ? "anim-pulse-preparing" : ""}`;
@@ -1784,11 +1988,10 @@ function renderActiveOrders(data) {
     detailFooter.appendChild(detailButton);
     card.appendChild(detailFooter);
 
-    if (pkg.status === "pending_approval" || isPlatformOrder) {
-      const actions = document.createElement("div");
-      actions.className = "card-actions order-card-actions";
+    const actions = document.createElement("div");
+    actions.className = "card-actions order-card-actions";
 
-      if (pkg.status === "pending_approval") {
+    if (pkg.status === "pending_approval") {
         const confirmButton = document.createElement("button");
         confirmButton.type = "button";
         confirmButton.className = "ghost-btn";
@@ -1831,15 +2034,15 @@ function renderActiveOrders(data) {
         actions.appendChild(rejectButton);
       }
 
-      const printButton = document.createElement("button");
-      printButton.type = "button";
-      printButton.className = "primary-btn";
-      printButton.textContent = "Yazdir";
-      printButton.addEventListener("click", () => openPackagePrintWindow(pkg, restaurantName));
-      actions.appendChild(printButton);
+    const printButton = document.createElement("button");
+    printButton.type = "button";
+    printButton.className = "primary-btn";
+    printButton.textContent = "58 mm Fiş Yazdır";
+    printButton.setAttribute("aria-label", `${packageDisplayCode(pkg)} 58 mm fiş yazdır`);
+    printButton.addEventListener("click", () => openPackagePrintWindow(pkg, restaurantName));
+    actions.appendChild(printButton);
 
-      card.appendChild(actions);
-    }
+    card.appendChild(actions);
     restaurantRefs.activeOrders.appendChild(card);
   });
 }
@@ -1925,6 +2128,15 @@ function renderOrderHistory(packages) {
     card.querySelector('.details-btn')?.addEventListener('click', () => {
       window.showPackageDetailsModal?.(pkg);
     });
+    const reprintButton = document.createElement("button");
+    reprintButton.type = "button";
+    reprintButton.className = "primary-btn compact-action-btn";
+    reprintButton.textContent = "Fişi Tekrar Yazdır";
+    reprintButton.setAttribute("aria-label", `${packageDisplayCode(pkg)} fişi tekrar yazdır`);
+    reprintButton.addEventListener("click", () => {
+      openPackagePrintWindow(pkg, restaurantState.data?.restaurants?.[0]?.name || "Delivera Express");
+    });
+    card.querySelector(".order-card-footer")?.appendChild(reprintButton);
     restaurantRefs.orderHistory.appendChild(card);
   });
 }
@@ -2143,7 +2355,11 @@ function hydrateRestaurant(data, explicitIntegration = null) {
   }
   restaurantState.lastHydrateSignature = nextSignature;
   restaurantState.data = data;
-  restaurantState.selectedRestaurantId = data.restaurants[0]?.id || restaurantState.selectedRestaurantId;
+  restaurantState.selectedRestaurantId = data.restaurants[0]?.id || "";
+  if (!restaurantState.selectedRestaurantId) {
+    restaurantState.pendingAutoPrintKeys.clear();
+  }
+  updateAutoPrintControls();
   if (typeof Notification !== "undefined" && Notification.permission === "granted") {
     initializeRestaurantPush();
   } else {
@@ -2518,6 +2734,22 @@ restaurantRefs.mainQuickPasteParseButton?.addEventListener("click", () => {
 
 restaurantRefs.enablePushButton?.addEventListener("click", async () => {
   await initializeRestaurantPush({ requestPermission: true });
+});
+
+restaurantRefs.autoPrintToggle?.addEventListener("click", () => {
+  const restaurantId = restaurantState.selectedRestaurantId;
+  if (!restaurantId) {
+    showToast("Otomatik fiş için önce restoran girişi yapın.", "warning");
+    return;
+  }
+  const enabled = setAutoPrintEnabledForRestaurant(restaurantId, !restaurantState.autoPrintEnabled);
+  restaurantState.pendingAutoPrintKeys.clear();
+  showToast(
+    enabled
+      ? "58 mm otomatik fiş açıldı. Chrome kiosk yazdırma modundaysa siparişler sessiz basılır."
+      : "58 mm otomatik fiş kapatıldı.",
+    enabled ? "success" : "warning"
+  );
 });
 
 restaurantRefs.orderAlarmAcknowledge?.addEventListener("click", () => {
