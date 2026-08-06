@@ -576,6 +576,16 @@ function startRestaurantOrderAlarm(event = {}) {
   }, 8000);
 }
 
+function shouldSuppressRestaurantOrderAlert(event = {}) {
+  const source = String(event.source || "").trim().toLowerCase();
+  return event.suppressRestaurantAlert === true || [
+    "manual",
+    "external_manual",
+    "platform_manual",
+    "restaurant_panel",
+  ].includes(source);
+}
+
 function startRestaurantLiveStream() {
   if (restaurantState.liveStream || !restaurantState.token) {
     return;
@@ -584,7 +594,8 @@ function startRestaurantLiveStream() {
   restaurantState.liveStream = connectLiveStream("/api/restaurant/stream", restaurantState.token, {
     onMessage(event) {
       const isNewOrderEvent = ["package-created", "platform-order", "platform-order-pending", "integration-order", "order:new"].includes(event?.type);
-      if (event?.message) {
+      const suppressRestaurantAlert = shouldSuppressRestaurantOrderAlert(event);
+      if (event?.message && !suppressRestaurantAlert) {
         showToast(event.message, notificationTone(event.type));
         if (isNewOrderEvent) {
           startRestaurantOrderAlarm(event);

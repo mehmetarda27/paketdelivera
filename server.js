@@ -3295,7 +3295,7 @@ function persistNotificationsForEvent(event) {
     return;
   }
   persistNotification("admin", null, event);
-  if (event.restaurantId) {
+  if (event.restaurantId && !shouldSuppressRestaurantAlert(event)) {
     persistNotification("restaurant", event.restaurantId, event);
   }
   if (event.courierId) {
@@ -3348,6 +3348,16 @@ function getAnnouncements(targetRole = null) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+function shouldSuppressRestaurantAlert(event = {}) {
+  const source = trimmed(event.source).toLowerCase();
+  return event.suppressRestaurantAlert === true || [
+    "manual",
+    "external_manual",
+    "platform_manual",
+    "restaurant_panel",
+  ].includes(source);
 }
 
 function getAnnouncementById(announcementId) {
@@ -3921,7 +3931,7 @@ function restaurantPushPayload(event) {
 }
 
 function dispatchRestaurantPush(event) {
-  if (!event?.restaurantId || !RESTAURANT_PUSH_EVENT_TYPES.has(event.type)) {
+  if (!event?.restaurantId || !RESTAURANT_PUSH_EVENT_TYPES.has(event.type) || shouldSuppressRestaurantAlert(event)) {
     return;
   }
 
@@ -10071,6 +10081,8 @@ function handleSimplePlatformOrder(order, isManual = false, options = {}) {
     type: "platform-order-pending",
     restaurantId: match.restaurant.id,
     packageId: created?.id || null,
+    source: isManual ? "platform_manual" : payload.source,
+    suppressRestaurantAlert: isManual,
     message: "Yeni platform siparisi geldi.",
   });
 
@@ -12730,6 +12742,8 @@ async function handleApi(req, res, pathname) {
       type: "package-created",
       restaurantId: session.restaurant_id,
       packageId: pkg.id,
+      source: pkg.source || "external_manual",
+      suppressRestaurantAlert: true,
       message: "Manuel paket operasyon havuzuna alindi.",
     });
     sendJson(res, 201, {

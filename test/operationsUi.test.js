@@ -179,6 +179,7 @@ test("restaurant active views exclude closed orders and listen for live order ev
       hasAutoPrintedPackage,
       markPackageAutoPrinted,
       queueAutomaticPackagePrint,
+      shouldSuppressRestaurantOrderAlert,
       restaurantState
     };`);
     await new Promise((resolve) => dom.window.setTimeout(resolve, 20));
@@ -225,6 +226,15 @@ test("restaurant active views exclude closed orders and listen for live order ev
     assert.equal(dom.window.__restaurantOperationsUi.activeOrderPackages(data.packages).length, 1);
     assert.match(String(dom.window.__restaurantOperationsUi.startRestaurantLiveStream), /order:new/);
     assert.match(String(dom.window.__restaurantOperationsUi.connectLiveStream), /order:new/);
+    assert.equal(dom.window.__restaurantOperationsUi.shouldSuppressRestaurantOrderAlert({
+      type: "package-created",
+      source: "external_manual",
+      suppressRestaurantAlert: true,
+    }), true);
+    assert.equal(dom.window.__restaurantOperationsUi.shouldSuppressRestaurantOrderAlert({
+      type: "order:new",
+      source: "trendyol",
+    }), false);
 
     const receiptHtml = dom.window.__restaurantOperationsUi.buildThermalReceiptHtml({
       ...activePackage,

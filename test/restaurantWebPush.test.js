@@ -133,6 +133,11 @@ test("restaurant web push subscription is authenticated, isolated and idempotent
     assert.equal(
       db.prepare("SELECT COUNT(*) AS count FROM notification_logs WHERE target_role = ? AND target_id = ? AND event_type = ?")
         .get("restaurant", firstRestaurantId, "package-created").count,
+      0
+    );
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM notification_logs WHERE target_role = ? AND target_id IS NULL AND event_type = ?")
+        .get("admin", "package-created").count,
       1
     );
 
