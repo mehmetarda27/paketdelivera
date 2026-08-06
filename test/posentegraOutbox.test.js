@@ -86,3 +86,39 @@ test("Posentegra package assignment is idempotent and stores returned pid", asyn
   assert.equal(calls, 1);
   db.close();
 });
+
+test("Posentegra outbox immediately drains work queued during an active sweep", async () => {
+  const db = testDb();
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_fast", "pid_fast", stamp);
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const statuses = [];
+  const client = {
+    configured: () => true,
+    async changeOrderStatus(orderId, status) {
+      assert.equal(orderId, "pid_fast");
+      statuses.push(status);
+      if (status === "accepted") await firstGate;
+      return { ok: true, status: 200 };
+    },
+    async assignPackageToRestaurant() {
+      throw new Error("not expected");
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_fast", orderId: "pid_fast", status: "accepted" });
+  const activeSweep = outbox.processDue();
+  await new Promise((resolve) => setImmediate(resolve));
+  outbox.enqueueStatus({ packageId: "pkg_fast", orderId: "pid_fast", status: "delivered" });
+  const overlappingSweep = await outbox.processDue();
+  assert.equal(overlappingSweep.rerunRequested, true);
+  releaseFirst();
+  await activeSweep;
+  assert.deepEqual(statuses, ["accepted", "delivered"]);
+  assert.equal(
+    db.prepare("SELECT status FROM posentegra_outbox WHERE dedupe_key = ?").get("order.status:pkg_fast:delivered").status,
+    "completed"
+  );
+  db.close();
+});

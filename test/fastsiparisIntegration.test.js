@@ -115,7 +115,7 @@ function startMockPosentegra() {
   });
 }
 
-test("FastSiparis restaurant create, webhook match and courier status sync use Posentegra ids", { timeout: 30000 }, async () => {
+test("Trendyol webhook and courier delivery sync use Posentegra ids", { timeout: 30000 }, async () => {
   const mock = await startMockPosentegra();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-fastsiparis-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
@@ -170,7 +170,7 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
         zone: "Erdemli",
         latitude: 36.601,
         longitude: 34.32,
-        platforms: ["Yemeksepeti"],
+        platforms: ["Trendyol Yemek"],
       }),
     });
 
@@ -254,7 +254,7 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
       method: "POST",
       headers: { "x-webhook-secret": "test-webhook-secret" },
       body: JSON.stringify({
-        provider: { slug: "ys", kaynak: "Yemek Sepeti" },
+        provider: { slug: "ty", api: "tywh", kaynak: "Trendyol Yemek" },
         pid: "test-pid-001",
         restaurantId: "987654321",
         restaurant: { id: "987654321", name: "FastSiparis Test Restaurant" },
@@ -326,10 +326,31 @@ test("FastSiparis restaurant create, webhook match and courier status sync use P
     assert.equal(deliveredOnlinePackage.status, "delivered");
     assert.equal(deliveredOnlinePackage.payment_status, "paid_online");
 
-    const statusCall = mock.calls.find((call) => call.method === "POST" && call.url === "/web-api/v1/orders/change-status/test-pid-001");
-    assert.ok(statusCall);
-    assert.equal(statusCall.body.status, "accepted");
-    assert.equal(statusCall.body.packageId, webhookOrder.package.id);
+    let deliveredStatusCall = null;
+    for (let attempt = 0; attempt < 40 && !deliveredStatusCall; attempt += 1) {
+      deliveredStatusCall = mock.calls.find((call) =>
+        call.method === "POST" &&
+        call.url === "/web-api/v1/orders/change-status/test-pid-001" &&
+        call.body?.status === "delivered"
+      );
+      if (!deliveredStatusCall) await delay(50);
+    }
+    assert.ok(deliveredStatusCall);
+    assert.equal(deliveredStatusCall.body.packageId, webhookOrder.package.id);
+    assert.equal(deliveredStatusCall.body.internalStatus, "delivered");
+    const deliveredOutbox = readRow(
+      dbFile,
+      "SELECT status, attempts FROM posentegra_outbox WHERE dedupe_key = ?",
+      `order.status:${webhookOrder.package.id}:delivered`
+    );
+    assert.equal(deliveredOutbox.status, "completed");
+    assert.equal(deliveredOutbox.attempts, 0);
+    const deliveredPackageWithLogs = readRow(
+      dbFile,
+      "SELECT platform_status_logs_json FROM packages WHERE id = ?",
+      webhookOrder.package.id
+    );
+    assert.match(deliveredPackageWithLogs.platform_status_logs_json, /posentegra_outbox/);
     assert.equal(
       readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
       0
