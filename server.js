@@ -175,7 +175,7 @@ const ASSIGNMENT_RETRY_INTERVAL_MS = Number(process.env.DELIVERA_ASSIGNMENT_RETR
 const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEOUT_MS || 45_000);
 const COURIER_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_COURIER_REJECTION_COOLDOWN_MS || 30_000);
 const PACKAGE_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_PACKAGE_REJECTION_COOLDOWN_MS || 5_000);
-const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 5 * 60_000);
+const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 30 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
 const PREPARING_STATUS = "preparing";
@@ -6038,16 +6038,6 @@ function courierLocationIsFresh(courier, referenceTime = Date.now()) {
   return ageMs >= -60_000 && ageMs <= COURIER_LOCATION_FRESHNESS_MS;
 }
 
-function normalizedZone(value) {
-  return trimmed(value).toLocaleLowerCase("tr-TR");
-}
-
-function courierMatchesPackageZone(courier, pkg) {
-  const courierZone = normalizedZone(courier?.zone);
-  const packageZone = normalizedZone(pkg?.zone);
-  return Boolean(courierZone && packageZone && courierZone === packageZone);
-}
-
 function buildCourierFairnessMap(packages) {
   const today = dayKey();
   const fairnessMap = new Map();
@@ -6279,19 +6269,11 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const sameZoneCouriers = onlineCouriers.filter((courier) => courierMatchesPackageZone(courier, pkg));
-  if (sameZoneCouriers.length === 0) {
-    return {
-      reason: "bolgede kurye yok",
-      note: `Uygun kurye bulunamadi: ${pkg.zone} bolgesinde online kurye yok.`,
-    };
-  }
-
-  const freshLocationCouriers = sameZoneCouriers.filter((courier) => courierLocationIsFresh(courier));
+  const freshLocationCouriers = onlineCouriers.filter((courier) => courierLocationIsFresh(courier));
   if (freshLocationCouriers.length === 0) {
     return {
       reason: "guncel konum yok",
-      note: "Uygun kurye bulunamadi: bolgedeki online kuryelerin GPS konumu guncel degil.",
+      note: "Uygun kurye bulunamadi: online kuryelerin GPS konumu son 30 dakika icinde guncellenmemis.",
     };
   }
 
@@ -6342,7 +6324,6 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     .filter(({ courier, courierStatus, distance: courierDistance, load, sameRestaurantContinuation }) =>
       Boolean(courier.available) &&
       [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus) &&
-      courierMatchesPackageZone(courier, pkg) &&
       courierLocationIsFresh(courier) &&
       (load < 1 || (
         load < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
@@ -6409,9 +6390,9 @@ function candidateAssignmentReason(pkg, candidate) {
   const searchRadiusKm = Number(candidate?.searchRadiusKm || MAX_ASSIGNMENT_DISTANCE_KM);
   const locationLabel = candidate?.selectionMode === "distance_radius_fresh" ? "guncel GPS" : "kayitli konum";
   if (candidate?.sameRestaurantContinuation) {
-    return `${pkg.zone} bolgesinde ayni restorandan ikinci paket, ${searchRadiusKm} km icindeki mevcut kuryeye atandi.`;
+    return `Ayni restorandan ikinci paket, ${searchRadiusKm} km icindeki mevcut kuryeye atandi.`;
   }
-  return `${pkg.zone} bolgesinde ${searchRadiusKm} km arama capinda ${locationLabel} verisine gore en yakin online ve bos kurye secildi.`;
+  return `${searchRadiusKm} km arama capinda ${locationLabel} verisine gore en yakin online ve bos kurye secildi.`;
 }
 
 function assignPackage(state, pkg, occupiedCourierLoads = new Map(), options = {}) {

@@ -43,7 +43,7 @@ async function stopServer(server) {
   });
 }
 
-test("automatic assignment requires fresh GPS and matching zone while using current restaurant coordinates", { timeout: 20000 }, async () => {
+test("automatic assignment requires fresh GPS and uses distance regardless of courier zone", { timeout: 20000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-fresh-location-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 45000 + Math.floor(Math.random() * 1000);
@@ -61,7 +61,6 @@ test("automatic assignment requires fresh GPS and matching zone while using curr
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
-      DELIVERA_COURIER_LOCATION_FRESHNESS_MS: "300000",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -71,7 +70,7 @@ test("automatic assignment requires fresh GPS and matching zone while using curr
     await waitForServer(baseUrl);
     const now = new Date();
     const stamp = now.toISOString();
-    const staleStamp = new Date(now.getTime() - 25 * 60_000).toISOString();
+    const staleStamp = new Date(now.getTime() - 35 * 60_000).toISOString();
     const db = new DatabaseSync(dbFile);
     db.prepare(`
       INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, created_at)
@@ -100,7 +99,7 @@ test("automatic assignment requires fresh GPS and matching zone while using curr
     db.close();
 
     const assigned = await waitForAssignment(dbFile, "pkg_fresh_location");
-    assert.equal(assigned.assigned_courier_id, "cr_fresh_near");
+    assert.equal(assigned.assigned_courier_id, "cr_wrong_zone");
     assert.ok(Number(assigned.distance_km) < 0.1);
     assert.equal(assigned.last_assignment_error, "");
   } finally {

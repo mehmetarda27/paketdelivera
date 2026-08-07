@@ -149,7 +149,7 @@ test("automatic assignment prefers a free courier before batching a second packa
     });
     const thirdPackage = thirdState.createdPackage;
     assert.equal(thirdPackage.assignedCourierId, "cr_batch_1");
-    assert.match(thirdPackage.assignmentReason, /ayni restorandan ikinci paket/);
+    assert.match(thirdPackage.assignmentReason, /ayni restorandan ikinci paket/i);
 
     await request(baseUrl, `/api/courier/packages/${thirdPackage.id}/status`, {
       method: "PATCH",

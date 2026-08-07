@@ -1887,6 +1887,30 @@ async function heartbeatCourierLocation() {
   }
 }
 
+async function refreshCourierLocationNow() {
+  if (!courierState.token || !courierState.data?.courier?.available || document.visibilityState === "hidden") {
+    return;
+  }
+
+  try {
+    const position = await getCurrentCourierPosition();
+    const coords = {
+      latitude: Number(position.coords.latitude.toFixed(6)),
+      longitude: Number(position.coords.longitude.toFixed(6)),
+    };
+    courierState.lastCoords = coords;
+    await pushCourierLocation({
+      ...coords,
+      available: true,
+      locationOnly: true,
+    }, { locationOnly: true });
+    startLocationWatch(coords);
+    setShiftGreetingStatus(true);
+  } catch (error) {
+    handleLocationError(error);
+  }
+}
+
 function handleLocationError(error) {
   const message = error?.code === 1
     ? "Konum izni reddedildi. Adminde canli takip icin tarayici izni vermen gerekiyor."
@@ -2225,8 +2249,13 @@ window.addEventListener("beforeunload", stopWorkspacePolling);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     requestScreenWakeLock();
+    refreshCourierLocationNow();
   }
 });
+
+window.addEventListener("focus", refreshCourierLocationNow);
+window.addEventListener("pageshow", refreshCourierLocationNow);
+window.addEventListener("online", refreshCourierLocationNow);
 
 readStoredCourierAuth();
 setLoggedIn(Boolean(courierState.token || courierState.refreshToken));
