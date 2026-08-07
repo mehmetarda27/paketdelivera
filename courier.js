@@ -97,6 +97,16 @@ function presentCourierPayment(pkg) {
   return method || status;
 }
 
+function courierPaymentAction(pkg) {
+  const methodCode = String(pkg?.paymentMethodCode || "").toLowerCase();
+  const selectableMethods = ["cash_on_delivery", "card_on_delivery", "restaurant_collected"];
+  return {
+    methodCode,
+    requiresSelection: selectableMethods.includes(methodCode),
+    label: presentCourierPayment(pkg),
+  };
+}
+
 function courierFailureReasonLabel(reason) {
   return COURIER_FAILURE_REASON_OPTIONS.find((item) => item.value === reason)?.label || reason || "Sorun yok";
 }
@@ -454,7 +464,7 @@ async function resolvePackageAddressCoordinates(pkg, target, options = {}) {
     pending = api(`/api/courier/packages/${encodeURIComponent(pkg.id)}/geocode`, {
       method: "POST",
       headers: { Authorization: `Bearer ${courierState.token}` },
-      retryWithRefresh: refreshCourierAuth,
+      retryWithRefresh: refreshCourierAccess,
     }).finally(() => courierState.packageGeocodePromises.delete(pkg.id));
     courierState.packageGeocodePromises.set(pkg.id, pending);
   }
@@ -1437,8 +1447,8 @@ function renderPackages(packages) {
     }
 
     if (pkg.status === "on_route") {
-      const methodCode = String(pkg.paymentMethodCode || "").toLowerCase();
-      const requiresCollection = ["cash_on_delivery", "card_on_delivery", "restaurant_collected"].includes(methodCode);
+      const paymentAction = courierPaymentAction(pkg);
+      const requiresCollection = paymentAction.requiresSelection;
       let paymentSelect = null;
       if (requiresCollection) {
         paymentSelect = document.createElement("select");
@@ -1461,11 +1471,13 @@ function renderPackages(packages) {
         selectedPaymentStatus = pkg.paymentStatus || "";
       }
       const noteInput = document.createElement("input");
-      noteInput.className = "status-select courier-action-select";
+      noteInput.className = "courier-action-note hidden";
       noteInput.type = "text";
-      noteInput.placeholder = "Tahsilat notu";
+      noteInput.placeholder = "Tahsilat notu (istege bagli)";
       noteInput.value = currentDraft.courierCollectionNote || pkg.courierCollectionNote || "";
-      noteInput.classList.toggle("hidden", !selectedPaymentStatus && !noteInput.value);
+      const hasCollectionDecision = ["cash_collected", "credit_card_collected", "restaurant_collected", "payment_issue"]
+        .includes(selectedPaymentStatus);
+      noteInput.classList.toggle("hidden", !requiresCollection || (!hasCollectionDecision && !noteInput.value));
       noteInput.addEventListener("input", () => {
         setPackageDraft(pkg.id, { courierCollectionNote: noteInput.value });
       });
@@ -1484,8 +1496,18 @@ function renderPackages(packages) {
         }
         await submitStatus("delivered", "", selectedPaymentStatus, noteInput.value);
       });
-      if (paymentSelect) actions.appendChild(paymentSelect);
-      actions.appendChild(noteInput);
+      if (paymentSelect) {
+        actions.appendChild(paymentSelect);
+        actions.appendChild(noteInput);
+      } else {
+        const paymentSummary = document.createElement("div");
+        paymentSummary.className = "courier-payment-summary";
+        paymentSummary.setAttribute("role", "status");
+        paymentSummary.textContent = paymentAction.label === "Odeme bilgisi yok"
+          ? "Tahsilat gerekmiyor"
+          : paymentAction.label;
+        actions.appendChild(paymentSummary);
+      }
       actions.appendChild(deliveredButton);
     }
 

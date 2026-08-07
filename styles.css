@@ -5567,6 +5567,36 @@ body.theme-courier .courier-mobile-app {
   -webkit-appearance: none;
 }
 
+.theme-courier .courier-action-note {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  color: #24313f;
+  background: linear-gradient(180deg, #ffffff, #f8fbfa);
+  border: 1px solid #d6e0e7;
+  border-radius: 14px;
+  box-shadow: 0 5px 14px rgba(15, 23, 42, 0.05);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.theme-courier .courier-payment-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  color: #166534;
+  background: linear-gradient(180deg, #f0fdf4, #ecfdf5);
+  border: 1px solid #bbf7d0;
+  border-radius: 14px;
+  font-size: 0.82rem;
+  font-weight: 850;
+  text-align: center;
+}
+
 .theme-courier .primary-btn:hover,
 .theme-courier .ghost-btn:hover,
 .theme-courier .status-select:hover {
