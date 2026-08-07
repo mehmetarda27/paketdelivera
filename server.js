@@ -238,6 +238,7 @@ const COURIER_FAILURE_REASONS = new Set([
 ]);
 const ASSIGNMENT_SEARCH_RADII_KM = Object.freeze([5, 6, 7, 8]);
 const MAX_ASSIGNMENT_DISTANCE_KM = ASSIGNMENT_SEARCH_RADII_KM.at(-1);
+const ASSIGNMENT_FAIRNESS_DISTANCE_TOLERANCE_KM = 1;
 const LIVE_STREAM_HEARTBEAT_MS = 20_000;
 const STATUS_TRANSITIONS = {
   [PENDING_APPROVAL_STATUS]: [PREPARING_STATUS, REJECTED_STATUS, CANCELED_STATUS],
@@ -6037,6 +6038,49 @@ function courierLocationIsFresh(courier, referenceTime = Date.now()) {
   return ageMs >= -60_000 && ageMs <= COURIER_LOCATION_FRESHNESS_MS;
 }
 
+function normalizedZone(value) {
+  return trimmed(value).toLocaleLowerCase("tr-TR");
+}
+
+function courierMatchesPackageZone(courier, pkg) {
+  const courierZone = normalizedZone(courier?.zone);
+  const packageZone = normalizedZone(pkg?.zone);
+  return Boolean(courierZone && packageZone && courierZone === packageZone);
+}
+
+function buildCourierFairnessMap(packages) {
+  const today = dayKey();
+  const fairnessMap = new Map();
+  packages.forEach((item) => {
+    if (!item.assignedCourierId || !item.assignedAt) {
+      return;
+    }
+    const current = fairnessMap.get(item.assignedCourierId) || {
+      todayAssignments: 0,
+      lastAssignedAt: 0,
+    };
+    if (dayKey(item.assignedAt) === today) {
+      current.todayAssignments += 1;
+    }
+    const assignedAt = new Date(item.assignedAt).getTime();
+    if (Number.isFinite(assignedAt)) {
+      current.lastAssignedAt = Math.max(current.lastAssignedAt, assignedAt);
+    }
+    fairnessMap.set(item.assignedCourierId, current);
+  });
+  return fairnessMap;
+}
+
+function assignmentTieBreaker(packageId, courierId) {
+  const value = `${packageId || ""}:${courierId || ""}`;
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 function packageAssignmentCoordinates(state, pkg) {
   const restaurant = state.restaurants.find((item) => item.id === pkg.restaurantId);
   const restaurantLatitude = Number(restaurant?.latitude);
@@ -6235,7 +6279,23 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const freeOnlineCouriers = onlineCouriers.filter((courier) => {
+  const sameZoneCouriers = onlineCouriers.filter((courier) => courierMatchesPackageZone(courier, pkg));
+  if (sameZoneCouriers.length === 0) {
+    return {
+      reason: "bolgede kurye yok",
+      note: `Uygun kurye bulunamadi: ${pkg.zone} bolgesinde online kurye yok.`,
+    };
+  }
+
+  const freshLocationCouriers = sameZoneCouriers.filter((courier) => courierLocationIsFresh(courier));
+  if (freshLocationCouriers.length === 0) {
+    return {
+      reason: "guncel konum yok",
+      note: "Uygun kurye bulunamadi: bolgedeki online kuryelerin GPS konumu guncel degil.",
+    };
+  }
+
+  const freeOnlineCouriers = freshLocationCouriers.filter((courier) => {
     const activeLoad = activeAssignmentsForCourier(state.packages, courier.id, pkg.id);
     return activeLoad < 1 || (
       activeLoad < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
@@ -6259,6 +6319,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
   const excludedCourierIds = new Set(options.excludedCourierIds || []);
   const cooldownCourierIds = new Set(options.cooldownCourierIds || activeCourierRejectionCooldownIds());
   const activeLoadMap = buildActiveLoadMap(state.packages, pkg.id);
+  const fairnessMap = buildCourierFairnessMap(state.packages);
   const assignmentCoordinates = packageAssignmentCoordinates(state, pkg);
   const availableCandidates = state.couriers
     .map((courier) => ({
@@ -6276,10 +6337,13 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
         activeLoadMap.get(courier.id) || 0
       ),
       sameRestaurantContinuation: sameRestaurantContinuationForCourier(state.packages, courier.id, pkg, pkg.id),
+      fairness: fairnessMap.get(courier.id) || { todayAssignments: 0, lastAssignedAt: 0 },
     }))
     .filter(({ courier, courierStatus, distance: courierDistance, load, sameRestaurantContinuation }) =>
       Boolean(courier.available) &&
       [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus) &&
+      courierMatchesPackageZone(courier, pkg) &&
+      courierLocationIsFresh(courier) &&
       (load < 1 || (
         load < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
         sameRestaurantContinuation
@@ -6290,14 +6354,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     );
 
-  const freshContinuationCandidates = availableCandidates.filter(({ freshLocation, sameRestaurantContinuation }) =>
-    freshLocation && sameRestaurantContinuation
-  );
-  const preferredCandidates = freshContinuationCandidates.length > 0
-    ? freshContinuationCandidates
-    : availableCandidates;
-  const freshCandidates = preferredCandidates.filter(({ freshLocation }) => freshLocation);
-  const locationCandidates = freshCandidates.length > 0 ? freshCandidates : preferredCandidates;
+  const locationCandidates = availableCandidates;
   const selectedRadius = ASSIGNMENT_SEARCH_RADII_KM.find((radiusKm) =>
     locationCandidates.some(({ distance: courierDistance }) => courierDistance <= radiusKm)
   );
@@ -6307,7 +6364,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       .filter(({ distance: courierDistance }) => courierDistance <= selectedRadius)
       .map((candidate) => ({
         ...candidate,
-        selectionMode: freshCandidates.length > 0 ? "distance_radius_fresh" : "distance_radius_recorded",
+        selectionMode: "distance_radius_fresh",
         searchRadiusKm: selectedRadius,
       }));
 
@@ -6315,8 +6372,14 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     .sort((left, right) => {
       const leftDistance = Number.isFinite(left.distance) ? left.distance : Number.POSITIVE_INFINITY;
       const rightDistance = Number.isFinite(right.distance) ? right.distance : Number.POSITIVE_INFINITY;
-      return Number(right.sameRestaurantContinuation) - Number(left.sameRestaurantContinuation) ||
-        leftDistance - rightDistance || left.load - right.load || left.courier.name.localeCompare(right.courier.name, "tr");
+      const leftDistanceBand = Math.floor(leftDistance / ASSIGNMENT_FAIRNESS_DISTANCE_TOLERANCE_KM);
+      const rightDistanceBand = Math.floor(rightDistance / ASSIGNMENT_FAIRNESS_DISTANCE_TOLERANCE_KM);
+      return left.load - right.load ||
+        leftDistanceBand - rightDistanceBand ||
+        left.fairness.todayAssignments - right.fairness.todayAssignments ||
+        left.fairness.lastAssignedAt - right.fairness.lastAssignedAt ||
+        leftDistance - rightDistance ||
+        assignmentTieBreaker(pkg.id, left.courier.id) - assignmentTieBreaker(pkg.id, right.courier.id);
     });
 
   if (ASSIGNMENT_DEBUG_LOGS) {

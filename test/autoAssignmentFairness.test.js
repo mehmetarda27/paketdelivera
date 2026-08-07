@@ -19,7 +19,7 @@ async function waitForServer(baseUrl, timeoutMs = 10000) {
     } catch {}
     await delay(100);
   }
-  throw new Error("Fresh location test server did not start in time.");
+  throw new Error("Fairness test server did not start in time.");
 }
 
 async function waitForAssignment(dbFile, packageId, timeoutMs = 10000) {
@@ -31,7 +31,7 @@ async function waitForAssignment(dbFile, packageId, timeoutMs = 10000) {
     if (row?.assigned_courier_id) return row;
     await delay(100);
   }
-  throw new Error("Package was not assigned using fresh courier GPS.");
+  throw new Error("Fairness package was not assigned.");
 }
 
 async function stopServer(server) {
@@ -43,10 +43,10 @@ async function stopServer(server) {
   });
 }
 
-test("automatic assignment requires fresh GPS and matching zone while using current restaurant coordinates", { timeout: 20000 }, async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-fresh-location-"));
+test("automatic assignment balances today's work between similarly close couriers", { timeout: 20000 }, async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-assignment-fairness-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
-  const port = 45000 + Math.floor(Math.random() * 1000);
+  const port = 46000 + Math.floor(Math.random() * 1000);
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
@@ -61,7 +61,6 @@ test("automatic assignment requires fresh GPS and matching zone while using curr
       DELIVERA_DB_FILE: dbFile,
       DELIVERA_ASSIGNMENT_RETRY_MS: "150",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
-      DELIVERA_COURIER_LOCATION_FRESHNESS_MS: "300000",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -69,40 +68,46 @@ test("automatic assignment requires fresh GPS and matching zone while using curr
 
   try {
     await waitForServer(baseUrl);
-    const now = new Date();
-    const stamp = now.toISOString();
-    const staleStamp = new Date(now.getTime() - 25 * 60_000).toISOString();
+    const stamp = new Date().toISOString();
     const db = new DatabaseSync(dbFile);
     db.prepare(`
       INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run("rst_fresh_location", "Fresh Location Restaurant", "Akdeniz", 36.78915, 34.59786, "[]", "fresh-api", "fresh-secret", stamp);
-
+    `).run("rst_fair", "Fair Restaurant", "Akdeniz", 36.7891, 34.5978, "[]", "fair-api", "fair-secret", stamp);
     const insertCourier = db.prepare(`
       INSERT INTO couriers (id, name, zone, x, y, available, status, username, password_hash, password_salt, last_location_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    insertCourier.run("cr_stale_closer", "Stale Closer Courier", "Akdeniz", 36.78915, 34.59786, 1, "online", "stale_closer", "unused", "unused", staleStamp, stamp);
-    insertCourier.run("cr_wrong_zone", "Wrong Zone Courier", "Mezitli", 36.78915, 34.59786, 1, "online", "wrong_zone", "unused", "unused", stamp, stamp);
-    insertCourier.run("cr_fresh_near", "Fresh Nearby Courier", "Akdeniz", 36.78935, 34.59786, 1, "online", "fresh_near", "unused", "unused", stamp, stamp);
+    insertCourier.run("cr_overworked", "A Overworked Courier", "Akdeniz", 36.7891, 34.5978, 1, "online", "overworked", "unused", "unused", stamp, stamp);
+    insertCourier.run("cr_resting", "Z Resting Courier", "Akdeniz", 36.7910, 34.5978, 1, "online", "resting", "unused", "unused", stamp, stamp);
 
-    db.prepare(`
+    const insertPackage = db.prepare(`
       INSERT INTO packages (
         id, tracking_no, restaurant_id, source, source_platform, external_order_no,
-        recipient, phone, address, zone, eta, payment_method, order_amount,
-        x, y, note, status, assignment_status, assignment_reason, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      "pkg_fresh_location", "PKT-FRESH-LOCATION", "rst_fresh_location", "restaurant_panel", "Manuel", "FRESH-1",
-      "Fresh Customer", "5550000000", "Test address", "Akdeniz", "15 dk", "Online Odeme", 100,
-      51.5, -0.12, "Old package coordinate snapshot", "awaiting_assignment", "pending", "Test setup", stamp, stamp
+        recipient, phone, address, zone, eta, payment_method, order_amount, x, y, note,
+        status, assignment_status, assigned_courier_id, assigned_courier_name, assigned_at,
+        delivered_at, assignment_reason, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (let index = 0; index < 3; index += 1) {
+      insertPackage.run(
+        `pkg_fair_history_${index}`, `PKT-FAIR-HISTORY-${index}`, "rst_fair", "restaurant_panel", "Manuel", `FAIR-HISTORY-${index}`,
+        "History Customer", "5550000000", "History address", "Akdeniz", "15 dk", "Online Odeme", 100,
+        36.7891, 34.5978, "Completed fairness history", "delivered", "assigned", "cr_overworked", "A Overworked Courier",
+        stamp, stamp, "Test history", stamp, stamp
+      );
+    }
+    insertPackage.run(
+      "pkg_fair_target", "PKT-FAIR-TARGET", "rst_fair", "restaurant_panel", "Manuel", "FAIR-TARGET",
+      "Target Customer", "5550000001", "Target address", "Akdeniz", "15 dk", "Online Odeme", 100,
+      36.7891, 34.5978, "Fairness target", "awaiting_assignment", "pending", null, null, null,
+      null, "Test setup", stamp, stamp
     );
     db.close();
 
-    const assigned = await waitForAssignment(dbFile, "pkg_fresh_location");
-    assert.equal(assigned.assigned_courier_id, "cr_fresh_near");
-    assert.ok(Number(assigned.distance_km) < 0.1);
-    assert.equal(assigned.last_assignment_error, "");
+    const assigned = await waitForAssignment(dbFile, "pkg_fair_target");
+    assert.equal(assigned.assigned_courier_id, "cr_resting");
+    assert.notEqual(assigned.assigned_courier_name, "A Overworked Courier");
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

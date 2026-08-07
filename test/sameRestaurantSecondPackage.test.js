@@ -53,7 +53,7 @@ async function waitForAssignedCourier(dbFile, packageId, courierId, timeoutMs = 
   throw new Error(`Package ${packageId} was not assigned to ${courierId}.`);
 }
 
-test("automatic assignment allows only a second package from the same restaurant and direction conflict returns it to the pool", { timeout: 30000 }, async () => {
+test("automatic assignment prefers a free courier before batching a second package and direction conflict returns it to the pool", { timeout: 30000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-same-restaurant-second-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 44000 + Math.floor(Math.random() * 1000);
@@ -132,13 +132,13 @@ test("automatic assignment allows only a second package from the same restaurant
       body: packageBody("Second Customer"),
     });
     const secondPackage = secondState.createdPackage;
-    assert.equal(secondPackage.assignedCourierId, "cr_batch_1");
+    assert.equal(secondPackage.assignedCourierId, "cr_batch_2");
     assert.equal(secondPackage.status, "assigned");
-    assert.match(secondPackage.assignmentReason, /ayni restorandan ikinci paket/);
+    assert.doesNotMatch(secondPackage.assignmentReason, /ayni restorandan ikinci paket/);
 
     await request(baseUrl, `/api/courier/packages/${secondPackage.id}/status`, {
       method: "PATCH",
-      headers: { Authorization: "Bearer token-batch-one" },
+      headers: { Authorization: "Bearer token-batch-two" },
       body: JSON.stringify({ status: "accepted_by_courier" }),
     });
 
@@ -148,38 +148,27 @@ test("automatic assignment allows only a second package from the same restaurant
       body: packageBody("Third Customer"),
     });
     const thirdPackage = thirdState.createdPackage;
-    assert.equal(thirdPackage.assignedCourierId, "cr_batch_2");
-    assert.notEqual(thirdPackage.assignedCourierId, "cr_batch_1");
+    assert.equal(thirdPackage.assignedCourierId, "cr_batch_1");
+    assert.match(thirdPackage.assignmentReason, /ayni restorandan ikinci paket/);
 
     await request(baseUrl, `/api/courier/packages/${thirdPackage.id}/status`, {
       method: "PATCH",
-      headers: { Authorization: "Bearer token-batch-two" },
+      headers: { Authorization: "Bearer token-batch-one" },
       body: JSON.stringify({ status: "accepted_by_courier" }),
     });
-    await request(baseUrl, `/api/courier/packages/${thirdPackage.id}/status`, {
-      method: "PATCH",
-      headers: { Authorization: "Bearer token-batch-two" },
-      body: JSON.stringify({ status: "on_route" }),
-    });
-    await request(baseUrl, `/api/courier/packages/${thirdPackage.id}/status`, {
-      method: "PATCH",
-      headers: { Authorization: "Bearer token-batch-two" },
-      body: JSON.stringify({ status: "delivered" }),
-    });
-
-    const directionWorkspace = await request(baseUrl, `/api/courier/packages/${secondPackage.id}/status`, {
+    const directionWorkspace = await request(baseUrl, `/api/courier/packages/${thirdPackage.id}/status`, {
       method: "PATCH",
       headers: { Authorization: "Bearer token-batch-one" },
       body: JSON.stringify({ status: "failed", failureReason: "ters_yon" }),
     });
-    assert.equal(directionWorkspace.packages.some((pkg) => pkg.id === secondPackage.id), false);
+    assert.equal(directionWorkspace.packages.some((pkg) => pkg.id === thirdPackage.id), false);
 
     const verificationDb = new DatabaseSync(dbFile, { readOnly: true });
     const pooled = verificationDb.prepare(`
       SELECT status, assigned_courier_id, accepted_at, on_route_at, failure_reason,
              last_assignment_error, assignment_tried_courier_ids_json
       FROM packages WHERE id = ?
-    `).get(secondPackage.id);
+    `).get(thirdPackage.id);
     assert.equal(pooled.status, "awaiting_assignment");
     assert.equal(pooled.assigned_courier_id, null);
     assert.equal(pooled.accepted_at, null);
@@ -188,12 +177,12 @@ test("automatic assignment allows only a second package from the same restaurant
     assert.match(pooled.last_assignment_error, /ters yon/);
     assert.deepEqual(JSON.parse(pooled.assignment_tried_courier_ids_json), ["cr_batch_1"]);
     assert.equal(
-      verificationDb.prepare("SELECT COUNT(*) AS total FROM audit_logs WHERE action = ? AND package_id = ?").get("courier_package_rejected", secondPackage.id).total,
+      verificationDb.prepare("SELECT COUNT(*) AS total FROM audit_logs WHERE action = ? AND package_id = ?").get("courier_package_rejected", thirdPackage.id).total,
       1
     );
     verificationDb.close();
 
-    await waitForAssignedCourier(dbFile, secondPackage.id, "cr_batch_2");
+    await waitForAssignedCourier(dbFile, thirdPackage.id, "cr_batch_2");
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
