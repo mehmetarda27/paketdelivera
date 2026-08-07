@@ -98,7 +98,13 @@ function presentCourierPayment(pkg) {
 }
 
 function courierPaymentAction(pkg) {
-  const methodCode = String(pkg?.paymentMethodCode || "").toLowerCase();
+  const rawMethod = String(pkg?.paymentMethod || "").toLowerCase();
+  let methodCode = String(pkg?.paymentMethodCode || "").toLowerCase();
+  if (!methodCode && (rawMethod.includes("cash") || rawMethod.includes("nakit"))) {
+    methodCode = "cash_on_delivery";
+  } else if (!methodCode && (rawMethod.includes("card") || rawMethod.includes("kart") || rawMethod.includes("kredi") || rawMethod.includes("debit") || rawMethod.includes("pos"))) {
+    methodCode = "card_on_delivery";
+  }
   const selectableMethods = ["cash_on_delivery", "card_on_delivery", "restaurant_collected"];
   return {
     methodCode,

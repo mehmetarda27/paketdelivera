@@ -92,3 +92,19 @@ test("kapida odemede tahsilat secimi acilir ve not alani normal metin alanidir",
     dom.window.close();
   }
 });
+
+test("eski CARD kaydinda method kodu eksik olsa da tahsilat secimi gosterilir", () => {
+  const dom = createCourierPage();
+  try {
+    dom.window.__paymentUi.renderPackages([onRoutePackage({
+      paymentMethod: "CARD",
+      paymentMethodCode: "",
+      paymentStatus: "unpaid",
+    })]);
+    const collectionSelect = [...dom.window.document.querySelectorAll(".courier-card-actions select")]
+      .find((select) => select.textContent.includes("Tahsilat"));
+    assert.ok(collectionSelect);
+  } finally {
+    dom.window.close();
+  }
+});

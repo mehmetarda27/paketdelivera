@@ -2261,9 +2261,13 @@ function normalizePaymentStatus(paymentStatus, paymentMethod = "") {
   }
 
   const loweredMethod = trimmed(paymentMethod).toLowerCase();
-  if (normalizePaymentMethodCode(paymentMethod) === "paid_online") {
-    return PAID_ONLINE_PAYMENT_STATUS;
-  }
+  const methodCode = normalizePaymentMethodCode(paymentMethod);
+  if (methodCode === "paid_online") return PAID_ONLINE_PAYMENT_STATUS;
+  if (methodCode === "cash_on_delivery") return CASH_EXPECTED_PAYMENT_STATUS;
+  if (methodCode === "card_on_delivery") return CREDIT_CARD_PAYMENT_STATUS;
+  if (methodCode === "restaurant_collected") return RESTAURANT_COLLECTED_PAYMENT_STATUS;
+  if (methodCode === "collected") return COLLECTED_PAYMENT_STATUS;
+  if (methodCode === "payment_issue") return PAYMENT_ISSUE_STATUS;
   if (loweredMethod.includes("nakit")) {
     return CASH_EXPECTED_PAYMENT_STATUS;
   }
@@ -2292,9 +2296,9 @@ function normalizePaymentMethodCode(value) {
     incoming.includes("online_paid") ||
     incoming.includes("paid_online")
   ) return "paid_online";
-  if (incoming.includes("nakit")) return "cash_on_delivery";
-  if (incoming.includes("kart") || incoming.includes("kredi") || incoming.includes("pos")) return "card_on_delivery";
   if (incoming.includes("online")) return "paid_online";
+  if (incoming.includes("nakit") || incoming.includes("cash")) return "cash_on_delivery";
+  if (incoming.includes("kart") || incoming.includes("kredi") || incoming.includes("card") || incoming.includes("debit") || incoming.includes("pos")) return "card_on_delivery";
   if (incoming.includes("restoran")) return "restaurant_collected";
   if (incoming.includes("edilemedi") || incoming.includes("alinamadi") || incoming.includes("alınamadı") || incoming.includes("payment_issue")) return "payment_issue";
   if (incoming.includes("tahsil")) return "collected";

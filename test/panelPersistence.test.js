@@ -317,11 +317,13 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         phone: "5554443322",
         address: "Platform persistence address",
         totalPrice: 210,
-        paymentMethod: "Online Odeme",
+        paymentMethod: "CARD",
         note: "platform_orders persistence test",
       }),
     });
     assert.ok(platformOrderState.package?.id);
+    assert.equal(platformOrderState.package.paymentMethodCode, "card_on_delivery");
+    assert.equal(platformOrderState.package.paymentStatus, "credit_card");
     assert.ok(platformOrderState.platformOrder?.id);
     assert.ok(readRow(dbFile, "SELECT id FROM packages WHERE id = ?", platformOrderState.package.id));
     assert.ok(readRow(dbFile, "SELECT id FROM platform_orders WHERE id = ?", platformOrderState.platformOrder.id));
