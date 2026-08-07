@@ -145,6 +145,17 @@ test("admin can move a courier-accepted package but cannot take an on-route pack
     assert.equal(reassigned.acceptedAt, null);
     assert.equal(movedBack.couriers.find((courier) => courier.id === "cr_admin_new")?.status, "online");
 
+    const automaticallyReassigned = await request(baseUrl, "/api/admin/packages/pkg_admin_move/reassign", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    const movedToDifferentCourier = automaticallyReassigned.packages.find((pkg) => pkg.id === "pkg_admin_move");
+    assert.equal(movedToDifferentCourier.assignedCourierId, "cr_admin_new");
+    assert.notEqual(movedToDifferentCourier.assignedCourierId, reassigned.assignedCourierId);
+    assert.deepEqual(movedToDifferentCourier.assignmentTriedCourierIds, ["cr_admin_old", "cr_admin_new"]);
+    assert.equal(automaticallyReassigned.couriers.find((courier) => courier.id === "cr_admin_old")?.status, "online");
+
     const verificationDb = new DatabaseSync(dbFile);
     verificationDb.prepare(`
       UPDATE packages

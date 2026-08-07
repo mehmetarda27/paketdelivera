@@ -6197,10 +6197,14 @@ function buildAssignmentFailure(pkg, reason, note) {
 }
 
 function evaluateAssignmentFailure(state, pkg) {
-  if (!pkg.restaurantId || !pkg.zone || Number.isNaN(Number(pkg.latitude)) || Number.isNaN(Number(pkg.longitude))) {
+  const assignmentCoordinates = packageAssignmentCoordinates(state, pkg);
+  if (!pkg.restaurantId || !pkg.zone || !coordinatesAreValid(
+    assignmentCoordinates.latitude,
+    assignmentCoordinates.longitude
+  )) {
     return {
       reason: "veri eksik",
-      note: "Siparis verisi eksik oldugu icin atama denemesi yapilamadi.",
+      note: "Restoran konumu gecersiz veya eksik oldugu icin kurye atamasi yapilamadi. Admin panelinden restoran konumunu guncelleyin.",
     };
   }
 
@@ -6347,7 +6351,7 @@ function candidateAssignmentReason(pkg, candidate) {
   return `${pkg.zone} bolgesinde ${searchRadiusKm} km arama capinda ${locationLabel} verisine gore en yakin online ve bos kurye secildi.`;
 }
 
-function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
+function assignPackage(state, pkg, occupiedCourierLoads = new Map(), options = {}) {
   const packageStatus = normalizeStatus(pkg.status);
   if ([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, CANCELED_STATUS].includes(packageStatus)) {
     return {
@@ -6361,7 +6365,7 @@ function assignPackage(state, pkg, occupiedCourierLoads = new Map()) {
     return pkg;
   }
 
-  const ranked = rankEligibleCouriers(state, pkg, occupiedCourierLoads);
+  const ranked = rankEligibleCouriers(state, pkg, occupiedCourierLoads, options);
   if (ranked.length === 0) {
     const failure = evaluateAssignmentFailure(state, pkg);
     return buildAssignmentFailure(pkg, failure.reason, failure.note);
@@ -15337,8 +15341,20 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    persistPackageAssignment(assignPackage(state, target));
+    const previousCourierId = target.assignedCourierId || null;
+    // An explicit admin reassignment starts a fresh round, but the current courier
+    // must never immediately receive the same package again.
+    const excludedCourierIds = normalizeIdList([previousCourierId]);
+    const reassignment = assignPackage(state, target, new Map(), { excludedCourierIds });
+    persistPackageAssignment(reassignment);
     const reassignedPackage = getPackageById(target.id);
+    setPackageTriedCouriers(target.id, normalizeIdList([
+      ...excludedCourierIds,
+      reassignedPackage?.assignedCourierId,
+    ]));
+    // Release the previous courier immediately and keep every panel's courier
+    // status consistent with the newly persisted assignment.
+    syncCourierOperationalStatuses(currentState());
     writeAuditLog({
       actorRole: "admin",
       actorId: adminActorId(adminSession),
@@ -15347,6 +15363,8 @@ async function handleApi(req, res, pathname) {
       restaurantId: target.restaurantId,
       details: {
         status: target.status,
+        previousCourierId,
+        assignedCourierId: reassignedPackage?.assignedCourierId || null,
       },
     });
     broadcastLiveEvent({
