@@ -37,10 +37,31 @@
   const textNodes = (value) => all("body *").filter((element) => element.children.length === 0 && element.textContent.trim() === value);
   const containsText = (value) => all("body *").filter((element) => element.children.length === 0 && element.textContent.trim().includes(value));
 
-  async function api(path, options = {}) {
+  function saveAuth(auth = {}) {
+    const accessToken = auth.token || auth.accessToken || "";
+    const refreshToken = auth.refreshToken || "";
+    if (accessToken) localStorage.setItem(TOKEN_KEY, accessToken);
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  }
+
+  async function api(path, options = {}, retry = true) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
     if (token()) headers.Authorization = `Bearer ${token()}`;
     const response = await fetch(path, { ...options, headers });
+    if (response.status === 401 && retry && path !== "/api/courier/login") {
+      const refreshToken = localStorage.getItem(REFRESH_KEY) || "";
+      if (refreshToken) {
+        const refreshResponse = await fetch("/api/courier/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (refreshResponse.ok) {
+          saveAuth(await refreshResponse.json());
+          return api(path, options, false);
+        }
+      }
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401 && path !== "/api/courier/login") logout(false);
@@ -274,8 +295,7 @@
       onSubmit: async (form) => {
         const permissionRequest = requestCourierNotificationPermission();
         const result = await api("/api/courier/login", { method: "POST", body: JSON.stringify({ username: form.get("username"), password: form.get("password") }) });
-        localStorage.setItem(TOKEN_KEY, result.token || result.accessToken || "");
-        if (result.refreshToken) localStorage.setItem(REFRESH_KEY, result.refreshToken);
+        saveAuth(result);
         window.DeliveraLoginShell.hide();
         await loadWorkspace();
         await permissionRequest;
