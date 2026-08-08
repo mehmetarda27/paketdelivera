@@ -2,11 +2,29 @@ node_modules/
 
 .env
 .env.local
+.env.*
+!.env.example
 
 *.log
+logs/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.db
+
+backups/
+uploads/
+
+*.diff
+
+# Tasarim aracindan gelen referans dosyalari deploy icin gerekli degildir.
+admin-design-source/DESIGN.md
+admin-design-source/screen.png
+admin-design-source/tailwind.config.cjs
+admin-design-source/tailwind.input.css
+restaurant-design-source/screen.png
+courier-design-source/DESIGN.md
+courier-design-source/**/screen.png
 
 android/.gradle/
 android/build/

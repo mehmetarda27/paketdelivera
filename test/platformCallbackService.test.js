@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { sendPlatformStatusCallback } = require("../services/platformCallbackService");
+const { sendPlatformStatusCallback, callbackOutcomeAlreadyRecorded } = require("../services/platformCallbackService");
 
 function fakeDb(rows = []) {
   return {
@@ -41,6 +41,20 @@ test("platform callback skips safely when URL is not configured", async () => {
     if (previousPlatform === undefined) delete process.env.DELIVERA_PLATFORM_CALLBACK_URL_YEMEKSEPETI;
     else process.env.DELIVERA_PLATFORM_CALLBACK_URL_YEMEKSEPETI = previousPlatform;
   }
+});
+
+test("identical unconfigured assignment callbacks are recognized for log deduplication", () => {
+  const packageRecord = {
+    assignedCourierId: "cou_1",
+    platformStatusLogs: [{
+      status: "assigned",
+      meta: { courierId: "cou_1", callbackMode: "not_configured", callbackStatus: "not_configured" },
+    }],
+  };
+  const result = { ok: false, mode: "not_configured", status: "not_configured" };
+  assert.equal(callbackOutcomeAlreadyRecorded(packageRecord, "assigned", { courierId: "cou_1" }, result), true);
+  assert.equal(callbackOutcomeAlreadyRecorded(packageRecord, "assigned", { courierId: "cou_2" }, result), false);
+  assert.equal(callbackOutcomeAlreadyRecorded(packageRecord, "delivered", {}, result), false);
 });
 
 test("platform callback uses env URL and sends status payload", async () => {

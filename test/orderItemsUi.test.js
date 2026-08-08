@@ -48,14 +48,15 @@ test("shared product box renders item details safely and handles missing platfor
 });
 
 test("admin, restaurant detail and courier information surfaces are wired to the shared product box", () => {
-  const adminHtml = read("admin.html");
+  const adminHtml = read("admin-design-source/code.html");
   const courierHtml = read("courier.html");
-  const adminScript = read("admin.js");
+  const adminScript = read("admin-design-bridge.js");
   const courierScript = read("courier.js");
   const restaurantScript = read("restaurant.js");
   const sharedScript = read("shared.js");
 
-  assert.match(adminHtml, /class="order-items-slot"/);
+  assert.match(adminHtml, /admin-design-bridge\.js/);
+  assert.match(adminScript, /class="order-items-slot"/);
   assert.match(courierHtml, /class="courier-order-items"/);
   assert.match(adminScript, /renderOrderItemsBox\?\.\(pkg, \{ compact: true \}\)/);
   assert.match(courierScript, /renderOrderItemsBox\?\.\(pkg, \{ compact: true \}\)/);

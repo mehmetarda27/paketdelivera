@@ -1,3 +1,0 @@
-Delivera Express ilk admin hesabi olusturuldu.
-Kullanici adi: admin
-Sifre: Delivera123!

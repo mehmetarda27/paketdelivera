@@ -66,6 +66,9 @@ Client operations prepared in `services/posentegraClient.js`:
 
 Status change:
 
+- Restaurant approval for Trendyol Yemek, Getir Yemek, Yemeksepeti, or Migros Yemek is queued as Posentegra `accepted` and routed by that order's `pid` and source platform.
+- Restaurant rejection for those platforms is queued through `POST /web-api/v1/orders/cancel/{orderId}` with the rejection reason.
+- A decision only targets the platform that created the order; approving a Trendyol order never updates Getir, Yemeksepeti, or Migros orders.
 - Courier `accepted_by_courier` maps to Posentegra `accepted`.
 - Courier `on_route` maps to Posentegra `on_the_way`.
 - Courier `delivered` maps to Posentegra `delivered`.
@@ -85,7 +88,7 @@ Important id rule:
 
 Manual and extension-created packages are written locally first and queued in `posentegra_outbox` in the same database transaction. The outbox calls `assign-package` with an idempotency key. A Posentegra outage therefore does not block restaurant or courier operations; failures are retried with exponential backoff and become `dead_letter` after 10 delivery cycles.
 
-Courier lifecycle changes are also persisted locally first. `accepted_by_courier`, `on_route`, `delivered`, and `failed` are delivered through the durable outbox. If Posentegra returns a canonical `pid` for a manually assigned package, `packages.posentegra_id` is updated before later status events are delivered.
+Restaurant approval/rejection and courier lifecycle changes are persisted locally first. Restaurant approval uses the idempotent `order.status:{packageId}:accepted` key, rejection uses `order.cancel:{packageId}`, and courier `on_route`, `delivered`, and `failed` transitions use their status keys. Failures are retried through the same durable outbox. If Posentegra returns a canonical `pid` for a manually assigned package, `packages.posentegra_id` is updated before later status events are delivered.
 
 Operations endpoints (admin session required):
 

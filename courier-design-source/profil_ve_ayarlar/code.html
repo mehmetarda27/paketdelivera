@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+
+<html lang="tr" translate="no"><head>
+<meta charset="utf-8"/>
+<meta name="google" content="notranslate"/>
+<meta content="width=device-width, initial-scale=1.0, viewport-fit=cover" name="viewport"/>
+<title>Kurye Profil Ayarları</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-dim": "#d8dadd",
+                        "surface-container-low": "#f2f4f7",
+                        "outline": "#707883",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-container": "#5e0002",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-highest": "#e0e3e6",
+                        "surface-container-high": "#e6e8eb",
+                        "on-secondary-fixed-variant": "#005313",
+                        "primary-container": "#2196f3",
+                        "on-primary-container": "#002c4f",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-error": "#ffffff",
+                        "surface-container": "#eceef1",
+                        "inverse-on-surface": "#eff1f4",
+                        "outline-variant": "#bfc7d4",
+                        "tertiary": "#bb1614",
+                        "inverse-surface": "#2d3133",
+                        "surface-bright": "#f7f9fc",
+                        "surface-tint": "#0061a4",
+                        "primary-fixed": "#d1e4ff",
+                        "on-error-container": "#93000a",
+                        "error": "#ba1a1a",
+                        "surface-variant": "#e0e3e6",
+                        "on-primary-fixed": "#001d36",
+                        "background": "#f7f9fc",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-tertiary-fixed-variant": "#930005",
+                        "inverse-primary": "#9ecaff",
+                        "tertiary-fixed-dim": "#ffb4a9",
+                        "secondary-container": "#91f78e",
+                        "on-tertiary": "#ffffff",
+                        "surface": "#f7f9fc",
+                        "primary": "#0061a4",
+                        "tertiary-container": "#ff5748",
+                        "on-tertiary-fixed": "#410001",
+                        "secondary": "#006e1c",
+                        "on-surface-variant": "#404752",
+                        "on-secondary-fixed": "#002204",
+                        "secondary-fixed-dim": "#78dc77",
+                        "tertiary-fixed": "#ffdad5",
+                        "on-primary": "#ffffff",
+                        "on-secondary-container": "#00731e",
+                        "on-surface": "#191c1e",
+                        "secondary-fixed": "#94f990",
+                        "on-background": "#191c1e",
+                        "on-secondary": "#ffffff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-page": "1rem",
+                        "gutter-card": "0.75rem",
+                        "stack-md": "1rem",
+                        "touch-target-min": "48px",
+                        "stack-sm": "0.5rem",
+                        "stack-lg": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-numeric": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "body-md": ["Inter"],
+                        "headline-sm": ["Hanken Grotesk"],
+                        "caption": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-numeric": ["14px", { "lineHeight": "16px", "letterSpacing": "-0.02em", "fontWeight": "500" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "display-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-sm": ["16px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "caption": ["12px", { "lineHeight": "16px", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .bg-gradient-border {
+            background: linear-gradient(white, white) padding-box,
+                        linear-gradient(90deg, #94a3b8, #cbd5e1, #94a3b8) border-box;
+            border: 1px solid transparent;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background font-body-md h-screen flex flex-col overflow-hidden antialiased">
+<!-- TopAppBar -->
+<header class="bg-surface-bright shadow-sm fixed top-0 left-0 w-full z-50 flex justify-between items-center px-margin-page py-2 h-16">
+<button class="w-touch-target-min h-touch-target-min flex items-center justify-start text-on-surface-variant hover:bg-surface-container-high transition-all duration-200 active:scale-95 rounded-full">
+<span class="material-symbols-outlined text-2xl" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="font-headline-md text-headline-md font-bold text-primary flex-1 text-center">Profil</h1>
+<div class="w-touch-target-min h-touch-target-min flex items-center justify-end"><img src="/assets/delivera-login.jpg" alt="Delivera Express" class="rounded-lg object-cover shadow-sm border border-outline-variant/40" style="width:36px;height:36px;object-fit:cover;flex:0 0 36px"/></div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-1 overflow-y-auto pt-16 pb-24 px-margin-page pb-safe space-y-stack-lg bg-surface-container-lowest md:bg-background">
+<!-- Profile Header Area -->
+<div class="flex flex-col items-center pt-stack-md pb-stack-sm md:flex-row md:items-start md:space-x-stack-lg">
+<div class="relative mb-stack-sm md:mb-0">
+<div class="w-24 h-24 bg-primary-container text-on-primary-container rounded-2xl flex items-center justify-center overflow-hidden shadow-sm">
+<span class="material-symbols-outlined text-5xl" data-icon="person">person</span>
+</div>
+<button class="absolute -bottom-2 -right-2 w-8 h-8 bg-surface-container-lowest rounded-full shadow-md flex items-center justify-center text-primary border border-surface-container-highest transition-all duration-200 active:scale-95">
+<span class="material-symbols-outlined text-sm" data-icon="edit_square">edit_square</span>
+</button>
+</div>
+<div class="text-center md:text-left flex flex-col justify-center">
+<h2 class="font-display-lg text-display-lg text-on-surface">Deneme 123</h2>
+</div>
+</div>
+<!-- Stats Bar -->
+<div class="bg-surface-container-lowest rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-outline-variant/50 p-4">
+<div class="grid grid-cols-3 divide-x divide-outline-variant/50">
+<div class="flex flex-col items-center justify-center text-center">
+<div class="flex items-center space-x-1 text-on-surface">
+<span class="material-symbols-outlined text-sm text-outline" data-icon="local_shipping">local_shipping</span>
+<span class="font-label-numeric text-label-numeric font-bold">0</span>
+</div>
+<span class="font-caption text-caption text-outline mt-1">Paket</span>
+</div>
+<div class="flex flex-col items-center justify-center text-center">
+<div class="flex items-center space-x-1 text-on-surface">
+<span class="material-symbols-outlined text-sm text-outline" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span class="font-label-numeric text-label-numeric font-bold">₺0.00</span>
+</div>
+<span class="font-caption text-caption text-outline mt-1">Kazanç</span>
+</div>
+<div class="flex flex-col items-center justify-center text-center">
+<div class="flex items-center space-x-1 text-on-surface">
+<span class="material-symbols-outlined text-sm text-outline" data-icon="local_fire_department">local_fire_department</span>
+<span class="font-label-numeric text-label-numeric font-bold">0.00</span>
+</div>
+<span class="font-caption text-caption text-outline mt-1">Ekstra KM</span>
+</div>
+</div>
+</div>
+<!-- Shift Settings -->
+<section class="space-y-stack-sm bg-surface rounded-xl p-stack-sm md:bg-transparent md:p-0">
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-on-surface-variant group-hover:bg-primary-container group-hover:text-on-primary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="calendar_month">calendar_month</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">Haftalık Vardiyam</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-primary-fixed-dim/20 flex items-center justify-center text-primary group-hover:bg-primary-container group-hover:text-on-primary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="beach_access">beach_access</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">İzin Günüm</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+</section>
+<!-- Payment Transactions -->
+<section class="space-y-stack-sm">
+<div class="flex items-center space-x-2 px-2 py-1">
+<span class="material-symbols-outlined text-outline text-lg" data-icon="credit_card">credit_card</span>
+<h3 class="font-headline-sm text-headline-sm font-bold text-on-surface">Ödeme İşlemleri</h3>
+</div>
+<div class="space-y-stack-sm bg-surface rounded-xl p-stack-sm md:bg-transparent md:p-0">
+<button data-courier-package-history class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-[#e3f2fd] flex items-center justify-center text-primary group-hover:bg-primary-container group-hover:text-on-primary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+</div>
+<div class="text-left">
+<span class="block font-headline-sm text-headline-sm text-on-surface">Geçmiş Paketler</span>
+<span class="block text-xs text-on-surface-variant mt-0.5" data-package-history-count>0 tamamlanan paket</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-[#fff8e1] flex items-center justify-center text-[#ffb300] group-hover:bg-[#ffecb3] transition-colors">
+<span class="material-symbols-outlined" data-icon="sync_alt">sync_alt</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">Ödeme Değişikliklerim</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-secondary-container/30 flex items-center justify-center text-secondary group-hover:bg-secondary-container transition-colors">
+<span class="material-symbols-outlined" data-icon="payments">payments</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">Üzerimdeki Nakit</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+<button data-courier-day-close class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-[#e8f5e9] flex items-center justify-center text-[#13852d] group-hover:bg-[#c8e6c9] transition-colors">
+<span class="material-symbols-outlined" data-icon="point_of_sale">point_of_sale</span>
+</div>
+<div class="text-left">
+<span class="block font-headline-sm text-headline-sm text-on-surface" data-day-close-label>Gün Sonu Al</span>
+<span class="block text-xs text-on-surface-variant mt-0.5" data-day-close-caption>Tahsilatı admine gönder</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-day-close-chevron data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-[#f3e5f5] flex items-center justify-center text-[#9c27b0] group-hover:bg-[#e1bee7] transition-colors">
+<span class="material-symbols-outlined" data-icon="storefront">storefront</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">İşletme bazlı teslim</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="w-full flex items-center justify-between bg-surface-container-lowest p-4 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-surface-container-highest transition-all duration-200 active:scale-[0.98] hover:bg-surface-container-low group">
+<div class="flex items-center space-x-4">
+<div class="w-10 h-10 rounded-lg bg-[#ede7f6] flex items-center justify-center text-[#673ab7] group-hover:bg-[#d1c4e9] transition-colors">
+<span class="material-symbols-outlined" data-icon="account_balance">account_balance</span>
+</div>
+<span class="font-headline-sm text-headline-sm text-on-surface">Teslim ettiğim bakiye</span>
+</div>
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</section>
+<div class="h-8"></div> <!-- Bottom spacing -->
+</main>
+<!-- BottomNavBar -->
+<nav class="bg-surface-container-lowest shadow-lg fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe pt-2 rounded-t-xl border-t-0 md:hidden">
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all duration-300 ease-in-out active:scale-90 px-4 py-1.5 w-1/4" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="package_2">package_2</span>
+<span class="font-body-md text-[10px] whitespace-nowrap">Paketler</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all duration-300 ease-in-out active:scale-90 px-4 py-1.5 w-1/4" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="payments">payments</span>
+<span class="font-body-md text-[10px] whitespace-nowrap">Kazançlar</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all duration-300 ease-in-out active:scale-90 px-4 py-1.5 w-1/4" href="#">
+<span class="material-symbols-outlined text-2xl mb-1" data-icon="leaderboard">leaderboard</span>
+<span class="font-body-md text-[10px] whitespace-nowrap">Raporlar</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-xl px-4 py-1.5 w-1/4 transition-all duration-300 ease-in-out active:scale-90" href="#">
+<span class="material-symbols-outlined text-2xl mb-1 fill" data-icon="settings">settings</span>
+<span class="font-body-md text-[10px] font-bold whitespace-nowrap">Ayarlar</span>
+</a>
+</nav>
+<!-- Desktop Navigation (Hidden on Mobile) -->
+<nav class="hidden md:flex fixed inset-y-0 left-0 w-80 bg-surface-container flex-col z-[60] rounded-r-xl shadow-xl">
+<div class="p-6">
+<div class="flex items-center space-x-4 mb-8">
+<div class="w-12 h-12 bg-primary-container text-on-primary-container rounded-full flex items-center justify-center overflow-hidden">
+<span class="material-symbols-outlined text-2xl" data-icon="person">person</span>
+</div>
+<div>
+<h2 class="font-headline-sm text-headline-sm font-bold text-primary">Aktif Kurye</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Kimlik: #8829-X</p>
+<p class="font-caption text-caption text-secondary">Status: On Duty</p>
+</div>
+</div>
+<div class="space-y-2">
+<a class="flex items-center space-x-3 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="schedule">schedule</span>
+<span class="font-body-md text-body-md">Aktif Vardiya</span>
+</a>
+<a class="flex items-center space-x-3 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span class="font-body-md text-body-md">Kazanç Geçmişi</span>
+</a>
+<a class="flex items-center space-x-3 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="local_shipping">local_shipping</span>
+<span class="font-body-md text-body-md">Araç Durumu</span>
+</a>
+<a class="flex items-center space-x-3 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="contact_emergency">contact_emergency</span>
+<span class="font-body-md text-body-md">Acil Durum İletişimleri</span>
+</a>
+<a class="flex items-center space-x-3 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full mx-2 transition-colors duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="support_agent">support_agent</span>
+<span class="font-body-md text-body-md">Destek</span>
+</a>
+<!-- Adding a Settings tab for desktop to match active state logic -->
+<a class="flex items-center space-x-3 px-4 py-3 bg-secondary-container text-on-secondary-container font-bold rounded-full mx-2 transition-colors duration-150 mt-4" href="#">
+<span class="material-symbols-outlined fill" data-icon="settings">settings</span>
+<span class="font-body-md text-body-md">Ayarlar</span>
+</a>
+</div>
+</div>
+</nav>
+<script src="/login-shell.js?v=20260808-2" defer></script>
+<script src="/courier-design-bridge.js?v=20260808-2" defer></script>
+</body></html>

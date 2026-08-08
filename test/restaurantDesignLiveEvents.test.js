@@ -1,0 +1,73 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const { JSDOM } = require("jsdom");
+
+const rootDir = path.resolve(__dirname, "..");
+
+function jsonResponse(payload) {
+  return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => payload };
+}
+
+test("new restaurant design filters closed orders and subscribes to named live events", async () => {
+  const eventTypes = new Set();
+  class FakeEventSource {
+    addEventListener(type) { eventTypes.add(type); }
+    close() {}
+  }
+  const html = fs.readFileSync(path.join(rootDir, "restaurant-design-source", "code.html"), "utf8");
+  const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/restaurant-panel", pretendToBeVisual: true });
+  try {
+    dom.window.__DELIVERA_TEST__ = true;
+    dom.window.EventSource = FakeEventSource;
+    dom.window.localStorage.setItem("deliveraRestaurantToken", "test-token");
+    dom.window.fetch = async () => jsonResponse({ packages: [], couriers: [], restaurants: [] });
+    dom.window.eval(fs.readFileSync(path.join(rootDir, "restaurant-design-bridge.js"), "utf8"));
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 30));
+
+    const hooks = dom.window.__restaurantDesignTest;
+    const yesterday = new Date(Date.now() - 86400000).toISOString();
+    const today = new Date().toISOString();
+    hooks.hydrate({
+      packages: [
+        { id: "pkg_active", trackingNo: "PKT-ACTIVE", status: "on_route", sourcePlatform: "Trendyol Yemek", updatedAt: yesterday },
+        { id: "pkg_delivered", trackingNo: "PKT-DELIVERED", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: today },
+        { id: "pkg_old", trackingNo: "PKT-OLD", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: yesterday },
+      ],
+      couriers: [],
+      restaurants: [],
+    });
+    hooks.state.filter = "active";
+    assert.deepEqual(Array.from(hooks.currentPackages(), (pkg) => pkg.id), ["pkg_active"]);
+    hooks.state.filter = "all";
+    assert.deepEqual(Array.from(hooks.currentPackages(), (pkg) => pkg.id), ["pkg_active", "pkg_delivered"]);
+    const actionLabels = Array.from(dom.window.document.querySelectorAll("#restaurantOrders [data-action]"), (button) => button.textContent.trim());
+    ["Yazdır", "Zaman", "Faturalı Fiş"].forEach((label) => assert.ok(actionLabels.includes(label), label));
+    let printedHtml = "";
+    dom.window.open = () => ({ document: { write(value) { printedHtml += value; }, close() {} } });
+    dom.window.document.querySelector('#restaurantOrders [data-action="print"]').click();
+    const printModal = dom.window.document.querySelector(".zg-modal-root");
+    assert.ok(printModal);
+    assert.equal(printModal.querySelectorAll("[data-print-size]").length, 3);
+    printModal.querySelector("[data-save-print-default]").checked = false;
+    printModal.querySelector('[data-print-size="58mm"]').click();
+    assert.match(printedHtml, /@page\{size:58mm auto/);
+    assert.match(printedHtml, /DELIVERA <span>EXPRESS<\/span>/);
+    assert.match(printedHtml, /Delivera Express altyapısıyla yönetilmektedir/);
+    hooks.connectStream();
+    ["order:new", "package-created", "package-assigned", "package-status", "courier-location", "courier-availability", "workspace-update"].forEach((type) => assert.ok(eventTypes.has(type), type));
+
+    hooks.state.data.couriers = [
+      { id: "online", status: "online", available: true, latitude: 36.81, longitude: 34.64, lastLocationAt: today },
+      { id: "offline", status: "offline", available: false, latitude: 36.81, longitude: 34.64, lastLocationAt: today },
+      { id: "stale", status: "online", available: true, latitude: 36.81, longitude: 34.64, lastLocationAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    ];
+    assert.deepEqual(
+      Array.from(hooks.restaurantLiveMapCouriers({ latitude: 36.8121, longitude: 34.6415 }), (courier) => courier.id),
+      ["online"],
+    );
+  } finally {
+    dom.window.close();
+  }
+});

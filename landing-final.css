@@ -1,0 +1,290 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, Arial, sans-serif;
+  background: #100803;
+  color: #fff;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: #100803;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.landing-page {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  overflow: hidden;
+  background-image:
+    linear-gradient(180deg, rgba(7, 3, 1, .1), rgba(7, 3, 1, .16)),
+    url('/assets/delivera-login.jpg');
+  background-position: center;
+  background-size: cover;
+}
+
+.landing-page::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  background: radial-gradient(circle at 50% 43%, transparent 20%, rgba(0, 0, 0, .18) 72%, rgba(0, 0, 0, .45) 100%);
+  pointer-events: none;
+}
+
+.landing-header,
+.landing-footer {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  border-color: rgba(255, 255, 255, .1);
+  background: rgba(5, 3, 2, .88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.landing-header {
+  z-index: 10;
+  min-height: 100px;
+  padding: 20px clamp(32px, 3.2vw, 52px);
+  border-bottom: 1px solid rgba(255, 255, 255, .1);
+}
+
+.landing-brand,
+.landing-footer strong {
+  font-size: clamp(20px, 1.65vw, 27px);
+  font-weight: 800;
+  letter-spacing: -.04em;
+}
+
+.landing-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.header-login,
+.header-start,
+.panel-link {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-weight: 600;
+  transition: transform .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.header-login {
+  padding: 12px 14px;
+  font-size: 17px;
+}
+
+.header-start {
+  min-width: 168px;
+  padding: 12px 26px;
+  background: #fff;
+  color: #111;
+  font-size: 17px;
+}
+
+.landing-main {
+  display: flex;
+  width: 100%;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(64px, 9vh, 120px) clamp(32px, 3.2vw, 52px);
+}
+
+.landing-hero {
+  display: flex;
+  width: min(1500px, 100%);
+  min-height: clamp(490px, 49vh, 620px);
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 20px;
+  background: rgba(4, 3, 2, .76);
+  box-shadow: 0 25px 80px rgba(0, 0, 0, .34);
+  backdrop-filter: blur(13px);
+  -webkit-backdrop-filter: blur(13px);
+}
+
+.landing-hero-content {
+  width: 100%;
+  padding: 64px 32px;
+  text-align: center;
+}
+
+.landing-hero h1 {
+  max-width: 1120px;
+  margin: 0 auto 52px;
+  color: #fff;
+  font-size: clamp(42px, 4.15vw, 66px);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -.045em;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, .55);
+}
+
+.panel-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+}
+
+.panel-link {
+  min-width: 205px;
+  padding: 17px 30px;
+  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(30, 30, 30, .84);
+  box-shadow: 0 12px 25px rgba(0, 0, 0, .28);
+  font-size: 18px;
+}
+
+.panel-link-primary {
+  border-color: #fff;
+  background: #fff;
+  color: #111;
+}
+
+.header-login:hover,
+.header-start:hover,
+.panel-link:hover {
+  transform: translateY(-2px);
+}
+
+.header-login:hover,
+.panel-link:not(.panel-link-primary):hover {
+  border-color: rgba(255, 255, 255, .48);
+  background: rgba(255, 255, 255, .16);
+}
+
+.header-start:hover,
+.panel-link-primary:hover {
+  background: #f2f2f2;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, .35);
+}
+
+.header-login:focus-visible,
+.header-start:focus-visible,
+.panel-link:focus-visible,
+.landing-brand:focus-visible {
+  outline: 3px solid #ff6a00;
+  outline-offset: 4px;
+}
+
+.landing-footer {
+  min-height: 100px;
+  padding: 24px clamp(32px, 3.2vw, 52px);
+  border-top: 1px solid rgba(255, 255, 255, .1);
+}
+
+.landing-footer span {
+  color: rgba(255, 255, 255, .72);
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  .landing-header {
+    min-height: 76px;
+    padding: 14px 18px;
+  }
+
+  .landing-brand {
+    max-width: 150px;
+    font-size: 18px;
+  }
+
+  .landing-header-actions {
+    gap: 6px;
+  }
+
+  .header-login {
+    display: none;
+  }
+
+  .header-start {
+    min-width: auto;
+    min-height: 42px;
+    padding: 10px 18px;
+    font-size: 14px;
+  }
+
+  .landing-main {
+    padding: 36px 16px;
+  }
+
+  .landing-hero {
+    min-height: 480px;
+    border-radius: 16px;
+  }
+
+  .landing-hero-content {
+    padding: 44px 18px;
+  }
+
+  .landing-hero h1 {
+    margin-bottom: 36px;
+    font-size: clamp(31px, 9vw, 44px);
+  }
+
+  .desktop-break {
+    display: none;
+  }
+
+  .panel-links {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .panel-link {
+    width: min(100%, 320px);
+    margin: 0 auto;
+  }
+
+  .landing-footer {
+    min-height: 92px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px 18px;
+    text-align: center;
+  }
+
+  .landing-footer span {
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

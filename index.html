@@ -1,65 +1,43 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#c85b2d">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="mobile-web-app-capable" content="yes">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#100803">
+  <meta name="description" content="Delivera Express restoran, operasyon ve kurye yönetim sistemi">
   <title>Delivera Express</title>
-  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=1781795596172">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/landing-final.css?v=1">
 </head>
-<body class="landing-body">
-  <main class="landing-shell">
-    <section class="landing-hero glass-panel">
-      <p class="eyebrow accent-coral">Delivera Express</p>
-      <h1>Mersin icin restoran, operasyon ve kurye akisini tek dagitim omurgasinda yurut.</h1>
-      <p class="hero-copy">
-        Trendyol Go, GetirYemek, Yemeksepeti ve Migros Yemek kaynakli siparisler sisteme duser. Sistem Mersin operasyon bolgesini tanir, en yakin aktif kuryeyi secer ve sureci otomatik yurutur.
-      </p>
-      <div class="hero-actions">
-        <a class="primary-btn link-btn" href="/restaurant.html">Restoran Paneli</a>
-        <a class="ghost-btn link-btn" href="/admin.html">Admin Paneli</a>
-        <a class="ghost-btn link-btn" href="/courier.html">Kurye Paneli</a>
-      </div>
-    </section>
+<body>
+  <div class="landing-page">
+    <header class="landing-header" aria-label="Ana menü">
+      <a class="landing-brand" href="/" aria-label="Delivera Express ana sayfa">DELIVERA EXPRESS</a>
+      <nav class="landing-header-actions" aria-label="Giriş bağlantıları">
+        <a class="header-login" href="/admin.html">Login</a>
+        <a class="header-start" href="/restaurant.html">Get Started</a>
+      </nav>
+    </header>
 
-    <section class="landing-grid">
-      <article class="showcase-card warm-card">
-        <p class="eyebrow accent-coral">Restoran</p>
-        <h2>Restoran entegrasyonlarini bagla, siparisler otomatik olarak sisteme aksin.</h2>
-        <p>API anahtari, webhook yapisi ve platform bazli siparis kabul akisi restoran ekraninda yonetilir.</p>
-        <a class="text-link" href="/restaurant.html">Restoran ekranina git</a>
-      </article>
+    <main class="landing-main">
+      <section class="landing-hero" aria-labelledby="landing-title">
+        <div class="landing-hero-content">
+          <h1 id="landing-title">Mersin için restoran, operasyon ve<br class="desktop-break"> kurye akışını tek dağıtım omurgasında<br class="desktop-break"> yürüt.</h1>
+          <div class="panel-links" aria-label="Panel seçimi">
+            <a class="panel-link panel-link-primary" href="/restaurant.html">Restoran Paneli</a>
+            <a class="panel-link" href="/admin.html">Admin Paneli</a>
+            <a class="panel-link" href="/courier.html">Kurye Paneli</a>
+          </div>
+        </div>
+      </section>
+    </main>
 
-      <article class="showcase-card cool-card">
-        <p class="eyebrow accent-teal">Admin</p>
-        <h2>Bolge, kurye ve atama omurgasini canli operasyon merkezinden yonet.</h2>
-        <p>Bekleyen paketleri gor, yeniden ata, kurye aktifligini degistir ve tum platform akislarini izle.</p>
-        <a class="text-link" href="/admin.html">Admin ekranina git</a>
-      </article>
-
-      <article class="showcase-card dark-card">
-        <p class="eyebrow accent-gold">Kurye</p>
-        <h2>Sadece kendi isini goren, net ve hizli bir teslimat calisma alani.</h2>
-        <p>Kurye kendi hesabi ile giris yapar, sadece atanmis teslimatlarini gorur ve durumu gunceller.</p>
-        <a class="text-link light" href="/courier.html">Kurye ekranina git</a>
-      </article>
-    </section>
-
-    <section class="landing-strip glass-panel">
-      <div>
-        <strong id="landingSummary">Canli ozet yukleniyor...</strong>
-        <p>Mersin operasyon merkezi icin canli siparis ve kurye akisi buradan yonetilir.</p>
-      </div>
-    </section>
-  </main>
-  
-  <script src="/shared.js?v=2"></script>
-  <script src="/landing.js?v=2"></script>
+    <footer class="landing-footer">
+      <strong>DELIVERA EXPRESS</strong>
+      <span>© 2026 DELIVERA EXPRESS. All rights reserved.</span>
+    </footer>
+  </div>
 </body>
 </html>

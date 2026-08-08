@@ -199,7 +199,10 @@
 </button>
 <!-- Main Header Card -->
 <div class="flex-1 bg-primary text-white rounded-xl shadow-lg flex items-center justify-between px-4 h-[56px]">
-<span class="font-headline-md text-headline-md">Deneme 123</span>
+<div class="flex items-center gap-3 min-w-0">
+<img src="/assets/delivera-login.jpg" alt="Delivera Express" class="rounded-lg object-cover border border-white/30 shadow-sm shrink-0" style="width:36px;height:36px;object-fit:cover;flex:0 0 36px"/>
+<span class="font-headline-md text-headline-md truncate">Deneme 123</span>
+</div>
 <div class="bg-white/20 rounded-lg px-3 py-1 flex items-center gap-2">
 <span class="material-symbols-outlined text-[18px]">local_shipping</span>
 <span class="font-label-numeric text-label-numeric font-bold">0</span>
@@ -289,25 +292,4 @@
 <span class="font-body-md text-caption mt-1">Ayarlar</span>
 </a>
 </nav>
-<!-- Existing courier runtime compatibility hooks. These stay non-visual. -->
-<div hidden aria-hidden="true" id="courierRuntimeHooks">
-  <section id="loginPanel"><form id="loginForm"><input name="username"><input name="password" type="password"><button>Giriş</button></form></section>
-  <div id="workspacePanel"></div><p id="courierSummary"></p><button id="logoutButton"></button>
-  <input id="courierConnectionSwitch" type="checkbox"><span id="courierConnectionLabel"></span><span id="locationStatus"></span>
-  <span id="courierName"></span><div class="courier-focus-card"><span class="eyebrow"></span></div><span id="courierFocusTitle"></span><span id="courierFocusText"></span>
-  <div id="courierOfferOverlay"><span id="courierOfferTitle"></span><span id="courierOfferSubtitle"></span><span id="courierOfferCode"></span><div id="courierOfferDetails"></div><span id="courierOfferError"></span><button id="courierOfferAccept"></button><button id="courierOfferReject"></button></div>
-  <span id="courierMissionMeta"></span><div id="courierDestinationMap"></div><div id="courierDestinationPreview"></div><span id="courierMapTitle"></span><span id="courierMapAddress"></span><button id="courierMapButton"></button>
-  <div id="courierStats"></div><div id="courierDayMetrics"></div><input id="courierDayCloseNote"><div id="courierEarningsMetrics"></div><div id="courierShiftMetrics"></div><span id="courierLiveBadge"></span><button id="courierDayCloseButton"></button>
-  <div id="courierNotificationCenter"></div><button id="courierEnablePushButton"></button><div id="courierAnnouncementList"></div><div id="courierPackages"></div><div id="courierHistory"></div><span id="courierHistoryMeta"></span><button id="courierHistoryMore"></button><div id="courierHistoryFilters"></div>
-  <button id="profileSettingsButton"></button>
-</div>
-<template id="courierPackageTemplate">
-  <article class="package-card courier-task-card"><div class="package-top"><div><p class="tracking-no"></p><h4 class="recipient-name"></h4></div><span class="status-badge"></span></div>
-    <div class="courier-customer-details"><div><span>Müşteri</span><strong class="customer-name-value"></strong></div><div><span>Telefon</span><strong class="customer-phone-value"></strong></div><div><span>Sipariş tutarı</span><strong class="order-amount-value"></strong></div><div><span>Ödeme</span><strong class="payment-status-value"></strong></div><div><span>Platform sipariş ID</span><strong class="platform-order-id-value"></strong></div><div class="posentegra-pid-row hidden"><span>Posentegra PID</span><strong class="posentegra-pid-value"></strong></div></div>
-    <details class="courier-extra-details"><summary>Detaylar</summary><div class="meta-grid"><div><span>Platform</span><strong class="platform-name"></strong></div><div><span>Restoran</span><strong class="restaurant-name"></strong></div><div><span>Bölge</span><strong class="zone-name"></strong></div><div><span>ETA</span><strong class="eta-value"></strong></div><div><span>Ödeme</span><strong class="payment-method"></strong></div></div><div class="courier-order-items"></div></details>
-    <div class="courier-address-block"><span>Teslimat Adresi</span><strong class="address-value"></strong></div><div class="badge-row courier-task-flags"><span class="soft-badge assigned-at-badge"></span><span class="soft-badge eta-badge"></span><span class="soft-badge failure-badge hidden"></span></div><p class="note-text"></p><img class="order-photo hidden" alt="Sipariş fotoğrafı"><div class="card-actions courier-card-actions"><select class="status-select"></select></div><div class="courier-package-map-preview"></div>
-  </article>
-</template>
-<script src="/login-shell.js?v=20260808-2" defer></script>
-<script src="/courier-design-bridge.js?v=20260808-2" defer></script>
 </body></html>

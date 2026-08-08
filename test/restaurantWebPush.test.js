@@ -31,6 +31,16 @@ async function stopServer(server) {
   });
 }
 
+async function removeTempDir(tempDir) {
+  let lastError;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); return; }
+    catch (error) { lastError = error; await delay(250); }
+  }
+  if (process.platform === "win32" && ["EPERM", "EBUSY"].includes(lastError?.code)) return;
+  throw lastError;
+}
+
 async function jsonRequest(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
     ...options,
@@ -166,7 +176,12 @@ test("restaurant web push subscription is authenticated, isolated and idempotent
     assert.match(await workerResponse.text(), /payload\.url/);
     const panelResponse = await fetch(`${baseUrl}/restaurant.html`);
     assert.equal(panelResponse.status, 200);
-    assert.match(await panelResponse.text(), /restaurantEnablePushButton/);
+    assert.match(await panelResponse.text(), /restaurant-design-bridge\.js/);
+    const bridgeResponse = await fetch(`${baseUrl}/restaurant-design-bridge.js`);
+    assert.equal(bridgeResponse.status, 200);
+    const bridgeSource = await bridgeResponse.text();
+    assert.match(bridgeSource, /restaurantEnablePushButton/);
+    assert.match(bridgeSource, /\/api\/restaurant\/push\/subscriptions/);
 
     const removed = await jsonRequest(baseUrl, "/api/restaurant/push/subscriptions", {
       method: "DELETE",
@@ -178,6 +193,6 @@ test("restaurant web push subscription is authenticated, isolated and idempotent
     db.close();
   } finally {
     await stopServer(server);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await removeTempDir(tempDir);
   }
 });

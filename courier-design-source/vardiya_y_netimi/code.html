@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+
+<html class="light" lang="tr" translate="no"><head>
+<meta charset="utf-8"/>
+<meta name="google" content="notranslate"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Kurye Vardiya Yönetimi</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-dim": "#d8dadd",
+                      "surface-container-low": "#f2f4f7",
+                      "outline": "#707883",
+                      "error-container": "#ffdad6",
+                      "on-tertiary-container": "#5e0002",
+                      "surface-container-lowest": "#ffffff",
+                      "surface-container-highest": "#e0e3e6",
+                      "surface-container-high": "#e6e8eb",
+                      "on-secondary-fixed-variant": "#005313",
+                      "primary-container": "#2196f3",
+                      "on-primary-container": "#002c4f",
+                      "on-primary-fixed-variant": "#00497d",
+                      "on-error": "#ffffff",
+                      "surface-container": "#eceef1",
+                      "inverse-on-surface": "#eff1f4",
+                      "outline-variant": "#bfc7d4",
+                      "tertiary": "#bb1614",
+                      "inverse-surface": "#2d3133",
+                      "surface-bright": "#f7f9fc",
+                      "surface-tint": "#0061a4",
+                      "primary-fixed": "#d1e4ff",
+                      "on-error-container": "#93000a",
+                      "error": "#ba1a1a",
+                      "surface-variant": "#e0e3e6",
+                      "on-primary-fixed": "#001d36",
+                      "background": "#f7f9fc",
+                      "primary-fixed-dim": "#9ecaff",
+                      "on-tertiary-fixed-variant": "#930005",
+                      "inverse-primary": "#9ecaff",
+                      "tertiary-fixed-dim": "#ffb4a9",
+                      "secondary-container": "#91f78e",
+                      "on-tertiary": "#ffffff",
+                      "surface": "#f7f9fc",
+                      "primary": "#0061a4",
+                      "tertiary-container": "#ff5748",
+                      "on-tertiary-fixed": "#410001",
+                      "secondary": "#006e1c",
+                      "on-surface-variant": "#404752",
+                      "on-secondary-fixed": "#002204",
+                      "secondary-fixed-dim": "#78dc77",
+                      "tertiary-fixed": "#ffdad5",
+                      "on-primary": "#ffffff",
+                      "on-secondary-container": "#00731e",
+                      "on-surface": "#191c1e",
+                      "secondary-fixed": "#94f990",
+                      "on-background": "#191c1e",
+                      "on-secondary": "#ffffff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "1rem",
+                      "gutter-card": "0.75rem",
+                      "stack-md": "1rem",
+                      "touch-target-min": "48px",
+                      "stack-sm": "0.5rem",
+                      "stack-lg": "1.5rem"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Hanken Grotesk"
+                      ],
+                      "label-numeric": [
+                              "JetBrains Mono"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "display-lg": [
+                              "Hanken Grotesk"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-sm": [
+                              "Hanken Grotesk"
+                      ],
+                      "caption": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-numeric": [
+                              "14px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-sm": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "caption": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "500"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        .material-symbols-outlined {
+          font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .icon-filled {
+            font-variation-settings: 'FILL' 1;
+        }
+      </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background font-body-md text-on-background antialiased h-screen w-screen overflow-hidden flex flex-col relative select-none">
+<!-- Dimmed Map Background Layer -->
+<div class="absolute inset-0 z-0">
+<img class="w-full h-full object-cover opacity-60 mix-blend-multiply" data-alt="A top-down digital map interface showing city streets and terrain in a muted, desaturated color palette suitable for a light mode professional logistics app. The overall lighting is flat and uniform to serve as a background layer, conveying a sense of efficient navigation and modern urban infrastructure." data-location="Istanbul" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBmeT7UU1xl3nLqCY730xqNrZNEqj-e8WxMGKIDN6gRnCumPwnvVAkHbUiL0laMSM-2eFg-cZbspfhvBM8nqHNtCD2DHZY-1-JjSL1j1Rtd9QNXxma8-oMRcj6a_yFAMFhIEbOFdrMUe8YSyIDimsVG6NKa33ehfUgjPTeVv2NmmLxIAOCIPhTg0ol-smN5piNqWggSYtkgKKirE-gCiGERrPXRKG9waRk4FoQ0vZoZKXTGGtopm4pLmw"/>
+<!-- Backdrop Blur for Overlay Effect -->
+<div class="absolute inset-0 bg-surface/50 backdrop-blur-sm z-10"></div>
+</div>
+<!-- Top App Bar - Suppressed for modal focus, but implied context -->
+<!-- Main Content Canvas (The Bottom Sheet Overlay) -->
+<main class="relative z-20 flex-1 flex flex-col justify-end pb-[88px]"> <!-- pb to account for bottom nav -->
+<!-- Sheet Container -->
+<div class="bg-surface-container-lowest w-full rounded-t-3xl shadow-[0_-8px_30px_rgba(0,0,0,0.12)] flex flex-col animate-[slideUp_0.3s_ease-out]">
+<!-- Header (Green Active State) -->
+<div class="bg-secondary px-margin-page py-6 rounded-t-3xl text-on-secondary flex items-start justify-between relative overflow-hidden">
+<!-- Decorative subtle gradient -->
+<div class="absolute inset-0 bg-gradient-to-br from-secondary-container/20 to-transparent pointer-events-none"></div>
+<div class="flex items-center gap-4 relative z-10">
+<div class="w-12 h-12 bg-on-secondary/20 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-on-secondary icon-filled text-2xl" data-icon="check_circle">check_circle</span>
+</div>
+<div>
+<h1 class="font-headline-md text-headline-md text-on-secondary m-0">Vardiya Yönetimi</h1>
+<p class="font-body-md text-body-md text-on-secondary/90 mt-1">Durum: AKTİF</p>
+</div>
+</div>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-on-secondary/10 transition-colors relative z-10 active:scale-95">
+<span class="material-symbols-outlined text-on-secondary" data-icon="close">close</span>
+</button>
+</div>
+<!-- Content Area -->
+<div class="px-margin-page py-6 flex flex-col gap-4 overflow-y-auto">
+<!-- Break Info Card -->
+<div class="bg-surface rounded-xl border border-outline-variant/40 p-4 shadow-sm">
+<div class="flex items-center gap-2 mb-4">
+<span class="material-symbols-outlined text-primary text-xl icon-filled" data-icon="local_cafe">local_cafe</span>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">Mola Bilgileri</h2>
+</div>
+<div class="flex justify-between items-center text-center px-2">
+<div class="flex flex-col gap-1">
+<span class="font-caption text-caption text-on-surface-variant">Toplam</span>
+<span class="font-label-numeric text-label-numeric text-primary font-bold">5 dk</span>
+</div>
+<div class="h-8 w-px bg-outline-variant/30"></div>
+<div class="flex flex-col gap-1">
+<span class="font-caption text-caption text-on-surface-variant">Kullanılan</span>
+<span class="font-label-numeric text-label-numeric text-on-surface font-bold">0 dk</span>
+</div>
+<div class="h-8 w-px bg-outline-variant/30"></div>
+<div class="flex flex-col gap-1">
+<span class="font-caption text-caption text-on-surface-variant">Kalan</span>
+<span class="font-label-numeric text-label-numeric text-secondary font-bold">5 dk</span>
+</div>
+</div>
+</div>
+<!-- Action Buttons Stack -->
+<div class="flex flex-col gap-3 mt-2">
+<!-- End Shift -->
+<button class="w-full flex items-center justify-between p-4 bg-error-container/30 border border-error/30 rounded-xl hover:bg-error-container/50 transition-colors group active:scale-[0.98]">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 bg-error rounded-lg flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-on-error" data-icon="logout">logout</span>
+</div>
+<div class="text-left flex flex-col justify-center h-full">
+<span class="font-headline-sm text-headline-sm text-error leading-tight">Vardiyayı Bitir</span>
+<span class="font-caption text-caption text-on-surface-variant mt-0.5">Çalışmayı bitir</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-error/60 group-hover:text-error group-hover:translate-x-1 transition-all" data-icon="chevron_right">chevron_right</span>
+</button>
+<!-- Take Break -->
+<button class="w-full flex items-center justify-between p-4 bg-primary-container/20 border border-primary/20 rounded-xl hover:bg-primary-container/40 transition-colors group active:scale-[0.98]">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 bg-primary rounded-lg flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-on-primary icon-filled" data-icon="local_cafe">local_cafe</span>
+</div>
+<div class="text-left flex flex-col justify-center h-full">
+<span class="font-headline-sm text-headline-sm text-primary leading-tight">Molaya Çık</span>
+<span class="font-caption text-caption text-on-surface-variant mt-0.5">Mola hakkı: 5 dk</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-primary/60 group-hover:text-primary group-hover:translate-x-1 transition-all" data-icon="chevron_right">chevron_right</span>
+</button>
+<!-- Report Accident -->
+<button class="w-full flex items-center justify-between p-4 bg-tertiary-container/20 border border-tertiary/20 rounded-xl hover:bg-tertiary-container/40 transition-colors group active:scale-[0.98]">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 bg-tertiary rounded-lg flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-on-tertiary" data-icon="warning">warning</span>
+</div>
+<div class="text-left flex flex-col justify-center h-full">
+<span class="font-headline-sm text-headline-sm text-tertiary leading-tight">Kaza Bildirimi</span>
+<span class="font-caption text-caption text-on-surface-variant mt-0.5">Acil durum bildirimi</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-tertiary/60 group-hover:text-tertiary group-hover:translate-x-1 transition-all" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+<!-- Extra safe padding for bottom nav -->
+<div class="h-4"></div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="bg-surface-container-lowest dark:bg-inverse-surface shadow-[0_-2px_8px_rgba(0,0,0,0.04)] docked full-width bottom-0 rounded-t-xl fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe pt-2 border-none hidden md:hidden flex">
+<!-- Tab 1: Packages (Active) -->
+<button class="flex flex-col items-center justify-center bg-primary-container dark:bg-on-primary-fixed-variant text-on-primary-container dark:text-primary-fixed rounded-xl px-4 py-1.5 transition-all duration-300 ease-in-out active:scale-90">
+<span class="material-symbols-outlined icon-filled" data-icon="package_2">package_2</span>
+<span class="font-body-md text-body-md text-[10px] mt-1 font-medium">Paketler</span>
+</button>
+<!-- Tab 2: Earnings (Inactive) -->
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-all duration-300 ease-in-out active:scale-90">
+<span class="material-symbols-outlined" data-icon="payments">payments</span>
+<span class="font-body-md text-body-md text-[10px] mt-1">Kazançlar</span>
+</button>
+<!-- Tab 3: Reports (Inactive) -->
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-all duration-300 ease-in-out active:scale-90">
+<span class="material-symbols-outlined" data-icon="leaderboard">leaderboard</span>
+<span class="font-body-md text-body-md text-[10px] mt-1">Raporlar</span>
+</button>
+<!-- Tab 4: Settings (Inactive) -->
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-all duration-300 ease-in-out active:scale-90">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-body-md text-body-md text-[10px] mt-1">Ayarlar</span>
+</button>
+</nav>
+<style>
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+                opacity: 0.5;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+        }
+    </style>
+<script src="/login-shell.js?v=20260808-2" defer></script>
+<script src="/courier-design-bridge.js?v=20260808-2" defer></script>
+</body></html>

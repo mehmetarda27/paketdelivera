@@ -1,0 +1,442 @@
+<!DOCTYPE html><html class="light" lang="tr"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Delivera Express - Operasyon</title>
+<link href="/admin-local.css?v=20260808-3" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;family=Work+Sans:wght@500;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config" type="application/json">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-surface": "#2a313d",
+                        "surface-container-high": "#e2e8f8",
+                        "primary": "#4343d5",
+                        "secondary-fixed-dim": "#c3c0ff",
+                        "on-primary-container": "#faf7ff",
+                        "on-surface": "#151c27",
+                        "on-secondary-container": "#dbd8ff",
+                        "on-surface-variant": "#464555",
+                        "secondary": "#2f05ea",
+                        "on-primary-fixed": "#07006c",
+                        "surface-dim": "#d3daea",
+                        "on-secondary": "#ffffff",
+                        "surface": "#f9f9ff",
+                        "surface-container": "#e7eefe",
+                        "surface-bright": "#f9f9ff",
+                        "on-secondary-fixed": "#0f0069",
+                        "background": "#f9f9ff",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-container": "#f5f8ff",
+                        "primary-fixed-dim": "#c1c1ff",
+                        "primary-container": "#5d5fef",
+                        "surface-container-lowest": "#ffffff",
+                        "error-container": "#ffdad6",
+                        "outline-variant": "#c7c4d7",
+                        "inverse-primary": "#c1c1ff",
+                        "on-error-container": "#93000a",
+                        "tertiary-fixed-dim": "#c3c7cd",
+                        "on-tertiary-fixed": "#181c21",
+                        "on-primary-fixed-variant": "#2e2bc2",
+                        "secondary-container": "#4b3bff",
+                        "surface-container-low": "#f0f3ff",
+                        "secondary-fixed": "#e2dfff",
+                        "on-secondary-fixed-variant": "#2d00e5",
+                        "on-background": "#151c27",
+                        "tertiary": "#555a5f",
+                        "outline": "#767586",
+                        "on-tertiary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "surface-container-highest": "#dce2f3",
+                        "tertiary-fixed": "#dfe2e9",
+                        "surface-variant": "#dce2f3",
+                        "surface-tint": "#4849da",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed-variant": "#43474d",
+                        "tertiary-container": "#6e7278",
+                        "primary-fixed": "#e1e0ff",
+                        "inverse-on-surface": "#ebf1ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding": "24px",
+                        "stack-sm": "8px",
+                        "stack-md": "16px",
+                        "sidebar-width": "260px",
+                        "row-height": "64px",
+                        "stack-xs": "4px",
+                        "gutter": "16px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Inter"],
+                        "label-md": ["Work Sans"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-bold": ["Work Sans"],
+                        "body-lg": ["Inter"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["12px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "label-md": ["11px", { "lineHeight": "14px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-bold": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["20px", { "lineHeight": "28px", "fontWeight": "700" }],
+                        "headline-lg": ["24px", { "lineHeight": "32px", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        /* Custom scrollbar for data table */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f0f3ff;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #c7c4d7;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #767586;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md antialiased overflow-hidden">
+<!-- App Container -->
+<div class="flex h-screen w-full relative">
+<!-- Sidebar (SideNavBar Shared Component) -->
+<aside class="bg-surface-container-lowest border-r border-outline-variant w-[260px] h-screen fixed left-0 top-0 flex flex-col py-stack-md shrink-0 z-50">
+<!-- Header Brand -->
+<div class="px-container-padding mb-stack-md shrink-0 flex items-start justify-between gap-3">
+<div>
+<h1 class="text-headline-lg font-headline-lg text-primary uppercase tracking-wider">Delivera Express</h1>
+<p class="text-label-md font-label-md text-on-surface-variant uppercase tracking-wider mt-1">V1.6.1.1</p>
+</div>
+<img src="/assets/delivera-login.jpg" alt="Delivera Express" class="rounded-xl object-cover shadow-sm border border-outline-variant shrink-0" style="width:64px;height:64px;object-fit:cover;flex:0 0 64px"/>
+</div>
+<!-- Navigation Items -->
+<nav class="flex-1 overflow-y-auto px-stack-sm space-y-1">
+<!-- Accordion Group 1 -->
+<div class="mb-4">
+<p class="px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider">Ana Menü</p>
+<!-- Active Item (Operasyon) -->
+<a class="bg-secondary-container text-on-secondary-container border-l-4 border-primary flex items-center px-3 py-2.5 rounded-r-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+<span class="text-label-bold font-label-bold flex-1">Operasyon</span>
+</a>
+<a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2.5 ml-1 rounded-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]">map</span>
+<span class="text-body-sm font-body-sm">Operasyon Haritası</span>
+</a>
+<a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2.5 ml-1 rounded-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]">package_2</span>
+<span class="text-body-sm font-body-sm">Siparişler</span>
+</a>
+<a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2.5 ml-1 rounded-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]">storefront</span>
+<span class="text-body-sm font-body-sm">İşletmeler</span>
+</a>
+<a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2.5 ml-1 rounded-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]">map</span>
+<span class="text-body-sm font-body-sm">Canlı Harita</span>
+</a>
+<a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2.5 ml-1 rounded-md group transition-colors duration-200" href="#">
+<span class="material-symbols-outlined mr-3 text-[20px]">alt_route</span>
+<span class="text-body-sm font-body-sm">Oto Atama Yönetimi</span>
+</a>
+</div>
+<!-- Accordion Group 2 (Mock for visual density) -->
+<div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">KURYE İŞLEMLERİ</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">delivery_dining</span><span class="text-body-sm font-body-sm">Kuryeler</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">assessment</span><span class="text-body-sm font-body-sm">Kurye Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">event_busy</span><span class="text-body-sm font-body-sm">Haftalık İzin Planı</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">schedule</span><span class="text-body-sm font-body-sm">Kurye Vardiya &amp; Mola</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">gavel</span><span class="text-body-sm font-body-sm">Kurye Ceza &amp; Ödül Kaydı</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">payments</span><span class="text-body-sm font-body-sm">Ödeme Değişiklikleri</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">speed</span><span class="text-body-sm font-body-sm">Kurye Performans</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">account_balance_wallet</span><span class="text-body-sm font-body-sm">Kurye Tahsilat</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">money</span><span class="text-body-sm font-body-sm">Kurye Nakitleri</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">local_shipping</span><span class="text-body-sm font-body-sm">İşletme-kurye teslim takibi</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">price_check</span><span class="text-body-sm font-body-sm">Kurye Ücretlendirme</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">paid</span><span class="text-body-sm font-body-sm">Kurye Kazanç</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">store</span><span class="text-body-sm font-body-sm">Restoran Bazlı Kurye Kazanç</span></a></div></div>
+<!-- Accordion Group 3 (Mock) -->
+<div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">HAVUZ İŞLEMLERİ</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">verified_user</span><span class="text-body-sm font-body-sm">Kurye Havuz Yetkileri</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">history</span><span class="text-body-sm font-body-sm">Havuz Sipariş Geçmişi</span></a></div></div>
+<!-- Accordion Group 4 (Mock) -->
+<div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">RAPORLAR</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">shopping_cart</span><span class="text-body-sm font-body-sm">Günlük Sipariş Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">reorder</span><span class="text-body-sm font-body-sm">Detaylı Sipariş Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">attach_money</span><span class="text-body-sm font-body-sm">Parçalı Ödeme Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">schedule</span><span class="text-body-sm font-body-sm">Kurye Teslim Süre Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">credit_card</span><span class="text-body-sm font-body-sm">Kurye Ödeme Türü Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">balance</span><span class="text-body-sm font-body-sm">Kurye Ceza &amp; Ödül Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">business_center</span><span class="text-body-sm font-body-sm">Firma Kazanç</span></a></div></div>
+<div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">İŞLETME İŞLEMLERİ</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">home_work</span><span class="text-body-sm font-body-sm">İşletme Tahsilat</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">receipt_long</span><span class="text-body-sm font-body-sm">Restoran Hesap Raporu</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">assignment_return</span><span class="text-body-sm font-body-sm">İşletme Ücret İadesi</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">hub</span><span class="text-body-sm font-body-sm">Entegrasyon Yönetimi</span></a></div></div><div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">ÜCRETLENDİRME</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">attach_money</span><span class="text-body-sm font-body-sm">Kurye Özel Ücretlendirme</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">store</span><span class="text-body-sm font-body-sm">İşletme Ücretlendirme</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">storefront</span><span class="text-body-sm font-body-sm">Restoran Fiyatlandırması</span></a></div></div><div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">PAKET &amp; KONTÖR</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">inventory_2</span><span class="text-body-sm font-body-sm">Paket Satın Alma</span></a></div></div><div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">SİSTEM DIŞI İŞLEMLER</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">done_all</span><span class="text-body-sm font-body-sm">Sistem Dışı Onaylar</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">analytics</span><span class="text-body-sm font-body-sm">Sistem Dışı Rapor</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">attach_money</span><span class="text-body-sm font-body-sm">Sistem Dışı Dahil Kurye Kazanç</span></a></div></div><div class="mb-4"><button class="w-full flex items-center justify-between px-3 py-2 text-label-bold font-label-bold text-on-surface-variant uppercase tracking-wider hover:bg-surface-container rounded-md"><span class="">BÖLGE AYARLARI</span><span class="material-symbols-outlined text-[16px]">expand_more</span></button><div class="pl-4 space-y-1 mt-1"><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">location_on</span><span class="text-body-sm font-body-sm">Bölge Tanımlama</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">payments</span><span class="text-body-sm font-body-sm">İşletme Bölge Fiyatlandırma</span></a><a class="text-on-surface-variant hover:bg-surface-container flex items-center px-3 py-2 rounded-md group transition-colors duration-200" href="#"><span class="material-symbols-outlined mr-3 text-[20px]">store</span><span class="text-body-sm font-body-sm">İşletme Bölge Bazlı Tahsilat</span></a></div></div></nav>
+<!-- Bottom Credits Box -->
+<div class="px-stack-md mt-auto shrink-0 mb-4">
+<div class="bg-surface-container rounded-lg p-3 flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">account_balance_wallet</span>
+<span class="text-body-sm font-body-sm text-on-surface">Kontör</span>
+</div>
+<span class="text-label-bold font-label-bold text-green-600">1390</span>
+</div>
+</div>
+<!-- Footer Connectivity -->
+<div class="border-t border-outline-variant px-stack-md py-3 shrink-0 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]"></span>
+<span class="text-label-md font-label-md text-on-surface-variant">Sisteme bağlı</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[16px] ml-auto">sensors</span>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-[260px] flex flex-col h-screen overflow-hidden bg-background">
+<!-- Top Nav Area (Filters & Action) -->
+<header class="bg-surface-container-low flex justify-between items-center px-container-padding w-full h-row-height shrink-0 sticky top-0 z-40 border-b border-outline-variant">
+<!-- Filter Tabs -->
+<div class="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-1 pt-1">
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary-container text-on-primary-container text-label-bold font-label-bold transition-transform hover:scale-95">
+                        Tümü
+                        <span class="bg-on-primary-container text-primary-container text-[10px] px-2 py-0.5 rounded-full">32</span>
+</button>
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface-container-highest text-on-surface-variant text-label-bold font-label-bold hover:bg-surface-variant transition-colors">
+                        İşletmede
+                        <span class="bg-outline-variant text-on-surface text-[10px] px-2 py-0.5 rounded-full">1</span>
+</button>
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface-container-highest text-on-surface-variant text-label-bold font-label-bold hover:bg-surface-variant transition-colors whitespace-nowrap">
+                        Hazır - Atanmayan
+                        <span class="bg-outline-variant text-on-surface text-[10px] px-2 py-0.5 rounded-full">6</span>
+</button>
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface-container-highest text-on-surface-variant text-label-bold font-label-bold hover:bg-surface-variant transition-colors">
+                        Yolda
+                        <span class="bg-outline-variant text-on-surface text-[10px] px-2 py-0.5 rounded-full">25</span>
+</button>
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface-container-highest text-on-surface-variant text-label-bold font-label-bold hover:bg-surface-variant transition-colors">
+                        Randevulu
+                        <span class="bg-outline-variant text-on-surface text-[10px] px-2 py-0.5 rounded-full">0</span>
+</button>
+<button class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface-container-highest text-on-surface-variant text-label-bold font-label-bold hover:bg-surface-variant transition-colors">
+                        İptal
+                        <span class="bg-outline-variant text-on-surface text-[10px] px-2 py-0.5 rounded-full">13</span>
+</button>
+</div>
+<!-- Primary Action -->
+<button class="flex items-center gap-2 bg-primary text-on-primary px-5 py-2 rounded-lg text-label-bold font-label-bold hover:opacity-90 transition-all hover:scale-95 shrink-0 ml-4 shadow-sm">
+<span class="material-symbols-outlined text-[18px]">add_circle</span>
+                    Sipariş Ekle
+                </button>
+</header>
+<!-- Data Table Container -->
+<div class="flex-1 p-container-padding overflow-hidden flex flex-col">
+<!-- Table Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl flex-1 flex flex-col overflow-hidden shadow-sm">
+<!-- Table Header -->
+<div class="bg-primary text-on-primary grid grid-cols-[100px_1fr_1.5fr_1fr_120px_100px_120px_140px] gap-4 px-4 py-3 shrink-0 text-label-bold font-label-bold uppercase tracking-wider">
+<div class="">PAKET ID</div>
+<div class="">FİRMA</div>
+<div class="">ADRES</div>
+<div class="">MÜŞTERİ</div>
+<div class="">OLUŞTURMA</div>
+<div class="">KURYE</div>
+<div class="">ÖDEME</div>
+<div class="text-right">İŞLEMLER</div>
+</div>
+<!-- Table Body (Scrollable) -->
+<div class="flex-1 overflow-y-auto custom-scrollbar bg-surface-container-lowest">
+<!-- Row 1 -->
+<div class="grid grid-cols-[100px_1fr_1.5fr_1fr_120px_100px_120px_140px] gap-4 px-4 py-3 border-b border-outline-variant/50 hover:bg-surface-container-low transition-colors items-center text-body-sm font-body-sm group">
+<!-- ID & Source -->
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-orange-500"></span>
+<span class="font-semibold text-on-surface">62145</span>
+</div>
+<span class="bg-primary-container/10 text-primary px-1.5 py-0.5 rounded text-[10px] font-bold w-fit">#230</span>
+</div>
+<!-- Firma -->
+<div class="text-on-surface-variant truncate">
+                                G*** Restoran<br>
+<span class="text-[10px] text-outline">Şube 1</span>
+</div>
+<!-- Adres -->
+<div class="text-on-surface-variant truncate">
+                                Merkez Mah. Atatürk Cad.<br>
+                                No: 45 D:12
+                            </div>
+<!-- Müşteri -->
+<div class="text-on-surface-variant truncate">
+                                A*** B***<br>
+                                0555***1234
+                            </div>
+<!-- Oluşturma/Durum -->
+<div class="flex flex-col text-[11px] leading-tight">
+<span class="text-on-surface-variant">15:45:37</span>
+<span class="text-outline">0.68 km</span>
+<span class="text-orange-600 font-medium">İşletmede</span>
+<span class="text-outline">Bekliyor</span>
+</div>
+<!-- Kurye -->
+<div class="flex flex-col items-center justify-center">
+<div class="w-8 h-8 bg-surface-variant rounded-full flex items-center justify-center text-outline mb-1">
+<span class="material-symbols-outlined text-[16px]">person</span>
+</div>
+<span class="text-[10px] text-outline text-center leading-tight">Atanmadı</span>
+</div>
+<!-- Ödeme -->
+<div class="flex flex-col">
+<span class="text-primary font-medium">Online</span>
+<span class="text-[10px] text-outline">Online Ödeme</span>
+<span class="text-green-600 font-bold mt-1">300 TL</span>
+</div>
+<!-- İşlemler -->
+<div class="flex flex-wrap gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="w-7 h-7 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded flex items-center justify-center transition-colors" title="Detay">
+<span class="material-symbols-outlined text-[14px]">visibility</span>
+</button>
+<button class="w-7 h-7 bg-amber-100 text-amber-600 hover:bg-amber-200 rounded flex items-center justify-center transition-colors" title="Harita">
+<span class="material-symbols-outlined text-[14px]">map</span>
+</button>
+<button class="w-7 h-7 bg-red-100 text-red-600 hover:bg-red-200 rounded flex items-center justify-center transition-colors" title="İptal">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+<button class="px-2 py-1 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded text-[10px] font-bold w-full mt-1 transition-colors">
+                                    Düzenle
+                                </button>
+</div>
+</div>
+<!-- Row 2 -->
+<div class="grid grid-cols-[100px_1fr_1.5fr_1fr_120px_100px_120px_140px] gap-4 px-4 py-3 border-b border-outline-variant/50 hover:bg-surface-container-low transition-colors items-center text-body-sm font-body-sm group">
+<!-- ID & Source -->
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-green-500"></span>
+<span class="font-semibold text-on-surface">03994</span>
+</div>
+<span class="bg-primary-container/10 text-primary px-1.5 py-0.5 rounded text-[10px] font-bold w-fit">#229</span>
+</div>
+<!-- Firma -->
+<div class="text-on-surface-variant truncate">
+                                C*** Cafe<br>
+<span class="text-[10px] text-outline">Merkez</span>
+</div>
+<!-- Adres -->
+<div class="text-on-surface-variant truncate">
+                                Cumhuriyet Bulvarı<br>
+                                No: 12
+                            </div>
+<!-- Müşteri -->
+<div class="text-on-surface-variant truncate">
+                                M*** Y***<br>
+                                0532***9876
+                            </div>
+<!-- Oluşturma/Durum -->
+<div class="flex flex-col text-[11px] leading-tight">
+<span class="text-on-surface-variant">15:43:50</span>
+<span class="text-outline">2.50 km</span>
+<span class="text-green-600 font-medium">Hazır</span>
+<span class="text-outline">Bekliyor</span>
+</div>
+<!-- Kurye -->
+<div class="flex flex-col items-center justify-center">
+<div class="w-8 h-8 bg-surface-variant rounded-full flex items-center justify-center text-outline mb-1">
+<span class="material-symbols-outlined text-[16px]">person</span>
+</div>
+</div>
+<!-- Ödeme -->
+<div class="flex flex-col">
+<span class="text-teal-600 font-medium">Nakit</span>
+<span class="text-green-600 font-bold mt-1">225 TL</span>
+</div>
+<!-- İşlemler -->
+<div class="flex flex-wrap gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="w-7 h-7 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded flex items-center justify-center transition-colors">
+<span class="material-symbols-outlined text-[14px]">visibility</span>
+</button>
+<button class="w-7 h-7 bg-amber-100 text-amber-600 hover:bg-amber-200 rounded flex items-center justify-center transition-colors">
+<span class="material-symbols-outlined text-[14px]">map</span>
+</button>
+<button class="w-7 h-7 bg-red-100 text-red-600 hover:bg-red-200 rounded flex items-center justify-center transition-colors">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+<button class="px-2 py-1 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded text-[10px] font-bold w-full mt-1 transition-colors">
+                                    Düzenle
+                                </button>
+</div>
+</div>
+<!-- Row 3 (Assigned Courier) -->
+<div class="grid grid-cols-[100px_1fr_1.5fr_1fr_120px_100px_120px_140px] gap-4 px-4 py-3 border-b border-outline-variant/50 hover:bg-surface-container-low transition-colors items-center text-body-sm font-body-sm group bg-blue-50/30">
+<!-- ID & Source -->
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-blue-500"></span>
+<span class="font-semibold text-on-surface">62730</span>
+</div>
+<span class="bg-primary-container/10 text-primary px-1.5 py-0.5 rounded text-[10px] font-bold w-fit">#226</span>
+</div>
+<!-- Firma -->
+<div class="text-on-surface-variant truncate">
+                                B*** Burger<br>
+<span class="text-[10px] text-outline">Meydan</span>
+</div>
+<!-- Adres -->
+<div class="text-on-surface-variant truncate">
+                                İstiklal Cad. Ara Sokak<br>
+                                No: 5
+                            </div>
+<!-- Müşteri -->
+<div class="text-on-surface-variant truncate">
+                                S*** K***<br>
+                                0505***5555
+                            </div>
+<!-- Oluşturma/Durum -->
+<div class="flex flex-col text-[11px] leading-tight">
+<span class="text-on-surface-variant">15:42:19</span>
+<span class="text-outline">5.33 km</span>
+<span class="text-blue-600 font-medium">Yolda</span>
+<span class="text-outline">Atandı (15:45)</span>
+</div>
+<!-- Kurye -->
+<div class="flex flex-col items-center justify-center">
+<img alt="Kurye" class="w-8 h-8 rounded-full mb-1 border border-outline-variant" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDkthruB3z0Z1gi-5OrsUnLY7uk3-v-jyOaENbo2iuqOoyDMmBHgyqfpTaKCvZvwd1KpikSirkLNwEKIRmwqElhQ2fPOks5s4-Dafj16Fv-Bp-V51N-Oq5tyzJcBNNOPqzINJJ3N0CTS5rY-5QuxFsuk1B_iSZqN8EiYA2Ys-Lt2Bo6T5XtDs7G3rktVgpyr6n_dMe8meTlFG4OwUJIXHqCC7Oax2c00xnuHFmVTVU88KzYX1qa2cBu">
+<span class="text-[10px] text-on-surface font-medium truncate w-full text-center">Ali V.</span>
+</div>
+<!-- Ödeme -->
+<div class="flex flex-col">
+<span class="text-primary font-medium">Online</span>
+<span class="text-[10px] text-outline">Kredi Kartı</span>
+<span class="text-green-600 font-bold mt-1">359.1 TL</span>
+</div>
+<!-- İşlemler -->
+<div class="flex flex-wrap gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="w-7 h-7 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded flex items-center justify-center transition-colors">
+<span class="material-symbols-outlined text-[14px]">visibility</span>
+</button>
+<button class="w-7 h-7 bg-amber-100 text-amber-600 hover:bg-amber-200 rounded flex items-center justify-center transition-colors">
+<span class="material-symbols-outlined text-[14px]">map</span>
+</button>
+<button class="px-2 py-1 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded text-[10px] font-bold w-full mt-1 transition-colors">
+                                    Düzenle
+                                </button>
+</div>
+</div>
+<!-- Add more rows as needed to fill space visually -->
+<!-- ... (repeating structure for visual density) ... -->
+<div class="p-8 text-center text-outline text-body-md">
+                            Daha fazla veri yüklemek için kaydırın...
+                        </div>
+</div>
+</div>
+</div>
+<!-- Footer (Shared Component) -->
+<footer class="bg-surface-container-lowest border-t border-outline-variant px-container-padding py-2 shrink-0 flex justify-between items-center z-40 relative">
+<span class="text-body-sm font-body-sm text-on-surface-variant">Delivera Express Operational Dashboard © 2024</span>
+<div class="flex gap-4">
+<a class="text-body-sm font-body-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Destek</a>
+<a class="text-body-sm font-body-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Dökümantasyon</a>
+</div>
+</footer>
+</main>
+</div>
+
+
+<script defer src="/shared.js"></script>
+<script defer src="/login-shell.js?v=20260808-2"></script>
+<script defer src="/admin-design-bridge.js?v=20260808-5"></script>
+</body></html>

@@ -196,6 +196,7 @@ Kurye paneli:
 Genel:
 - `GET /api/bootstrap` (yalnizca anonim landing istatistikleri)
 - `GET /health`
+- `GET /ready` (production PostgreSQL ve opsiyonel zorunlu Redis hazirlik kapisi)
 
 Admin auth:
 - `POST /api/admin/login`

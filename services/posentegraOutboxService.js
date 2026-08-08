@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const EVENT_TYPES = Object.freeze({
   PACKAGE_ASSIGN: "package.assign",
   ORDER_STATUS: "order.status",
+  ORDER_CANCEL: "order.cancel",
 });
 
 function nowIso() {
@@ -66,6 +67,17 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     return enqueue(EVENT_TYPES.ORDER_STATUS, packageId, { orderId, status, meta }, `order.status:${packageId}:${status}`);
   }
 
+  function enqueueCancellation({ packageId, orderId, reason, meta = {} }) {
+    if (!client.configured() || !trimmed(packageId) || !trimmed(orderId)) {
+      return null;
+    }
+    return enqueue(EVENT_TYPES.ORDER_CANCEL, packageId, {
+      orderId,
+      reason: trimmed(reason) || "Restoran siparişi reddetti.",
+      meta,
+    }, `order.cancel:${packageId}`);
+  }
+
   async function deliver(row) {
     const payload = parseJson(row.payload_json, {});
     if (row.event_type === EVENT_TYPES.PACKAGE_ASSIGN) {
@@ -83,6 +95,17 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
         throw new Error("Posentegra order pid bulunamadi.");
       }
       return client.changeOrderStatus(currentOrderId, payload.status, {
+        ...(payload.meta || {}),
+        packageId: row.aggregate_id,
+      });
+    }
+    if (row.event_type === EVENT_TYPES.ORDER_CANCEL) {
+      const packageRow = db.prepare("SELECT posentegra_id FROM packages WHERE id = ?").get(row.aggregate_id);
+      const currentOrderId = trimmed(packageRow?.posentegra_id || payload.orderId);
+      if (!currentOrderId) {
+        throw new Error("Posentegra order pid bulunamadi.");
+      }
+      return client.cancelOrder(currentOrderId, payload.reason, {
         ...(payload.meta || {}),
         packageId: row.aggregate_id,
       });
@@ -182,6 +205,7 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     EVENT_TYPES,
     enqueuePackageAssignment,
     enqueueStatus,
+    enqueueCancellation,
     processDue,
     health,
   };

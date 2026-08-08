@@ -42,6 +42,23 @@ function findCallbackAccount(db, packageRecord) {
   return rows.find((row) => normalizePlatform(row.platform) === target) || null;
 }
 
+function callbackOutcomeAlreadyRecorded(packageRecord, status, meta = {}, result = {}) {
+  const logs = Array.isArray(packageRecord?.platformStatusLogs) ? packageRecord.platformStatusLogs : [];
+  const callbackMode = trimmed(result.mode || result.status);
+  if (callbackMode !== "not_configured") {
+    return false;
+  }
+  const courierId = trimmed(meta.courierId || packageRecord?.assignedCourierId);
+  return logs.some((entry) => {
+    if (trimmed(entry?.status) !== trimmed(status)) return false;
+    if (trimmed(entry?.meta?.callbackMode || entry?.meta?.callbackStatus) !== callbackMode) return false;
+    if (trimmed(status) === "assigned") {
+      return trimmed(entry?.meta?.courierId) === courierId;
+    }
+    return true;
+  });
+}
+
 async function sendPlatformStatusCallback({ db, packageRecord, status, meta = {}, timeoutMs = 8000 }) {
   const account = findCallbackAccount(db, packageRecord);
   const callbackUrl = resolveCallbackUrl(account, packageRecord);
@@ -107,4 +124,5 @@ async function sendPlatformStatusCallback({ db, packageRecord, status, meta = {}
 
 module.exports = {
   sendPlatformStatusCallback,
+  callbackOutcomeAlreadyRecorded,
 };

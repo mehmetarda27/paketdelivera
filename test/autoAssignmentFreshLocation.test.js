@@ -71,6 +71,7 @@ test("automatic assignment requires fresh GPS and uses distance regardless of co
     const now = new Date();
     const stamp = now.toISOString();
     const staleStamp = new Date(now.getTime() - 35 * 60_000).toISOString();
+    const historicalPackageStamp = new Date(now.getTime() - 48 * 60 * 60_000).toISOString();
     const db = new DatabaseSync(dbFile);
     db.prepare(`
       INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, created_at)
@@ -96,12 +97,29 @@ test("automatic assignment requires fresh GPS and uses distance regardless of co
       "Fresh Customer", "5550000000", "Test address", "Akdeniz", "15 dk", "Online Odeme", 100,
       51.5, -0.12, "Old package coordinate snapshot", "awaiting_assignment", "pending", "Test setup", stamp, stamp
     );
+    db.prepare(`
+      INSERT INTO packages (
+        id, tracking_no, restaurant_id, source, source_platform, external_order_no,
+        recipient, phone, address, zone, eta, payment_method, order_amount,
+        x, y, note, status, assignment_status, assignment_reason, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "pkg_historical_waiting", "PKT-HISTORICAL-WAITING", "rst_fresh_location", "restaurant_panel", "Manuel", "OLD-1",
+      "Historical Customer", "5550000001", "Old test address", "Akdeniz", "15 dk", "Online Odeme", 100,
+      36.78915, 34.59786, "Must not be revived", "awaiting_assignment", "pending", "Historical setup",
+      historicalPackageStamp, historicalPackageStamp
+    );
     db.close();
 
     const assigned = await waitForAssignment(dbFile, "pkg_fresh_location");
     assert.equal(assigned.assigned_courier_id, "cr_wrong_zone");
     assert.ok(Number(assigned.distance_km) < 0.1);
     assert.equal(assigned.last_assignment_error, "");
+    const verificationDb = new DatabaseSync(dbFile, { readOnly: true });
+    const historical = verificationDb.prepare("SELECT * FROM packages WHERE id = ?").get("pkg_historical_waiting");
+    verificationDb.close();
+    assert.equal(historical.assigned_courier_id, null);
+    assert.equal(historical.status, "awaiting_assignment");
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+
+<html class="light" lang="tr" translate="no"><head>
+<meta charset="utf-8"/>
+<meta name="google" content="notranslate"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Kurye Performans Raporları</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&amp;family=Hanken+Grotesk:wght@600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-dim": "#d8dadd",
+                      "surface-container-low": "#f2f4f7",
+                      "outline": "#707883",
+                      "error-container": "#ffdad6",
+                      "on-tertiary-container": "#5e0002",
+                      "surface-container-lowest": "#ffffff",
+                      "surface-container-highest": "#e0e3e6",
+                      "surface-container-high": "#e6e8eb",
+                      "on-secondary-fixed-variant": "#005313",
+                      "primary-container": "#2196f3",
+                      "on-primary-container": "#002c4f",
+                      "on-primary-fixed-variant": "#00497d",
+                      "on-error": "#ffffff",
+                      "surface-container": "#eceef1",
+                      "inverse-on-surface": "#eff1f4",
+                      "outline-variant": "#bfc7d4",
+                      "tertiary": "#bb1614",
+                      "inverse-surface": "#2d3133",
+                      "surface-bright": "#f7f9fc",
+                      "surface-tint": "#0061a4",
+                      "primary-fixed": "#d1e4ff",
+                      "on-error-container": "#93000a",
+                      "error": "#ba1a1a",
+                      "surface-variant": "#e0e3e6",
+                      "on-primary-fixed": "#001d36",
+                      "background": "#f7f9fc",
+                      "primary-fixed-dim": "#9ecaff",
+                      "on-tertiary-fixed-variant": "#930005",
+                      "inverse-primary": "#9ecaff",
+                      "tertiary-fixed-dim": "#ffb4a9",
+                      "secondary-container": "#91f78e",
+                      "on-tertiary": "#ffffff",
+                      "surface": "#f7f9fc",
+                      "primary": "#0061a4",
+                      "tertiary-container": "#ff5748",
+                      "on-tertiary-fixed": "#410001",
+                      "secondary": "#006e1c",
+                      "on-surface-variant": "#404752",
+                      "on-secondary-fixed": "#002204",
+                      "secondary-fixed-dim": "#78dc77",
+                      "tertiary-fixed": "#ffdad5",
+                      "on-primary": "#ffffff",
+                      "on-secondary-container": "#00731e",
+                      "on-surface": "#191c1e",
+                      "secondary-fixed": "#94f990",
+                      "on-background": "#191c1e",
+                      "on-secondary": "#ffffff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "1rem",
+                      "gutter-card": "0.75rem",
+                      "stack-md": "1rem",
+                      "touch-target-min": "48px",
+                      "stack-sm": "0.5rem",
+                      "stack-lg": "1.5rem",
+                      "safe": "env(safe-area-inset-bottom)"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Hanken Grotesk"
+                      ],
+                      "label-numeric": [
+                              "JetBrains Mono"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "display-lg": [
+                              "Hanken Grotesk"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-sm": [
+                              "Hanken Grotesk"
+                      ],
+                      "caption": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-numeric": [
+                              "14px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-sm": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "caption": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "500"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<style>
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body-md antialiased pb-24 md:pb-0">
+<!-- Mobile Header -->
+<header class="md:hidden sticky top-0 bg-surface-container-lowest z-40 px-margin-page py-4 flex items-center shadow-sm">
+<button class="mr-4 p-2 -ml-2 rounded-full hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-on-surface">arrow_back</span>
+</button>
+<h1 class="font-headline-md text-headline-md text-on-surface flex-1 text-center pr-10">Raporlar</h1>
+</header>
+<!-- Main Content Canvas -->
+<main class="max-w-3xl mx-auto md:pt-8 w-full flex flex-col md:flex-row min-h-screen">
+<!-- Desktop Sidebar (Hidden on mobile) -->
+<aside class="hidden md:flex flex-col w-80 fixed inset-y-0 left-0 z-[60] bg-surface-container shadow-xl rounded-r-xl">
+<div class="p-6 border-b border-outline-variant/30 flex items-center gap-4">
+<img src="/assets/delivera-login.jpg" alt="Delivera Express" class="rounded-xl object-cover shadow-sm border border-outline-variant/40 shrink-0" style="width:48px;height:48px;object-fit:cover;flex:0 0 48px"/>
+<div>
+<h2 class="font-headline-sm text-headline-sm text-primary">Aktif Kurye</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Kimlik: #8829-X</p>
+</div>
+</div>
+<nav class="flex-1 py-4 flex flex-col gap-2 px-2">
+<!-- Navigation items based on JSON intent -->
+<a class="flex items-center gap-4 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full transition-colors duration-150 mx-2" href="#">
+<span class="material-symbols-outlined" data-icon="schedule">schedule</span>
+<span class="font-body-md text-body-md">Aktif Vardiya</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 bg-secondary-container text-on-secondary-container font-bold rounded-full transition-colors duration-150 mx-2" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span class="font-body-md text-body-md">Kazanç Geçmişi</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full transition-colors duration-150 mx-2" href="#">
+<span class="material-symbols-outlined" data-icon="local_shipping">local_shipping</span>
+<span class="font-body-md text-body-md">Araç Durumu</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full transition-colors duration-150 mx-2" href="#">
+<span class="material-symbols-outlined" data-icon="contact_emergency">contact_emergency</span>
+<span class="font-body-md text-body-md">Acil Durum İletişimleri</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 text-on-surface-variant hover:bg-surface-container-highest rounded-full transition-colors duration-150 mx-2" href="#">
+<span class="material-symbols-outlined" data-icon="support_agent">support_agent</span>
+<span class="font-body-md text-body-md">Destek</span>
+</a>
+</nav>
+</aside>
+<!-- Content Area -->
+<div class="flex-1 w-full px-margin-page py-6 md:ml-80 md:px-8 space-y-stack-lg">
+<!-- Profile Header -->
+<section class="flex items-center gap-4">
+<div class="relative w-20 h-20 bg-primary rounded-2xl flex items-center justify-center shadow-sm">
+<span class="material-symbols-outlined text-on-primary text-4xl">person</span>
+<button class="absolute -bottom-2 -right-2 w-8 h-8 bg-surface-container-lowest rounded-full shadow border border-outline-variant flex items-center justify-center text-primary hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-sm">edit</span>
+</button>
+</div>
+<div>
+<h2 class="font-display-lg text-display-lg text-on-surface">Deneme 123</h2>
+</div>
+</section>
+<!-- Stats Bar -->
+<section class="bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant/50 p-4 flex justify-between items-center bg-gradient-to-r from-primary-fixed/20 to-secondary-fixed/20">
+<div class="flex flex-col items-center flex-1 border-r border-outline-variant/30">
+<div class="flex items-center gap-1 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">local_shipping</span>
+<span class="font-label-numeric text-label-numeric font-bold text-lg">0</span>
+</div>
+<span class="font-caption text-caption text-on-surface-variant">Paket</span>
+</div>
+<div class="flex flex-col items-center flex-1 border-r border-outline-variant/30">
+<div class="flex items-center gap-1 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">payments</span>
+<span class="font-label-numeric text-label-numeric font-bold text-lg">₺0.00</span>
+</div>
+<span class="font-caption text-caption text-on-surface-variant">Kazanç</span>
+</div>
+<div class="flex flex-col items-center flex-1">
+<div class="flex items-center gap-1 text-on-surface">
+<span class="material-symbols-outlined text-[18px]">local_fire_department</span>
+<span class="font-label-numeric text-label-numeric font-bold text-lg">0.00</span>
+</div>
+<span class="font-caption text-caption text-on-surface-variant">Ekstra KM</span>
+</div>
+</section>
+<!-- Secondary Nav (Packages, Earnings, Reports, Settings) - Desktop/Tablet layout adaptation -->
+<section class="hidden md:flex bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant/50 p-2 justify-around">
+<button class="flex flex-col items-center p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined fill mb-1 text-primary">bar_chart</span>
+<span class="font-caption text-caption font-semibold text-primary">Paketler</span>
+<div class="w-8 h-1 bg-primary rounded-t-full mt-1"></div>
+</button>
+<button class="flex flex-col items-center p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined mb-1">payments</span>
+<span class="font-caption text-caption">Kazançlarım</span>
+</button>
+<button class="flex flex-col items-center p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined mb-1">leaderboard</span>
+<span class="font-caption text-caption">Raporlar</span>
+</button>
+<button class="flex flex-col items-center p-2 text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined mb-1">settings</span>
+<span class="font-caption text-caption">Ayarlar</span>
+</button>
+</section>
+<!-- Time Period Tabs -->
+<section class="flex bg-surface-container-high p-1 rounded-xl gap-1">
+<button class="flex-1 py-2 bg-primary text-on-primary rounded-lg font-headline-sm text-headline-sm shadow-sm transition-transform active:scale-95">Günlük</button>
+<button class="flex-1 py-2 text-on-surface-variant hover:bg-surface-container-highest rounded-lg font-headline-sm text-headline-sm transition-colors">Haftalık</button>
+<button class="flex-1 py-2 text-on-surface-variant hover:bg-surface-container-highest rounded-lg font-headline-sm text-headline-sm transition-colors">Aylık</button>
+</section>
+<!-- Metric Cards Bento Grid -->
+<section class="grid grid-cols-2 gap-gutter-card">
+<div class="bg-surface-container-lowest p-4 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between aspect-[4/3]">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-secondary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary text-sm">local_shipping</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface-variant">Teslimat</span>
+</div>
+<div>
+<div class="font-display-lg text-display-lg text-secondary mb-1">0</div>
+<div class="font-caption text-caption text-on-surface-variant">Bugün</div>
+</div>
+</div>
+<div class="bg-surface-container-lowest p-4 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between aspect-[4/3]">
+<div class="flex items-center gap-2">
+<div class="w-8 h-8 rounded-lg bg-[#FFA000]/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-[#FFA000] text-sm">timer</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface-variant">Ort. Süre</span>
+</div>
+<div>
+<div class="font-display-lg text-display-lg text-[#FFA000] mb-1">0 dk</div>
+<div class="font-caption text-caption text-on-surface-variant">Bu Hafta</div>
+</div>
+</div>
+</section>
+<!-- Chart Section -->
+<section class="bg-surface-container-lowest p-5 rounded-xl shadow-sm border border-outline-variant/20">
+<div class="flex items-center gap-2 mb-6">
+<span class="material-symbols-outlined text-primary">bar_chart</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Son 7 Gün</h3>
+</div>
+<!-- Simplified Chart Visual -->
+<div class="relative h-40 w-full flex flex-col justify-between">
+<!-- Y Axis Lines -->
+<div class="absolute inset-0 flex flex-col justify-between w-full pointer-events-none">
+<div class="border-b border-outline-variant/20 w-full h-0"></div>
+<div class="border-b border-outline-variant/20 w-full h-0"></div>
+<div class="border-b border-outline-variant/20 w-full h-0"></div>
+</div>
+<!-- Y Axis Labels -->
+<div class="absolute left-0 top-0 h-full flex flex-col justify-between text-caption text-outline pb-6">
+<span>2</span>
+<span>1</span>
+<span>0</span>
+</div>
+<!-- X Axis Labels -->
+<div class="absolute bottom-0 left-6 right-0 flex justify-between text-caption text-outline">
+<span>Cm</span>
+<span>Pa</span>
+<span>Pz</span>
+<span>Sa</span>
+<span>Ça</span>
+<span>Pe</span>
+<span>Cu</span>
+</div>
+</div>
+</section>
+<!-- Performance List -->
+<section class="bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant/20 overflow-hidden">
+<div class="p-4 border-b border-outline-variant/20 flex items-center gap-2">
+<span class="material-symbols-outlined text-[#FFA000]">bolt</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Performans Metrikleri</h3>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center justify-between p-4 border-b border-outline-variant/10 hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-sm">timer</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface">Ortalama Teslimat Süresi</span>
+</div>
+<span class="font-label-numeric text-label-numeric text-primary font-bold">0 dakika</span>
+</div>
+<div class="flex items-center justify-between p-4 border-b border-outline-variant/10 hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-sm">today</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface">Bugünkü Teslimatlar</span>
+</div>
+<span class="font-label-numeric text-label-numeric text-primary font-bold">0 sipariş</span>
+</div>
+<div class="flex items-center justify-between p-4 hover:bg-surface-container-low transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-sm">calendar_month</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface">Haftalık Teslimatlar</span>
+</div>
+<span class="font-label-numeric text-label-numeric text-primary font-bold">0 sipariş</span>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- Mobile Bottom Navigation Shell -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe pt-2 bg-surface-container-lowest dark:bg-inverse-surface shadow-[0_-2px_8px_rgba(0,0,0,0.04)] rounded-t-xl transition-all duration-300 ease-in-out active:scale-90">
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-colors">
+<span class="material-symbols-outlined">package_2</span>
+<span class="font-body-md text-body-md">Paketler</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-colors">
+<span class="material-symbols-outlined">payments</span>
+<span class="font-body-md text-body-md">Kazançlar</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-primary-container dark:bg-on-primary-fixed-variant text-on-primary-container dark:text-primary-fixed rounded-xl px-4 py-1.5 transition-colors">
+<span class="material-symbols-outlined fill">leaderboard</span>
+<span class="font-body-md text-body-md font-bold">Raporlar</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline-variant px-4 py-1.5 hover:text-primary dark:hover:text-inverse-primary transition-colors">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-body-md text-body-md">Ayarlar</span>
+</button>
+</nav>
+<script src="/login-shell.js?v=20260808-2" defer></script>
+<script src="/courier-design-bridge.js?v=20260808-2" defer></script>
+</body></html>

@@ -87,6 +87,46 @@ test("Posentegra package assignment is idempotent and stores returned pid", asyn
   db.close();
 });
 
+test("Posentegra restaurant rejection is idempotent and retries through the durable outbox", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_reject", "pid_reject", new Date().toISOString());
+  let calls = 0;
+  const client = {
+    configured: () => true,
+    async cancelOrder(orderId, reason, meta) {
+      calls += 1;
+      assert.equal(orderId, "pid_reject");
+      assert.equal(reason, "Ürün tükendi.");
+      assert.equal(meta.sourcePlatform, "Trendyol Yemek");
+      if (calls === 1) throw new Error("temporary cancellation outage");
+      return { ok: true, status: 200 };
+    },
+    async changeOrderStatus() {
+      throw new Error("not expected");
+    },
+    async assignPackageToRestaurant() {
+      throw new Error("not expected");
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueCancellation({ packageId: "pkg_reject", orderId: "pid_reject", reason: "Ürün tükendi.", meta: { sourcePlatform: "Trendyol Yemek" } });
+  outbox.enqueueCancellation({ packageId: "pkg_reject", orderId: "pid_reject", reason: "Ürün tükendi.", meta: { sourcePlatform: "Trendyol Yemek" } });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM posentegra_outbox").get().count, 1);
+
+  await outbox.processDue();
+  let row = db.prepare("SELECT * FROM posentegra_outbox WHERE dedupe_key = ?").get("order.cancel:pkg_reject");
+  assert.equal(row.status, "failed");
+  assert.equal(row.attempts, 1);
+  assert.match(row.last_error, /temporary cancellation outage/);
+
+  db.prepare("UPDATE posentegra_outbox SET next_attempt_at = ? WHERE id = ?").run(new Date(Date.now() - 1000).toISOString(), row.id);
+  await outbox.processDue();
+  row = db.prepare("SELECT * FROM posentegra_outbox WHERE id = ?").get(row.id);
+  assert.equal(row.status, "completed");
+  assert.equal(calls, 2);
+  db.close();
+});
+
 test("Posentegra outbox immediately drains work queued during an active sweep", async () => {
   const db = testDb();
   const stamp = new Date().toISOString();

@@ -44,6 +44,7 @@ async function request(baseUrl, route, options = {}) {
 function readRow(dbFile, sql, ...params) {
   const db = new DatabaseSync(dbFile);
   try {
+    db.exec("PRAGMA busy_timeout = 10000");
     return db.prepare(sql).get(...params);
   } finally {
     db.close();
@@ -53,6 +54,7 @@ function readRow(dbFile, sql, ...params) {
 function runSql(dbFile, sql, ...params) {
   const db = new DatabaseSync(dbFile);
   try {
+    db.exec("PRAGMA busy_timeout = 10000");
     return db.prepare(sql).run(...params);
   } finally {
     db.close();

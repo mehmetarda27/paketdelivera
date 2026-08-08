@@ -214,8 +214,13 @@ async function getCancelReasons(orderId) {
   return request(`/web-api/v1/orders/reasons/${encodeURIComponent(orderId)}`);
 }
 
-async function cancelOrder(orderId, reason) {
-  return request(`/web-api/v1/orders/cancel/${encodeURIComponent(orderId)}`, { method: "POST", body: { reason } });
+async function cancelOrder(orderId, reason, meta = {}) {
+  return request(`/web-api/v1/orders/cancel/${encodeURIComponent(orderId)}`, {
+    method: "POST",
+    body: { reason, ...meta },
+    retryable: true,
+    idempotencyKey: `cancel:${orderId}:${meta.packageId || ""}`,
+  });
 }
 
 module.exports = {

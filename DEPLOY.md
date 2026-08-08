@@ -27,6 +27,8 @@ Onemli alanlar:
 - `DELIVERA_ADMIN_USERNAME`
 - `DELIVERA_ADMIN_PASSWORD`
 - `PGPOOL_MAX=5`
+- `REDIS_URL=redis://...`
+- `DELIVERA_REQUIRE_REDIS=true`
 - `DELIVERA_UPLOAD_DIR=/var/data/uploads` veya harici storage path'i
 
 Production'da SQLite kullanilmaz. `NODE_ENV=production` iken `DATABASE_URL` yoksa uygulama baslamaz.
@@ -43,6 +45,7 @@ Production'da SQLite kullanilmaz. `NODE_ENV=production` iken `DATABASE_URL` yoks
    - `Database migrations checked`
 6. Shell veya one-off job ile `npm run db:migrate` calistir; ikinci calismada `applied: []` gorulmeli.
 7. `/health` yanitinda `database.mode: "postgres"`, pool bilgisi, migration ozeti ve uptime gorulmeli.
+8. Render Health Check Path `/ready` olmali; PostgreSQL veya zorunlu Redis hazir degilse bu endpoint `503` doner.
 
 ## 3. PM2 Ile Calistirma
 
@@ -80,6 +83,7 @@ sudo certbot --nginx -d app.deliveraexpress.com
 ## 6. Kontrol Listesi
 
 - `https://app.deliveraexpress.com/health`
+- `https://app.deliveraexpress.com/ready` (`200` olmadan trafik acilmaz)
 - `https://app.deliveraexpress.com/metrics`
 - Admin panelinden `/api/admin/system-status`
 - Admin panelinden `/api/admin/performance-summary`
@@ -100,6 +104,7 @@ sudo certbot --nginx -d app.deliveraexpress.com
 Canli musteriden once asagidaki maddeler tek tek dogrulanmali:
 
 - `NODE_ENV=production` ayarli.
+- `/ready` PostgreSQL ve `DELIVERA_REQUIRE_REDIS=true` iken Redis icin `200` donuyor.
 - Test/simulasyon endpointleri production'da 404 donuyor.
 - `.env` gercek secret manager veya hosting protected variables ile yonetiliyor.
 - `DELIVERA_CORS_ORIGINS` sadece canli domainleri iceriyor.

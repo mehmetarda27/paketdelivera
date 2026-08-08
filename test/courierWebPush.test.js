@@ -31,6 +31,16 @@ async function stopServer(server) {
   });
 }
 
+async function removeTempDir(tempDir) {
+  let lastError;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); return; }
+    catch (error) { lastError = error; await delay(250); }
+  }
+  if (process.platform === "win32" && ["EPERM", "EBUSY"].includes(lastError?.code)) return;
+  throw lastError;
+}
+
 async function jsonRequest(baseUrl, route, options = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
     ...options,
@@ -130,6 +140,13 @@ test("courier web push subscription is authenticated, idempotent and removable",
     });
     assert.equal(assigned.response.status, 200);
     assert.equal(db.prepare("SELECT assigned_courier_id FROM packages WHERE id = ?").get("pkg_push_test").assigned_courier_id, courierId);
+    const assignmentNotification = db.prepare(`
+      SELECT event_type, message FROM notification_logs
+      WHERE target_role = 'courier' AND target_id = ?
+      ORDER BY datetime(created_at) DESC LIMIT 1
+    `).get(courierId);
+    assert.equal(assignmentNotification.event_type, "package-override");
+    assert.match(assignmentNotification.message, /paketi kuriyeye atadi/i);
 
     const workerResponse = await fetch(`${baseUrl}/courier-push-sw.js`);
     assert.equal(workerResponse.status, 200);
@@ -145,6 +162,6 @@ test("courier web push subscription is authenticated, idempotent and removable",
     db.close();
   } finally {
     await stopServer(server);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await removeTempDir(tempDir);
   }
 });
