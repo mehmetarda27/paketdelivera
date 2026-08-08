@@ -15,16 +15,14 @@ try {
     }
   } catch {}
 }
-if (!String(process.env.NODE_ENV || "").trim()) {
-  const managedRuntime = [
-    process.env.RENDER,
-    process.env.RENDER_SERVICE_ID,
-    process.env.RENDER_SERVICE_NAME,
-    process.env.RENDER_EXTERNAL_URL,
-    process.env.RENDER_INSTANCE_ID,
-  ].some((value) => String(value || "").trim()) || /^(?:\/opt\/render\/|\/app(?:\/|$))/.test(process.cwd().replaceAll("\\", "/"));
-  if (managedRuntime) process.env.NODE_ENV = "production";
-}
+const managedRuntime = [
+  process.env.RENDER,
+  process.env.RENDER_SERVICE_ID,
+  process.env.RENDER_SERVICE_NAME,
+  process.env.RENDER_EXTERNAL_URL,
+  process.env.RENDER_INSTANCE_ID,
+].some((value) => String(value || "").trim()) || /^(?:\/opt\/render\/|\/app(?:\/|$))/.test(process.cwd().replaceAll("\\", "/"));
+if (managedRuntime && String(process.env.NODE_ENV || "").toLowerCase() !== "test") process.env.NODE_ENV = "production";
 const http = require("http");
 const fs = require("fs");
 const path = require("path");

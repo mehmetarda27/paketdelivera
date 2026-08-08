@@ -5,11 +5,11 @@ const path = require("node:path");
 const test = require("node:test");
 const { spawn } = require("node:child_process");
 
-test("Render runtime defaults NODE_ENV to production when the variable is omitted", async () => {
+test("Render runtime enforces NODE_ENV production", async () => {
   const root = path.join(__dirname, "..");
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-render-env-"));
   const env = { ...process.env, RENDER: "true", PORT: "0", DELIVERA_SKIP_BACKGROUND_JOBS: "1" };
-  delete env.NODE_ENV;
+  env.NODE_ENV = "development";
   ["DATABASE_URL", "POSTGRES_URL", "DATABASE_PRIVATE_URL", "POSTGRES_PRIVATE_URL", "INTERNAL_DATABASE_URL", "DATABASE_INTERNAL_URL", "RENDER_DATABASE_URL", "RENDER_POSTGRES_URL"].forEach((name) => delete env[name]);
 
   const output = await new Promise((resolve, reject) => {
