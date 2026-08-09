@@ -1,9 +1,9 @@
-# Delivera Paket Mobile App
+# Delivera Mobile App
 
-`Delivera Paket`, sadece kuryeler icin hazirlanan Android WebView/Capacitor uygulamasidir. Mevcut kurye panelini bozmadan su adresi yukler:
+`Delivera`, sadece kuryeler icin hazirlanan Android WebView/Capacitor uygulamasidir. Mevcut kurye panelini bozmadan su adresi yukler:
 
 ```text
-https://paketdelivera-1.onrender.com/courier.html
+https://deliveraexpres.com.tr/courier.html
 ```
 
 ## Kurulum
@@ -53,7 +53,7 @@ npm run mobile:sync
 Uygulama icinde sadece asagidaki domainler WebView'de calisir:
 
 ```text
-paketdelivera-1.onrender.com
+deliveraexpres.com.tr ve alt domainleri
 google.com ve alt domainleri
 google.com.tr ve alt domainleri
 googleapis.com
@@ -67,10 +67,9 @@ Rastgele dis linkler uygulama icinde acilmaz; Android'in guvenli dis uygulama/ta
 
 ## Logo Degistirme
 
-Mevcut ikon yesil/siyah Delivera Paket temali native vector kaynagidir:
+Delivera logosu Android ekran yogunluklarina uygun PNG launcher ikonlari olarak `android/app/src/main/res/mipmap-*` klasorlerinde bulunur. Bildirim cubugunda Android'in zorunlu tek renkli simgesi kullanilir:
 
 ```text
-android/app/src/main/res/drawable/ic_delivera_paket_foreground.xml
 android/app/src/main/res/drawable/ic_delivera_paket_monochrome.xml
 ```
 
@@ -83,26 +82,28 @@ android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
 
 Splash gorselleri Capacitor tarafindan `android/app/src/main/res/drawable*/splash.png` olarak uretilir. Yeni splash/ikon seti icin Android Studio `Image Asset` araci veya Capacitor asset pipeline kullanilabilir.
 
-## Konum Izni
+## Konum Izni ve Arka Plan Servisi
 
 Manifest izinleri:
 
 ```text
 ACCESS_FINE_LOCATION
 ACCESS_COARSE_LOCATION
+ACCESS_BACKGROUND_LOCATION
+FOREGROUND_SERVICE_LOCATION
 ACCESS_NETWORK_STATE
 INTERNET
 ```
 
-Uygulama acilisinda konum izni istenir. WebView icinde kurye paneli `navigator.geolocation` kullandiginda Capacitor'un geolocation izin akisi korunur. Kullanici izni kapatirsa mesai, GPS ve rota islemleri icin anlasilir uyari gosterilir.
+Uygulama acilisinda konum izni istenir. Kurye oturum actiginda native foreground servis baslar; vardiya aktifken uygulama arka plana alinsa da GPS konumu `/api/courier/location` endpointine gondermeye devam eder. Android 11 ve uzerinde kullanici `Her zaman izin ver` secenegini uygulama ayarlarindan onaylar.
 
 ## Bildirim Izni
 
 Android 13 ve uzeri cihazlarda `POST_NOTIFICATIONS` izni uygulama acilisinda istenir.
 
-Web paneli `Notification` API kullandiginda Android WebView icinde native bridge devreye girer ve bildirimi Android notification olarak gosterir. Bildirime basinca uygulama kurye panelini acar.
+Web paneli `Notification` API kullandiginda Android WebView icinde native bridge devreye girer ve bildirimi Android notification olarak gosterir. Foreground servis ayrica kurye calisma alanini arka planda kontrol eder; yeni paket veya kurye bildirimi geldiginde yuksek oncelikli Android bildirimi olusturur. Bildirime basinca uygulama kurye panelini acar.
 
-Uygulama kapaliyken veya arka planda server push almak icin Firebase Cloud Messaging kurulumu gerekir. Hazirlik adimlari:
+Foreground servis calisirken uygulama arka planda da yeni paketleri kontrol eder. Kullanici uygulamayi Android ayarlarindan zorla durdurdugunda dahi uzaktan bildirim almak istenirse Firebase Cloud Messaging kurulumu gerekir. Hazirlik adimlari:
 
 1. Firebase Console'da Android app olusturun.
 2. Paket adi olarak `com.delivera.paket` girin.

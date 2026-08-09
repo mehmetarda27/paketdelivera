@@ -32,9 +32,7 @@
 
   function revealCourierApp() {
     window.clearTimeout(globalThis.__deliveraCourierBootFallback);
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      document.documentElement.classList.remove("delivera-booting");
-    }));
+    document.documentElement.classList.remove("delivera-booting");
   }
 
   const token = () => localStorage.getItem(TOKEN_KEY) || "";
@@ -1296,6 +1294,10 @@
   if (globalThis.__DELIVERA_TEST__) globalThis.__courierDesignTest = { packageSheet, reportPackages, refreshCourierMapData };
   document.addEventListener("pointerdown", unlockAssignmentAudio, { once: true, capture: true });
   bindNavigation();
+  // Giriş yapılmış kurye sayfalarında statik arayüzü API yanıtını bekletmeden
+  // göster. Canlı veriler geldiğinde hydrate() alanları yerinde günceller.
+  // Böylece özellikle Ayarlar/Raporlar geçişinde yükleme perdesi takılı kalmaz.
+  if (token()) revealCourierApp();
   loadWorkspace();
   if (!globalThis.__DELIVERA_TEST__) pollId = window.setInterval(loadWorkspace, 12000);
   window.addEventListener("beforeunload", () => { window.clearInterval(pollId); window.clearInterval(courierMapPoll); window.clearTimeout(courierMapRefreshTimer); stopLiveLocation(); eventStream?.close(); });
