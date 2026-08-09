@@ -69,6 +69,11 @@ const ADMIN_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const RESTAURANT_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const COURIER_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const REFRESH_TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const ADMIN_REFRESH_TOKEN_MAX_AGE_MS = Math.max(
+  REFRESH_TOKEN_MAX_AGE_MS,
+  (Number(process.env.DELIVERA_ADMIN_REFRESH_DAYS) || 365) * 24 * 60 * 60 * 1000
+);
+const ADMIN_CONCURRENT_SESSION_LIMIT = 4;
 const PASSWORD_RESET_MAX_AGE_MS = 20 * 60 * 1000;
 const PLATFORM_VERIFY_TIMEOUT_MS = 8_000;
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
@@ -2971,7 +2976,8 @@ function revokeRefreshTokens(actorRole, actorId) {
 
 function persistRefreshToken(actorRole, actorId, refreshToken, req) {
   const createdAt = new Date();
-  const expiresAt = new Date(createdAt.getTime() + REFRESH_TOKEN_MAX_AGE_MS);
+  const refreshMaxAgeMs = actorRole === "admin" ? ADMIN_REFRESH_TOKEN_MAX_AGE_MS : REFRESH_TOKEN_MAX_AGE_MS;
+  const expiresAt = new Date(createdAt.getTime() + refreshMaxAgeMs);
   db.prepare(`
     INSERT INTO refresh_tokens (id, actor_role, actor_id, token_hash, ip_address, user_agent, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -2989,13 +2995,56 @@ function persistRefreshToken(actorRole, actorId, refreshToken, req) {
   return expiresAt.toISOString();
 }
 
+function cleanupActorSessions(actorRole, actorId) {
+  const sessionConfig = sessionConfigByRole(actorRole);
+  const cutoff = new Date(Date.now() - sessionConfig.maxAgeMs).toISOString();
+  const expiredSessions = db.prepare(`
+    SELECT token FROM ${sessionConfig.tableName}
+    WHERE ${sessionConfig.actorColumn} = ? AND created_at < ?
+  `).all(actorId, cutoff);
+
+  db.prepare(`
+    DELETE FROM ${sessionConfig.tableName}
+    WHERE ${sessionConfig.actorColumn} = ? AND created_at < ?
+  `).run(actorId, cutoff);
+  db.prepare(`
+    DELETE FROM refresh_tokens
+    WHERE actor_role = ? AND actor_id = ? AND expires_at <= ?
+  `).run(actorRole, actorId, new Date().toISOString());
+
+  if (REDIS_URL) {
+    expiredSessions.forEach((session) => {
+      redisSync.del(`delivera:session:${sessionConfig.tableName}:${session.token}`);
+    });
+  }
+}
+
+function activeActorSessionCount(actorRole, actorId) {
+  cleanupActorSessions(actorRole, actorId);
+  return Number(db.prepare(`
+    SELECT COUNT(*) AS count FROM refresh_tokens
+    WHERE actor_role = ? AND actor_id = ? AND expires_at > ?
+  `).get(actorRole, actorId, new Date().toISOString())?.count || 0);
+}
+
+function ensureAdminSessionCapacity(adminId) {
+  if (activeActorSessionCount("admin", adminId) >= ADMIN_CONCURRENT_SESSION_LIMIT) {
+    throw httpError(
+      409,
+      "Bu admin hesabi ayni anda en fazla 4 cihazda acik olabilir. Yeni giris icin mevcut oturumlardan birinde Guvenli Cikis yapin."
+    );
+  }
+}
+
 function issueSessionPair(actorRole, actorId, req) {
   const sessionConfig = sessionConfigByRole(actorRole);
   const token = createSessionToken();
   const refreshToken = createRefreshToken();
   const now = new Date().toISOString();
 
-  if (REDIS_URL) {
+  if (actorRole === "admin") {
+    cleanupActorSessions(actorRole, actorId);
+  } else if (REDIS_URL) {
     try {
       const oldSessions = db.prepare(`SELECT token FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).all(actorId);
       oldSessions.forEach((s) => {
@@ -3004,8 +3053,10 @@ function issueSessionPair(actorRole, actorId, req) {
     } catch (err) {}
   }
 
-  db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
-  revokeRefreshTokens(actorRole, actorId);
+  if (actorRole !== "admin") {
+    db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
+    revokeRefreshTokens(actorRole, actorId);
+  }
   db.prepare(`INSERT INTO ${sessionConfig.tableName} (token, ${sessionConfig.actorColumn}, created_at) VALUES (?, ?, ?)`).run(
     token,
     actorId,
@@ -3049,6 +3100,15 @@ function refreshSessionPair(actorRole, providedRefreshToken, req) {
   }
 
   db.prepare("DELETE FROM refresh_tokens WHERE id = ?").run(refreshRow.id);
+  if (actorRole === "admin") {
+    const currentAccessToken = getBearerToken(req);
+    const currentSession = currentAccessToken
+      ? db.prepare(`SELECT ${sessionConfig.actorColumn} AS actor_id FROM ${sessionConfig.tableName} WHERE token = ?`).get(currentAccessToken)
+      : null;
+    if (currentSession?.actor_id === refreshRow.actor_id) {
+      revokeAccessToken(sessionConfig.tableName, currentAccessToken);
+    }
+  }
   return issueSessionPair(actorRole, refreshRow.actor_id, req);
 }
 
@@ -11660,6 +11720,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
+    ensureAdminSessionCapacity(admin.id);
     const auth = issueSessionPair("admin", admin.id, req);
 
     writeAuditLog({

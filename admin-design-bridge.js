@@ -43,7 +43,9 @@
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     const response = await fetch(path, { ...options, headers });
     if (response.status === 401 && retry && state.refreshToken) {
-      const refreshResponse = await fetch("/api/admin/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: state.refreshToken }) });
+      const refreshHeaders = { "Content-Type": "application/json" };
+      if (state.token) refreshHeaders.Authorization = `Bearer ${state.token}`;
+      const refreshResponse = await fetch("/api/admin/refresh", { method: "POST", headers: refreshHeaders, body: JSON.stringify({ refreshToken: state.refreshToken }) });
       if (refreshResponse.ok) {
         const auth = await refreshResponse.json();
         saveAuth(auth);
@@ -61,6 +63,24 @@
     state.refreshToken = auth.refreshToken || "";
     localStorage.setItem(TOKEN_KEY, state.token);
     localStorage.setItem(REFRESH_KEY, state.refreshToken);
+  }
+
+  async function logout() {
+    const refreshToken = state.refreshToken;
+    const token = state.token;
+    try {
+      if (refreshToken) {
+        const headers = { "Content-Type": "application/json" };
+        if (token) headers.Authorization = `Bearer ${token}`;
+        await fetch("/api/admin/logout", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ refreshToken }),
+        });
+      }
+    } catch {}
+    clearAuth();
+    location.reload();
   }
 
   function clearAuth() {
@@ -718,7 +738,7 @@
   refs.filterButtons.forEach((button) => button.addEventListener("click", () => restoreOperations(button.dataset.filter)));
   refs.addOrderButton?.addEventListener("click", addOrderModal);
   refs.notificationButton.addEventListener("click", notificationCenter);
-  refs.logoutButton?.addEventListener("click", () => { clearAuth(); location.reload(); });
+  refs.logoutButton?.addEventListener("click", logout);
   refs.sidebarLinks.forEach((link) => { const activate = (event) => { event.preventDefault(); handleRoute(link.dataset.route); }; link.addEventListener("click", activate); link.addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key)) activate(event); }); });
   document.querySelectorAll("aside nav button").forEach((button) => button.addEventListener("click", () => { const list = button.nextElementSibling; list?.classList.toggle("hidden"); const icon = button.querySelector(".material-symbols-outlined"); if (icon) icon.textContent = list?.classList.contains("hidden") ? "chevron_right" : "expand_more"; }));
   refs.tableBody?.addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); const rowElement = button?.closest("[data-package-id]"); const pkg = packages().find((item) => item.id === rowElement?.dataset.packageId); if (!button || !pkg) return; event.preventDefault(); event.stopPropagation(); const action = button.dataset.action; if (action === "detail") packageDetail(pkg); else if (action === "map") showMap(pkg).catch((error) => toast(error.message, "error")); else if (action === "edit") editPackage(pkg); else if (action === "cancel") cancelPackage(pkg); });
