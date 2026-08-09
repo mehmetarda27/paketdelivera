@@ -30,6 +30,13 @@
   let pushInitialized = false;
   const originalDocumentTitle = document.title;
 
+  function revealCourierApp() {
+    window.clearTimeout(globalThis.__deliveraCourierBootFallback);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      document.documentElement.classList.remove("delivera-booting");
+    }));
+  }
+
   const token = () => localStorage.getItem(TOKEN_KEY) || "";
   const esc = (value = "") => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   const money = (value) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(Number(value || 0));
@@ -287,7 +294,10 @@
   }
 
   function showLogin() {
-    if (document.querySelector(".delivera-login")) return;
+    if (document.querySelector(".delivera-login")) {
+      revealCourierApp();
+      return;
+    }
     window.DeliveraLoginShell.show({
       title: "Kurye Girişi",
       description: "Vardiyana başlamak için giriş yap.",
@@ -302,6 +312,7 @@
         await initializeCourierPush();
       },
     });
+    revealCourierApp();
   }
 
   function logout(callApi = true) {
@@ -779,11 +790,11 @@
     });
   }
 
-  function hydrateMap() {
+  async function hydrateMap() {
     const courier = workspace.courier || {};
     const packages = activePackages();
     const onRoad = packages.filter((item) => ["on_route", "picked_up"].includes(item.status));
-    updateRealLiveMap(courier.latitude, courier.longitude);
+    const mapReady = updateRealLiveMap(courier.latitude, courier.longitude);
     startCourierMapRefresh();
     if (courier.available) startLiveLocation();
     else stopLiveLocation();
@@ -794,6 +805,7 @@
       managerCallButton.setAttribute("aria-label", "Yöneticiyi 0531 466 89 27 numarasından ara");
       managerCallButton.onclick = callManager;
     }
+    await mapReady;
     replaceExact("Deneme 123", courier.name || "Kurye", 1);
     const headerName = containsText(courier.name || "Kurye")[0];
     const headerCard = headerName?.parentElement;
@@ -1249,9 +1261,9 @@
     textNodes("Kaza Bildirimi").forEach((label) => { const button = label.closest("button"); if (button) button.onclick = callManager; });
   }
 
-  function hydrate() {
+  async function hydrate() {
     if (!workspace) return;
-    if (route === "/courier.html") hydrateMap();
+    if (route === "/courier.html") await hydrateMap();
     if (route === "/courier-reports.html") hydrateReports();
     if (route === "/courier-profile.html") hydrateProfile();
     if (route === "/courier-shift.html") hydrateShift();
@@ -1262,11 +1274,13 @@
     try {
       workspace = await api("/api/courier/me?limit=100&cursor=0");
       processIncomingAssignments(workspace);
-      hydrate();
+      await hydrate();
       connectEventStream();
       if (notificationPermission() === "granted") initializeCourierPush();
+      revealCourierApp();
     } catch (error) {
       if (token()) toast(error.message, "error");
+      revealCourierApp();
     }
   }
 

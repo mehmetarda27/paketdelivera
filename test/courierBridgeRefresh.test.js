@@ -44,12 +44,14 @@ test("courier design refreshes an expired access token without showing login", a
   };
   window.localStorage.setItem("kuryeTakipCourierToken", "old-access-token");
   window.localStorage.setItem("kuryeTakipCourierRefreshToken", "old-refresh-token");
+  assert.equal(window.document.documentElement.classList.contains("delivera-booting"), true);
   window.eval(bridge);
   await delay(100);
 
   assert.equal(window.localStorage.getItem("kuryeTakipCourierToken"), "new-access-token");
   assert.equal(window.localStorage.getItem("kuryeTakipCourierRefreshToken"), "new-refresh-token");
   assert.equal(window.document.querySelector(".delivera-login"), null);
+  assert.equal(window.document.documentElement.classList.contains("delivera-booting"), false);
   assert.match(window.document.body.textContent, /Refresh Kurye/);
   assert.equal(requests.filter((request) => request.url.startsWith("/api/courier/me")).length, 2);
   dom.window.close();
