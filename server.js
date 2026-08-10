@@ -5096,24 +5096,38 @@ function touchRestaurantCustomerOrder(customerId, restaurantId, stamp = nowIso()
   `).run(stamp, stamp, customerId, restaurantId);
 }
 
-function packagesForAccounting({ restaurantId = "", startDate = "", endDate = "" } = {}) {
-  const where = ["status = ?"];
-  const params = [DELIVERED_STATUS];
+function packagesForRestaurantPeriod({ restaurantId = "", startDate = "", endDate = "", statuses = [] } = {}) {
+  const normalizedStatuses = [...new Set((Array.isArray(statuses) ? statuses : [statuses]).map(normalizeStatus).filter(Boolean))];
+  const where = [];
+  const params = [];
+  if (normalizedStatuses.length) {
+    where.push(`status IN (${normalizedStatuses.map(() => "?").join(", ")})`);
+    params.push(...normalizedStatuses);
+  }
   if (restaurantId) {
     where.push("restaurant_id = ?");
     params.push(restaurantId);
   }
   if (startDate) {
-    where.push("substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) >= ?");
+    where.push("substr(COALESCE(delivered_at, failed_at, updated_at, created_at), 1, 10) >= ?");
     params.push(startDate);
   }
   if (endDate) {
-    where.push("substr(COALESCE(delivered_at, updated_at, created_at), 1, 10) <= ?");
+    where.push("substr(COALESCE(delivered_at, failed_at, updated_at, created_at), 1, 10) <= ?");
     params.push(endDate);
   }
-  const rows = db.prepare(`SELECT * FROM packages WHERE ${where.join(" AND ")} ORDER BY datetime(COALESCE(delivered_at, updated_at, created_at)) DESC`).all(...params);
+  const predicate = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const rows = db.prepare(`SELECT * FROM packages ${predicate} ORDER BY datetime(COALESCE(delivered_at, failed_at, updated_at, created_at)) DESC`).all(...params);
   const platformOrderLookup = buildPlatformOrderLookup(rows);
   return rows.map((row) => mapPackageRow(row, new Map(), platformOrderLookup(row)));
+}
+
+function packagesForAccounting({ restaurantId = "", startDate = "", endDate = "" } = {}) {
+  return packagesForRestaurantPeriod({ restaurantId, startDate, endDate, statuses: [DELIVERED_STATUS] });
+}
+
+function isCancelledAccountingPackage(pkg) {
+  return [FAILED_STATUS, REJECTED_STATUS, CANCELED_STATUS, "canceled"].includes(normalizeStatus(pkg?.status));
 }
 
 function accountingBucketForPackage(pkg) {
@@ -5173,13 +5187,16 @@ function summarizeRestaurantAccounting(packages, settings = getSystemSettings())
 function buildRestaurantAccounting({ startDate = dayKey(), endDate = dayKey(), restaurantId = "" } = {}) {
   const restaurants = getRestaurants({ restaurantId: trimmed(restaurantId) });
   return restaurants.map((restaurant) => {
-    const packages = packagesForAccounting({ restaurantId: restaurant.id, startDate, endDate });
+    const periodPackages = packagesForRestaurantPeriod({ restaurantId: restaurant.id, startDate, endDate });
+    const packages = periodPackages.filter((pkg) => normalizeStatus(pkg.status) === DELIVERED_STATUS);
     return {
       restaurantId: restaurant.id,
       restaurantName: restaurant.name,
       startDate,
       endDate,
       ...summarizeRestaurantAccounting(packages),
+      totalSubmittedPackages: periodPackages.length,
+      totalCancelledPackages: periodPackages.filter(isCancelledAccountingPackage).length,
       packages,
     };
   });
@@ -5193,7 +5210,9 @@ function buildRestaurantAccountingDetails(restaurantId, filters = {}) {
   const paymentStatus = trimmed(filters.paymentStatus || filters.collectionStatus);
   const courierId = trimmed(filters.courierId);
   const paidFilter = trimmed(filters.paidStatus || filters.settlementStatus);
-  let packages = packagesForAccounting({ restaurantId, startDate, endDate });
+  const periodPackages = packagesForRestaurantPeriod({ restaurantId, startDate, endDate });
+  const cancelledPackages = periodPackages.filter(isCancelledAccountingPackage);
+  let packages = periodPackages.filter((pkg) => normalizeStatus(pkg.status) === DELIVERED_STATUS);
   if (paymentMethod) {
     packages = packages.filter((pkg) => pkg.paymentMethodCode === paymentMethod);
   }
@@ -5215,6 +5234,11 @@ function buildRestaurantAccountingDetails(restaurantId, filters = {}) {
     endDate,
     settlement: settlement ? mapSettlementRow(settlement) : null,
     summary: summarizeRestaurantAccounting(packages),
+    packageStats: {
+      totalSubmittedPackages: periodPackages.length,
+      totalDeliveredPackages: packages.length,
+      totalCancelledPackages: cancelledPackages.length,
+    },
     packages: packages.map((pkg) => ({
       id: pkg.id,
       trackingNo: pkg.trackingNo,
@@ -5228,6 +5252,19 @@ function buildRestaurantAccountingDetails(restaurantId, filters = {}) {
       paymentCollectedBy: pkg.paymentCollectedBy,
       status: pkg.status,
       note: pkg.courierCollectionNote || pkg.customerNote || pkg.note || "",
+    })),
+    cancelledPackages: cancelledPackages.map((pkg) => ({
+      id: pkg.id,
+      trackingNo: pkg.trackingNo,
+      date: pkg.failedAt || pkg.updatedAt || pkg.createdAt,
+      customer: pkg.recipient,
+      courier: pkg.assignedCourierName || "",
+      courierId: pkg.assignedCourierId || "",
+      amount: pkg.orderAmount,
+      paymentMethod: pkg.paymentMethod,
+      paymentStatus: pkg.paymentStatus,
+      status: pkg.status,
+      note: pkg.failureReason || pkg.customerNote || pkg.note || "",
     })),
   };
 }
@@ -15828,9 +15865,10 @@ async function handleApi(req, res, pathname) {
     }
     const startDate = trimmed(url.searchParams.get("startDate")) || dayKey();
     const endDate = trimmed(url.searchParams.get("endDate")) || startDate;
+    const restaurantId = trimmed(url.searchParams.get("restaurantId"));
     sendJson(res, 200, {
       ok: true,
-      restaurantAccounting: buildRestaurantAccounting({ startDate, endDate }),
+      restaurantAccounting: buildRestaurantAccounting({ startDate, endDate, restaurantId }),
       restaurantSettlements: getRestaurantSettlements(50),
     });
     return;

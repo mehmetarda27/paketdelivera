@@ -26,7 +26,9 @@ test("new admin design renders backend packages and listens to named live operat
     restaurants: [{ id: "rst_admin_ui", name: "Admin Test Restoran" }],
     notifications: [{ id: "ntf_admin_ui", message: "Yeni paket", eventType: "package-created", createdAt: new Date().toISOString() }],
     unmatchedOrders: [{ id: "unm_admin_ui", externalOrderId: "POS-ADMIN-UI", externalRestaurantId: "pos-store-99", restaurantNameFromPayload: "Admin Test Restoran", platform: "Posentegra", customerName: "Eşleşmeyen Müşteri", customerPhone: "05310000000", totalPrice: 315, status: "new", rawPayload: { source: "test" }, isResolved: false, createdAt: new Date().toISOString() }],
-    stats: { totalPackages: 1, waitingPackages: 1, activeCouriers: 1 }, zones: [], platformAccounts: [], shiftPlans: [], cashReconciliations: [], restaurantAccounting: [],
+    stats: { totalPackages: 1, waitingPackages: 1, activeCouriers: 1 }, zones: [], platformAccounts: [], shiftPlans: [], cashReconciliations: [],
+    restaurantAccounting: [{ restaurantId: "rst_admin_ui", restaurantName: "Admin Test Restoran", totalSubmittedPackages: 7, totalPackages: 5, totalCancelledPackages: 2, totalCourierCollected: 500, serviceFee: 100, netPayable: 400 }],
+    restaurantSettlements: [],
   };
   window.__DELIVERA_TEST__ = true;
   window.EventSource = FakeEventSource;
@@ -71,5 +73,9 @@ test("new admin design renders backend packages and listens to named live operat
   assert.equal(mapData.mappedRestaurants.length, 1);
   assert.equal(mapData.mappedRestaurants[0].waitingCount, 1);
   assert.deepEqual(mapData.activeCouriers.map((courier) => courier.id), ["cr_admin_ui"]);
+  await window.__adminDesignTest.handleRoute("işletme tahsilat");
+  await delay(20);
+  assert.match(window.document.querySelector(".da-modal-body").textContent, /7 toplam paket · 5 teslimat · 2 iptal/);
+  assert.deepEqual([...window.document.querySelector('[data-accounting-filter] select[name="restaurantId"]').options].map((option) => option.textContent), ["Tüm restoranlar", "Admin Test Restoran"]);
   dom.window.close();
 });
