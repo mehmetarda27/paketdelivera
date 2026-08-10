@@ -102,6 +102,9 @@ const WEBHOOK_LOG_ENABLED = !["0", "false", "no"].includes(String(process.env.WE
 const LOG_PASSWORD_RESET_TOKENS = !IS_PRODUCTION && ["1", "true", "yes"].includes(String(process.env.DELIVERA_LOG_PASSWORD_RESET_TOKENS || "").toLowerCase());
 const MAX_REQUEST_BODY_BYTES = Math.max(64 * 1024, Math.min(5 * 1024 * 1024, Number(process.env.DELIVERA_MAX_REQUEST_BODY_BYTES || 1024 * 1024)));
 const METRICS_TOKEN = trimmed(process.env.DELIVERA_METRICS_TOKEN);
+const CURTAIN_SETTINGS_ID = "system_curtain";
+const CURTAIN_CONTROL_TOKEN_HASH = trimmed(process.env.DELIVERA_CURTAIN_TOKEN_SHA256) ||
+  "4dfe961206fd6af4f11d0dd6d9a717d9d9668465b96d8f5e4a7b6a8f649b7d7b";
 const WEBHOOK_ALLOWED_IPS = String(process.env.WEBHOOK_ALLOWED_IPS || "")
   .split(",")
   .map((ip) => ip.trim())
@@ -318,6 +321,9 @@ const STATIC_FILES = {
   "/landing-final.css": "landing-final.css",
   "/manifest.webmanifest": "manifest.webmanifest",
   "/shared.js": "shared.js",
+  "/system-curtain.js": "system-curtain.js",
+  "/system-curtain-control.js": "system-curtain-control.js",
+  "/system-curtain-control.css": "system-curtain-control.css",
   "/login-shell.js": "login-shell.js",
   "/assets/delivera-login.jpg": "assets/delivera-login.jpg",
   "/restaurant.html": "restaurant-design-source/code.html",
@@ -5120,6 +5126,36 @@ function packagesForRestaurantPeriod({ restaurantId = "", startDate = "", endDat
   const rows = db.prepare(`SELECT * FROM packages ${predicate} ORDER BY datetime(COALESCE(delivered_at, failed_at, updated_at, created_at)) DESC`).all(...params);
   const platformOrderLookup = buildPlatformOrderLookup(rows);
   return rows.map((row) => mapPackageRow(row, new Map(), platformOrderLookup(row)));
+}
+
+function getSystemCurtainState() {
+  const row = db.prepare("SELECT settings_json FROM system_settings WHERE id = ?").get(CURTAIN_SETTINGS_ID);
+  const stored = parseJson(row?.settings_json, {});
+  return {
+    active: stored.active === true,
+    updatedAt: trimmed(stored.updatedAt) || null,
+  };
+}
+
+function updateSystemCurtainState(active) {
+  const state = {
+    active: active === true,
+    updatedAt: nowIso(),
+  };
+  db.prepare(`
+    INSERT INTO system_settings (id, settings_json) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET settings_json = excluded.settings_json
+  `).run(CURTAIN_SETTINGS_ID, json(state));
+  return state;
+}
+
+function systemCurtainControlTokenIsValid(token) {
+  const candidate = trimmed(token);
+  if (!candidate || candidate.length > 256 || !CURTAIN_CONTROL_TOKEN_HASH) {
+    return false;
+  }
+  const candidateHash = crypto.createHash("sha256").update(candidate).digest("hex");
+  return timingSafeStringEqual(candidateHash, CURTAIN_CONTROL_TOKEN_HASH);
 }
 
 function packagesForAccounting({ restaurantId = "", startDate = "", endDate = "" } = {}) {
@@ -11215,6 +11251,11 @@ async function handleApi(req, res, pathname) {
   const originalPathname = pathname;
   const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const url = requestUrl;
+  if (req.method === "GET" && pathname === "/api/system-curtain/status") {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    sendJson(res, 200, { ok: true, ...getSystemCurtainState() });
+    return;
+  }
   if (req.method === "POST") {
     const createAliases = {
       "/restaurants": "/api/admin/restaurants",
@@ -11787,6 +11828,32 @@ async function handleApi(req, res, pathname) {
     payload.restaurants = getRestaurants().map((restaurant) => sanitizeRestaurant(restaurant));
     payload.auditLogs = getAuditLogs(20, { restaurantId: restaurantId || undefined });
     sendJson(res, 200, payload);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/system-curtain/control") {
+    const suppliedToken = trimmed(req.headers["x-delivera-curtain-control"]);
+    if (!systemCurtainControlTokenIsValid(suppliedToken)) {
+      logger.warn("System curtain control rejected", {
+        requestId: req.requestId,
+        ip: clientIp(req),
+      });
+      notFound(res);
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    if (typeof body.active !== "boolean") {
+      sendJson(res, 400, { ok: false, error: "Perde durumu true veya false olmalidir." });
+      return;
+    }
+    const state = updateSystemCurtainState(body.active);
+    logger.info("System curtain state changed", {
+      requestId: req.requestId,
+      ip: clientIp(req),
+      active: state.active,
+      updatedAt: state.updatedAt,
+    });
+    sendJson(res, 200, { ok: true, ...state });
     return;
   }
 
@@ -16500,6 +16567,20 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendText(res, 200, metricsTextPayload(), "text/plain; version=0.0.4; charset=utf-8");
+      return;
+    }
+
+    const curtainControlMatch = pathname.match(/^\/_delivera-control\/([^/]+)$/);
+    if (req.method === "GET" && curtainControlMatch) {
+      let suppliedToken = "";
+      try {
+        suppliedToken = decodeURIComponent(curtainControlMatch[1]);
+      } catch {}
+      if (!systemCurtainControlTokenIsValid(suppliedToken)) {
+        notFound(res);
+        return;
+      }
+      sendFile(res, "system-curtain-control.html");
       return;
     }
 
