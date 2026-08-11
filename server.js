@@ -9366,6 +9366,38 @@ function updateRestaurantLocation(restaurantId, body = {}) {
   };
 }
 
+function updateRestaurantCredentials(restaurantId, body = {}) {
+  const current = db.prepare("SELECT id, username FROM restaurants WHERE id = ?").get(restaurantId);
+  if (!current) {
+    throw httpError(404, "Restoran bulunamadi.");
+  }
+
+  const username = trimmed(body.username ?? body.portalUsername).toLowerCase();
+  const password = String(body.password ?? body.portalPassword ?? "");
+  if (username.length < 3) {
+    throw validationError("Restoran kullanici adi en az 3 karakter olmali.");
+  }
+  if (password && password.length < 8) {
+    throw validationError("Restoran sifresi en az 8 karakter olmali.");
+  }
+
+  const duplicate = db.prepare("SELECT id FROM restaurants WHERE username = ? AND id <> ?").get(username, restaurantId);
+  if (duplicate) {
+    throw httpError(409, "Bu restoran kullanici adi zaten kullaniliyor.");
+  }
+
+  db.prepare("UPDATE restaurants SET username = ? WHERE id = ?").run(username, restaurantId);
+  if (password) {
+    updateActorPassword("restaurant", restaurantId, password);
+  }
+
+  return {
+    restaurant: getRestaurants({ restaurantId })[0],
+    previousUsername: current.username,
+    passwordChanged: Boolean(password),
+  };
+}
+
 function saveExternalIdToRestaurant(restaurantId, platform, externalRestaurantId, options = {}) {
   const incoming = trimmed(externalRestaurantId);
   if (!incoming) return null;
@@ -11890,6 +11922,45 @@ async function handleApi(req, res, pathname) {
       restaurants: getRestaurants({ pagination }).map((restaurant) => sanitizeRestaurant(restaurant, true)),
       pagination: restaurantsPagination({}, pagination),
     });
+    return;
+  }
+
+  const adminRestaurantCredentialsMatch = pathname.match(/^\/api\/admin\/restaurants\/([^/]+)\/credentials$/);
+  if (req.method === "PATCH" && adminRestaurantCredentialsMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const { json: body } = await readRequestBody(req);
+    try {
+      const restaurantId = decodeURIComponent(adminRestaurantCredentialsMatch[1]);
+      const result = dbFacade.transaction(() => updateRestaurantCredentials(restaurantId, body));
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "restaurant_credentials_updated",
+        restaurantId,
+        details: {
+          previousUsername: result.previousUsername,
+          username: result.restaurant.username,
+          passwordChanged: result.passwordChanged,
+        },
+      });
+      broadcastLiveEvent({
+        type: "restaurant-credentials-updated",
+        restaurantId,
+        message: `${result.restaurant.name} restoraninin giris bilgileri guncellendi.`,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        passwordChanged: result.passwordChanged,
+        restaurant: sanitizeRestaurant(result.restaurant, true),
+        ...decorateState({ req }),
+      });
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { error: error.message });
+    }
     return;
   }
 

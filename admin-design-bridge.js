@@ -121,10 +121,14 @@
     const integrationLink = [...document.querySelectorAll("aside nav a")].find((link) => normalize(link.textContent).includes("entegrasyon yönetimi"));
     let unmatchedMenuBadge = null;
     if (integrationLink) {
+      const credentialsLink = document.createElement("a");
+      credentialsLink.className = integrationLink.className;
+      credentialsLink.innerHTML = '<span class="material-symbols-outlined mr-3 text-[20px]">manage_accounts</span><span class="text-body-sm font-body-sm">Restoran Giriş Bilgileri</span>';
+      integrationLink.after(credentialsLink);
       const unmatchedLink = document.createElement("a");
       unmatchedLink.className = integrationLink.className;
       unmatchedLink.innerHTML = '<span class="material-symbols-outlined mr-3 text-[20px]">rule</span><span class="text-body-sm font-body-sm">Eşleşmeyen Paketler</span><span class="da-sidebar-count">0</span>';
-      integrationLink.after(unmatchedLink);
+      credentialsLink.after(unmatchedLink);
       unmatchedMenuBadge = unmatchedLink.querySelector(".da-sidebar-count");
     }
     const sidebarLinks = [...document.querySelectorAll("aside nav a")];
@@ -517,6 +521,35 @@
     });
   }
 
+  function restaurantCredentialManagement() {
+    const list = restaurants();
+    modal("Restoran Giriş Bilgileri", `<div class="da-list">${list.length ? list.map((restaurant) => `<div class="da-list-row" data-restaurant-id="${esc(restaurant.id)}"><div><b>${esc(restaurant.name)}</b><small>Kullanıcı adı: ${esc(restaurant.username || "Tanımlı değil")} · ${esc(restaurant.zone || "-")}</small></div><div class="da-list-actions"><button data-edit-credentials>Giriş Bilgilerini Değiştir</button></div></div>`).join("") : '<div class="da-empty">Kayıtlı restoran bulunamadı.</div>'}</div>`, (root) => {
+      root.querySelectorAll("[data-edit-credentials]").forEach((button) => button.addEventListener("click", () => {
+        const restaurantId = button.closest("[data-restaurant-id]").dataset.restaurantId;
+        editRestaurantCredentials(list.find((restaurant) => restaurant.id === restaurantId));
+      }));
+    });
+  }
+
+  function editRestaurantCredentials(restaurant) {
+    if (!restaurant) return;
+    modal(`Restoran Giriş Bilgileri · ${restaurant.name}`, `<form class="da-grid"><label class="da-field full"><span>Kullanıcı adı</span><input name="username" value="${esc(restaurant.username || "")}" minlength="3" autocomplete="off" required></label><label class="da-field"><span>Yeni parola</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Değişmeyecekse boş bırakın"></label><label class="da-field"><span>Yeni parola tekrar</span><input name="passwordConfirm" type="password" minlength="8" autocomplete="new-password" placeholder="Yeni parolayı tekrar yazın"></label><div class="da-field full"><span>Bilgi</span><small>Parola değiştirildiğinde güvenlik için bu restorana ait mevcut oturumlar kapatılır. Kullanıcı adı tek başına değiştirilirse açık oturumlar devam eder.</small></div><div class="da-actions"><button type="button" data-close class="da-secondary">Vazgeç</button><button class="da-primary">Giriş Bilgilerini Kaydet</button></div></form>`, (root) => root.querySelector("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget));
+      if (values.password !== values.passwordConfirm) return toast("Yeni parolalar birbiriyle aynı değil.", "error");
+      if (values.password && String(values.password).length < 8) return toast("Yeni parola en az 8 karakter olmalı.", "error");
+      try {
+        const result = await api(`/api/admin/restaurants/${encodeURIComponent(restaurant.id)}/credentials`, {
+          method: "PATCH",
+          body: JSON.stringify({ username: values.username, password: values.password }),
+        });
+        hydrate(result);
+        root.remove();
+        toast(result.passwordChanged ? "Kullanıcı adı ve parola güncellendi; eski restoran oturumları kapatıldı." : "Restoran kullanıcı adı güncellendi.", "success");
+      } catch (error) { toast(error.message, "error"); }
+    }));
+  }
+
   function editRestaurantLocation(restaurant) {
     if (!restaurant) return;
     modal(`İşletme Konumu · ${restaurant.name}`, `<form class="da-grid"><label class="da-field"><span>Enlem</span><input name="latitude" type="number" step="any" value="${esc(restaurant.latitude ?? "")}" required></label><label class="da-field"><span>Boylam</span><input name="longitude" type="number" step="any" value="${esc(restaurant.longitude ?? "")}" required></label><div class="da-actions"><button class="da-primary">Konumu Kaydet</button></div></form>`, (root) => root.querySelector("form").addEventListener("submit", async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { hydrate(await api(`/api/admin/restaurants/${encodeURIComponent(restaurant.id)}/location`, { method: "PUT", body: JSON.stringify(values) })); root.remove(); toast("İşletme konumu güncellendi ve atama mesafeleri yeniden hesaplandı.", "success"); } catch (error) { toast(error.message, "error"); } }));
@@ -704,6 +737,7 @@
   }
 
   function genericRoute(route) {
+    if (route.includes("restoran giriş bilgileri")) return restaurantCredentialManagement();
     if (route.includes("haftalık izin plan")) return recordManagement({ type: "courier_leave", subject: "courier", title: "Kurye İzin Planı", placeholder: "Yıllık izin, haftalık izin veya mazeret", dates: true });
     if (route.includes("vardiya") || route.includes("mola")) return shiftManagement().catch((error) => toast(error.message, "error"));
     if (route.includes("ceza") || route.includes("ödül")) return recordManagement({ type: "courier_adjustment", subject: "courier", title: "Kurye Ceza ve Ödül Kayıtları", placeholder: "Ödül veya ceza nedeni", amount: true, dates: true });

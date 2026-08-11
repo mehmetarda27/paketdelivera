@@ -161,6 +161,63 @@ test("admin and restaurant accounts allow unlimited independent concurrent sessi
     assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
       headers: { Authorization: `Bearer ${restaurantSessions[7].token}` },
     })).response.status, 200);
+
+    const updatedRestaurantUsername = `${restaurantUsername}_updated`;
+    const usernameOnlyUpdate = await jsonRequest(baseUrl, `/api/admin/restaurants/${createdRestaurant.body.createdRestaurant.id}/credentials`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${replacement.body.token}` },
+      body: JSON.stringify({ username: updatedRestaurantUsername, password: "" }),
+    });
+    assert.equal(usernameOnlyUpdate.response.status, 200);
+    assert.equal(usernameOnlyUpdate.body.passwordChanged, false);
+    assert.equal(usernameOnlyUpdate.body.restaurant.username, updatedRestaurantUsername);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${restaurantSessions[7].token}` },
+    })).response.status, 200);
+
+    const oldUsernameLogin = await jsonRequest(baseUrl, "/api/restaurant/session", {
+      method: "POST",
+      headers: { "X-Forwarded-For": "203.0.113.30" },
+      body: JSON.stringify({ username: restaurantUsername, password: restaurantPassword }),
+    });
+    assert.equal(oldUsernameLogin.response.status, 401);
+    const renamedRestaurantLogin = await jsonRequest(baseUrl, "/api/restaurant/session", {
+      method: "POST",
+      headers: { "X-Forwarded-For": "203.0.113.31" },
+      body: JSON.stringify({ username: updatedRestaurantUsername, password: restaurantPassword }),
+    });
+    assert.equal(renamedRestaurantLogin.response.status, 200);
+
+    const updatedRestaurantPassword = "Restaurant456!";
+    const passwordUpdate = await jsonRequest(baseUrl, `/api/admin/restaurants/${createdRestaurant.body.createdRestaurant.id}/credentials`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${replacement.body.token}` },
+      body: JSON.stringify({ username: updatedRestaurantUsername, password: updatedRestaurantPassword }),
+    });
+    assert.equal(passwordUpdate.response.status, 200);
+    assert.equal(passwordUpdate.body.passwordChanged, true);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${restaurantSessions[7].token}` },
+    })).response.status, 401);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${renamedRestaurantLogin.body.token}` },
+    })).response.status, 401);
+
+    const oldPasswordLogin = await jsonRequest(baseUrl, "/api/restaurant/session", {
+      method: "POST",
+      headers: { "X-Forwarded-For": "203.0.113.32" },
+      body: JSON.stringify({ username: updatedRestaurantUsername, password: restaurantPassword }),
+    });
+    assert.equal(oldPasswordLogin.response.status, 401);
+    const newPasswordLogin = await jsonRequest(baseUrl, "/api/restaurant/session", {
+      method: "POST",
+      headers: { "X-Forwarded-For": "203.0.113.33" },
+      body: JSON.stringify({ username: updatedRestaurantUsername, password: updatedRestaurantPassword }),
+    });
+    assert.equal(newPasswordLogin.response.status, 200);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${newPasswordLogin.body.token}` },
+    })).response.status, 200);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -173,4 +230,6 @@ test("admin bridge refreshes and logs out the exact browser session on the serve
   assert.match(bridge, /refreshHeaders\.Authorization = `Bearer \$\{state\.token\}`/);
   assert.match(bridge, /fetch\("\/api\/admin\/logout"/);
   assert.match(bridge, /body: JSON\.stringify\(\{ refreshToken \}\)/);
+  assert.match(bridge, /Restoran Giriş Bilgileri/);
+  assert.match(bridge, /\/api\/admin\/restaurants\/\$\{encodeURIComponent\(restaurant\.id\)\}\/credentials/);
 });
