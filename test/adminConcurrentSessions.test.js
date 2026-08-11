@@ -37,7 +37,7 @@ async function stopServer(server) {
   });
 }
 
-test("admin account keeps four independent sessions and logout frees one slot", { timeout: 30000 }, async () => {
+test("admin and restaurant accounts allow unlimited independent concurrent sessions", { timeout: 30000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-admin-sessions-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 35000 + (process.pid % 1000);
@@ -78,7 +78,7 @@ test("admin account keeps four independent sessions and logout frees one slot", 
     await waitForServer(baseUrl);
 
     const sessions = [];
-    for (let index = 1; index <= 4; index += 1) {
+    for (let index = 1; index <= 8; index += 1) {
       const result = await login(`198.51.100.${index}`);
       assert.equal(result.response.status, 200);
       sessions.push(result.body);
@@ -87,10 +87,6 @@ test("admin account keeps four independent sessions and logout frees one slot", 
     for (const session of sessions) {
       assert.equal((await bootstrap(session.token)).response.status, 200);
     }
-
-    const fifth = await login("198.51.100.5");
-    assert.equal(fifth.response.status, 409);
-    assert.match(fifth.body.error, /en fazla 4 cihazda/i);
 
     const refreshed = await jsonRequest(baseUrl, "/api/admin/refresh", {
       method: "POST",
@@ -109,12 +105,62 @@ test("admin account keeps four independent sessions and logout frees one slot", 
     });
     assert.equal(logout.response.status, 200);
     assert.equal((await bootstrap(sessions[0].token)).response.status, 401);
-    assert.equal((await bootstrap(sessions[3].token)).response.status, 200);
+    assert.equal((await bootstrap(sessions[7].token)).response.status, 200);
 
-    const replacement = await login("198.51.100.6");
+    const replacement = await login("198.51.100.20");
     assert.equal(replacement.response.status, 200);
     assert.equal((await bootstrap(replacement.body.token)).response.status, 200);
     assert.equal((await bootstrap(refreshed.body.token)).response.status, 200);
+
+    const restaurantUsername = `restaurant_sessions_${Date.now()}`;
+    const restaurantPassword = "Restaurant123!";
+    const createdRestaurant = await jsonRequest(baseUrl, "/api/admin/restaurants", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${replacement.body.token}` },
+      body: JSON.stringify({
+        name: "Concurrent Session Restaurant",
+        portalUsername: restaurantUsername,
+        portalPassword: restaurantPassword,
+        zone: "Akdeniz",
+        latitude: 36.8121,
+        longitude: 34.6415,
+      }),
+    });
+    assert.equal(createdRestaurant.response.status, 201);
+
+    const restaurantSessions = [];
+    for (let index = 1; index <= 8; index += 1) {
+      const result = await jsonRequest(baseUrl, "/api/restaurant/session", {
+        method: "POST",
+        headers: { "X-Forwarded-For": `203.0.113.${index}` },
+        body: JSON.stringify({ username: restaurantUsername, password: restaurantPassword }),
+      });
+      assert.equal(result.response.status, 200);
+      restaurantSessions.push(result.body);
+    }
+
+    for (const session of restaurantSessions) {
+      const state = await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      assert.equal(state.response.status, 200);
+    }
+
+    const refreshedRestaurant = await jsonRequest(baseUrl, "/api/restaurant/refresh", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${restaurantSessions[1].token}` },
+      body: JSON.stringify({ refreshToken: restaurantSessions[1].refreshToken }),
+    });
+    assert.equal(refreshedRestaurant.response.status, 200);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${restaurantSessions[1].token}` },
+    })).response.status, 401);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${refreshedRestaurant.body.token}` },
+    })).response.status, 200);
+    assert.equal((await jsonRequest(baseUrl, "/api/restaurant/bootstrap", {
+      headers: { Authorization: `Bearer ${restaurantSessions[7].token}` },
+    })).response.status, 200);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

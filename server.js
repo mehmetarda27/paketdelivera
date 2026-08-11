@@ -73,7 +73,6 @@ const ADMIN_REFRESH_TOKEN_MAX_AGE_MS = Math.max(
   REFRESH_TOKEN_MAX_AGE_MS,
   (Number(process.env.DELIVERA_ADMIN_REFRESH_DAYS) || 365) * 24 * 60 * 60 * 1000
 );
-const ADMIN_CONCURRENT_SESSION_LIMIT = 4;
 const PASSWORD_RESET_MAX_AGE_MS = 20 * 60 * 1000;
 const PLATFORM_VERIFY_TIMEOUT_MS = 8_000;
 const NODE_ENV = String(process.env.NODE_ENV || "development").toLowerCase();
@@ -3025,30 +3024,13 @@ function cleanupActorSessions(actorRole, actorId) {
   }
 }
 
-function activeActorSessionCount(actorRole, actorId) {
-  cleanupActorSessions(actorRole, actorId);
-  return Number(db.prepare(`
-    SELECT COUNT(*) AS count FROM refresh_tokens
-    WHERE actor_role = ? AND actor_id = ? AND expires_at > ?
-  `).get(actorRole, actorId, new Date().toISOString())?.count || 0);
-}
-
-function ensureAdminSessionCapacity(adminId) {
-  if (activeActorSessionCount("admin", adminId) >= ADMIN_CONCURRENT_SESSION_LIMIT) {
-    throw httpError(
-      409,
-      "Bu admin hesabi ayni anda en fazla 4 cihazda acik olabilir. Yeni giris icin mevcut oturumlardan birinde Guvenli Cikis yapin."
-    );
-  }
-}
-
 function issueSessionPair(actorRole, actorId, req) {
   const sessionConfig = sessionConfigByRole(actorRole);
   const token = createSessionToken();
   const refreshToken = createRefreshToken();
   const now = new Date().toISOString();
 
-  if (actorRole === "admin") {
+  if (actorRole === "admin" || actorRole === "restaurant") {
     cleanupActorSessions(actorRole, actorId);
   } else if (REDIS_URL) {
     try {
@@ -3059,7 +3041,7 @@ function issueSessionPair(actorRole, actorId, req) {
     } catch (err) {}
   }
 
-  if (actorRole !== "admin") {
+  if (actorRole === "courier") {
     db.prepare(`DELETE FROM ${sessionConfig.tableName} WHERE ${sessionConfig.actorColumn} = ?`).run(actorId);
     revokeRefreshTokens(actorRole, actorId);
   }
@@ -3106,7 +3088,7 @@ function refreshSessionPair(actorRole, providedRefreshToken, req) {
   }
 
   db.prepare("DELETE FROM refresh_tokens WHERE id = ?").run(refreshRow.id);
-  if (actorRole === "admin") {
+  if (actorRole === "admin" || actorRole === "restaurant") {
     const currentAccessToken = getBearerToken(req);
     const currentSession = currentAccessToken
       ? db.prepare(`SELECT ${sessionConfig.actorColumn} AS actor_id FROM ${sessionConfig.tableName} WHERE token = ?`).get(currentAccessToken)
@@ -11798,7 +11780,6 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
-    ensureAdminSessionCapacity(admin.id);
     const auth = issueSessionPair("admin", admin.id, req);
 
     writeAuditLog({
