@@ -2,7 +2,7 @@
 
 ## Environment
 
-- `POSENTEGRA_API_BASE_URL`: FastSiparis / Posentegra Web API base URL. Hem origin (`https://api.fastsiparis.com`) hem de `/web-api/v1` ile biten koleksiyon adresi kabul edilir; yol iki kez eklenmez.
+- `POSENTEGRA_API_BASE_URL`: FastSiparis / Posentegra Web API base URL. Hem origin (`https://api.v1.fastsiparis.com`) hem de `/web-api/v1` ile biten koleksiyon adresi kabul edilir; yol iki kez eklenmez.
 - `POSENTEGRA_API_KEY`: API key/token. Sent as `Authorization: Bearer ...` and `X-API-Key`.
 - `POSENTEGRA_BUSINESS_ID`: Optional business id used to link newly created restaurants.
 - `POSENTEGRA_REQUEST_TIMEOUT_MS`: Request timeout, default `8000`.
