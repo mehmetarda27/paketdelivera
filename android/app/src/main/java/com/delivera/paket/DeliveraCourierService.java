@@ -374,11 +374,16 @@ public class DeliveraCourierService extends Service implements LocationListener 
     }
 
     private void updateServiceNotification(String text) {
-        NotificationManagerCompat.from(this).notify(SERVICE_NOTIFICATION_ID, buildServiceNotification(text));
+        if (!canPostNotifications()) return;
+        try {
+            NotificationManagerCompat.from(this).notify(SERVICE_NOTIFICATION_ID, buildServiceNotification(text));
+        } catch (SecurityException ignored) {
+            // Permission can be revoked while the foreground service is active.
+        }
     }
 
     private void showCriticalNotification(String title, String body, String tag) {
-        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return;
+        if (!canPostNotifications() || !NotificationManagerCompat.from(this).areNotificationsEnabled()) return;
         Notification notification = new NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(R.drawable.ic_delivera_paket_monochrome)
             .setContentTitle(title)
@@ -391,7 +396,16 @@ public class DeliveraCourierService extends Service implements LocationListener 
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(new long[] { 0, 350, 120, 350, 120, 700 })
             .build();
-        NotificationManagerCompat.from(this).notify(tag, tag.hashCode(), notification);
+        try {
+            NotificationManagerCompat.from(this).notify(tag, tag.hashCode(), notification);
+        } catch (SecurityException ignored) {
+            // Permission can be revoked while the foreground service is active.
+        }
+    }
+
+    private boolean canPostNotifications() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
     }
 
     private PendingIntent appPendingIntent(String tag) {

@@ -264,7 +264,7 @@ test("restaurant approve/reject routes every supported source through an isolate
 
     const failedApproval = await waitUntil(() => withDb(dbFile, (db) => db.prepare(`
       SELECT * FROM posentegra_outbox
-      WHERE dedupe_key = 'order.status:pkg_trendyol_approve:accepted' AND status = 'failed'
+      WHERE dedupe_key = 'order.status:pkg_trendyol_approve:accepted' AND status = 'dead_letter'
     `).get()));
     await request(baseUrl, `/api/admin/posentegra-outbox/${failedApproval.id}/retry`, {
       method: "POST",
@@ -279,8 +279,7 @@ test("restaurant approve/reject routes every supported source through an isolate
 
     for (const [platform, slug] of platforms) {
       const approvedCalls = mock.calls.filter((call) => call.url === `/web-api/v1/orders/change-status/pid-${slug}-approve`);
-      assert.equal(approvedCalls.at(-1).body.status, "accepted");
-      assert.equal(approvedCalls.at(-1).body.sourcePlatform, platform);
+      assert.ok(approvedCalls.every((call) => Object.keys(call.body || {}).length === 0));
       assert.ok(approvedCalls.every((call) => call.headers["idempotency-key"] === `status:pid-${slug}-approve:accepted:pkg_${slug}_approve`));
       assert.equal(approvedCalls.length, slug === "trendyol" ? 2 : 1);
 

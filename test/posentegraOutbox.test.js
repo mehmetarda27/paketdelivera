@@ -26,7 +26,7 @@ function testDb() {
   return db;
 }
 
-test("Posentegra status outbox retries without losing the local package state", async () => {
+test("Posentegra status outbox does not automatically repeat an ambiguous status advance", async () => {
   const db = testDb();
   db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_1", "pid_current", new Date().toISOString());
   let calls = 0;
@@ -48,15 +48,72 @@ test("Posentegra status outbox retries without losing the local package state", 
 
   await outbox.processDue();
   let row = db.prepare("SELECT * FROM posentegra_outbox").get();
-  assert.equal(row.status, "failed");
+  assert.equal(row.status, "dead_letter");
   assert.equal(row.attempts, 1);
   assert.match(row.last_error, /temporary outage/);
 
-  db.prepare("UPDATE posentegra_outbox SET next_attempt_at = ?").run(new Date(Date.now() - 1000).toISOString());
+  await outbox.processDue();
+  assert.equal(calls, 1);
+
+  // Yalnizca operator uzak durumu kontrol ettikten sonra bilincli tekrar acar.
+  db.prepare("UPDATE posentegra_outbox SET status = 'pending', next_attempt_at = ?, last_error = NULL").run(new Date(Date.now() - 1000).toISOString());
   await outbox.processDue();
   row = db.prepare("SELECT * FROM posentegra_outbox").get();
   assert.equal(row.status, "completed");
   assert.equal(calls, 2);
+  db.close();
+});
+
+test("Posentegra completed status dedupe key is never sent twice", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_once", "pid_once", new Date().toISOString());
+  let calls = 0;
+  const client = {
+    configured: () => true,
+    async changeOrderStatus() {
+      calls += 1;
+      return { ok: true, status: 200 };
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_once", orderId: "pid_once", status: "delivered" });
+  await outbox.processDue();
+  outbox.enqueueStatus({ packageId: "pkg_once", orderId: "pid_once", status: "delivered" });
+  await outbox.processDue();
+
+  assert.equal(calls, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM posentegra_outbox").get().count, 1);
+  assert.equal(db.prepare("SELECT status FROM posentegra_outbox").get().status, "completed");
+  db.close();
+});
+
+test("Posentegra later status waits when an earlier status needs manual review", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_ordered", "pid_ordered", new Date().toISOString());
+  const statuses = [];
+  const client = {
+    configured: () => true,
+    async changeOrderStatus(orderId, status) {
+      assert.equal(orderId, "pid_ordered");
+      statuses.push(status);
+      if (status === "accepted") throw new Error("ambiguous timeout");
+      return { ok: true, status: 200 };
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_ordered", orderId: "pid_ordered", status: "accepted" });
+  outbox.enqueueStatus({ packageId: "pkg_ordered", orderId: "pid_ordered", status: "delivered" });
+  await outbox.processDue();
+
+  assert.deepEqual(statuses, ["accepted"]);
+  assert.equal(db.prepare("SELECT status FROM posentegra_outbox WHERE dedupe_key = ?").get("order.status:pkg_ordered:accepted").status, "dead_letter");
+  assert.equal(db.prepare("SELECT status FROM posentegra_outbox WHERE dedupe_key = ?").get("order.status:pkg_ordered:delivered").status, "pending");
+
+  // Ayni yerel olay yeniden uretilse bile belirsiz uzak istek otomatik acilmaz.
+  outbox.enqueueStatus({ packageId: "pkg_ordered", orderId: "pid_ordered", status: "accepted" });
+  await outbox.processDue();
+  assert.deepEqual(statuses, ["accepted"]);
+  assert.equal(db.prepare("SELECT status FROM posentegra_outbox WHERE dedupe_key = ?").get("order.status:pkg_ordered:accepted").status, "dead_letter");
   db.close();
 });
 

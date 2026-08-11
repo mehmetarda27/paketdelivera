@@ -22,6 +22,14 @@ function trimmed(value) {
   return String(value ?? "").trim();
 }
 
+function statusRank(status) {
+  const normalized = trimmed(status).toLowerCase();
+  if (normalized === "accepted") return 1;
+  if (normalized === "on_the_way") return 2;
+  if (normalized === "delivered" || normalized === "failed") return 3;
+  return 99;
+}
+
 function responseId(result) {
   const body = result?.responseBody || {};
   return trimmed(body.id || body.pid || body.orderId || body.order_id || body.data?.id || body.data?.pid);
@@ -41,10 +49,19 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
       ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?, ?)
       ON CONFLICT(dedupe_key) DO UPDATE SET
         payload_json = excluded.payload_json,
-        status = CASE WHEN posentegra_outbox.status = 'completed' THEN 'completed' ELSE 'pending' END,
-        next_attempt_at = CASE WHEN posentegra_outbox.status = 'completed' THEN posentegra_outbox.next_attempt_at ELSE excluded.next_attempt_at END,
-        last_error = CASE WHEN posentegra_outbox.status = 'completed' THEN posentegra_outbox.last_error ELSE NULL END,
-        locked_at = NULL,
+        status = CASE
+          WHEN posentegra_outbox.status IN ('completed', 'processing', 'dead_letter') THEN posentegra_outbox.status
+          ELSE 'pending'
+        END,
+        next_attempt_at = CASE
+          WHEN posentegra_outbox.status IN ('completed', 'processing', 'dead_letter') THEN posentegra_outbox.next_attempt_at
+          ELSE excluded.next_attempt_at
+        END,
+        last_error = CASE
+          WHEN posentegra_outbox.status IN ('completed', 'processing', 'dead_letter') THEN posentegra_outbox.last_error
+          ELSE NULL
+        END,
+        locked_at = CASE WHEN posentegra_outbox.status = 'processing' THEN posentegra_outbox.locked_at ELSE NULL END,
         updated_at = excluded.updated_at
     `).run(id, eventType, aggregateId, dedupeKey, JSON.stringify(payload || {}), createdAt, createdAt, createdAt);
     return db.prepare("SELECT * FROM posentegra_outbox WHERE dedupe_key = ?").get(dedupeKey);
@@ -128,11 +145,21 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
       do {
         rerunRequested = false;
         const staleLock = new Date(Date.now() - 5 * 60_000).toISOString();
+        // Paket atama istekleri idempotent oldugu icin eski kilitler tekrar alinabilir.
         db.prepare(`
           UPDATE posentegra_outbox
           SET status = 'pending', locked_at = NULL, updated_at = ?
-          WHERE status = 'processing' AND locked_at < ?
-        `).run(nowIso(), staleLock);
+          WHERE status = 'processing' AND event_type = ? AND locked_at < ?
+        `).run(nowIso(), EVENT_TYPES.PACKAGE_ASSIGN, staleLock);
+        // change-status uzak siparisi bir adim ilerlettigi icin, istekten sonra proses
+        // kapanmis olabilecegi belirsiz durumda otomatik tekrar guvenli degildir.
+        db.prepare(`
+          UPDATE posentegra_outbox
+          SET status = 'dead_letter', next_attempt_at = NULL, locked_at = NULL,
+              last_error = COALESCE(last_error, 'Belirsiz onceki gonderim; cift durum ilerletmeyi onlemek icin manuel kontrol gerekli.'),
+              updated_at = ?
+          WHERE status = 'processing' AND event_type IN (?, ?) AND locked_at < ?
+        `).run(nowIso(), EVENT_TYPES.ORDER_STATUS, EVENT_TYPES.ORDER_CANCEL, staleLock);
         const rows = db.prepare(`
           SELECT * FROM posentegra_outbox
           WHERE status IN ('pending', 'failed')
@@ -142,6 +169,22 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
         `).all(nowIso(), Math.max(1, Math.min(100, Number(limit) || 20)));
         selected += rows.length;
         for (const row of rows) {
+          if (row.event_type === EVENT_TYPES.ORDER_STATUS) {
+            const currentPayload = parseJson(row.payload_json, {});
+            const currentRank = statusRank(currentPayload.status);
+            const earlierRows = db.prepare(`
+              SELECT id, payload_json, status
+              FROM posentegra_outbox
+              WHERE aggregate_id = ? AND event_type = ? AND id != ? AND status != 'completed'
+            `).all(row.aggregate_id, EVENT_TYPES.ORDER_STATUS, row.id);
+            const blocked = earlierRows.some((candidate) => {
+              const candidateRank = statusRank(parseJson(candidate.payload_json, {}).status);
+              return candidateRank < currentRank;
+            });
+            if (blocked) {
+              continue;
+            }
+          }
           const lockedAt = nowIso();
           const lockResult = db.prepare(`
             UPDATE posentegra_outbox SET status = 'processing', locked_at = ?, updated_at = ?
@@ -165,7 +208,8 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
             processed += 1;
           } catch (error) {
             const attempts = Number(row.attempts || 0) + 1;
-            const dead = attempts >= maxAttempts;
+            const nonIdempotent = row.event_type === EVENT_TYPES.ORDER_STATUS;
+            const dead = nonIdempotent || attempts >= maxAttempts;
             const delayMs = Math.min(30 * 60_000, 30_000 * (2 ** Math.min(6, attempts - 1)));
             const nextAttemptAt = dead ? null : new Date(Date.now() + delayMs).toISOString();
             db.prepare(`
@@ -179,6 +223,7 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
               aggregateId: row.aggregate_id,
               attempts,
               deadLettered: dead,
+              automaticRetryDisabled: nonIdempotent,
               nextAttemptAt,
               error: error.message,
             });

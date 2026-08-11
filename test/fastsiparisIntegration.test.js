@@ -99,7 +99,7 @@ function startMockPosentegra() {
         return;
       }
       if (req.method === "POST" && req.url.startsWith("/web-api/v1/orders/change-status/")) {
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ success: true, data: { oldStatus: 500, newStatus: 600 } }));
         return;
       }
       res.statusCode = 404;
@@ -328,18 +328,15 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
     assert.equal(deliveredOnlinePackage.status, "delivered");
     assert.equal(deliveredOnlinePackage.payment_status, "paid_online");
 
-    let deliveredStatusCall = null;
-    for (let attempt = 0; attempt < 40 && !deliveredStatusCall; attempt += 1) {
-      deliveredStatusCall = mock.calls.find((call) =>
-        call.method === "POST" &&
-        call.url === "/web-api/v1/orders/change-status/test-pid-001" &&
-        call.body?.status === "delivered"
+    let deliveredStatusCalls = [];
+    for (let attempt = 0; attempt < 40 && deliveredStatusCalls.length < 3; attempt += 1) {
+      deliveredStatusCalls = mock.calls.filter((call) =>
+        call.method === "POST" && call.url === "/web-api/v1/orders/change-status/test-pid-001"
       );
-      if (!deliveredStatusCall) await delay(50);
+      if (deliveredStatusCalls.length < 3) await delay(50);
     }
-    assert.ok(deliveredStatusCall);
-    assert.equal(deliveredStatusCall.body.packageId, webhookOrder.package.id);
-    assert.equal(deliveredStatusCall.body.internalStatus, "delivered");
+    assert.equal(deliveredStatusCalls.length, 3);
+    assert.ok(deliveredStatusCalls.every((call) => call.body === null));
     const deliveredOutbox = readRow(
       dbFile,
       "SELECT status, attempts FROM posentegra_outbox WHERE dedupe_key = ?",
@@ -391,16 +388,15 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
           body: JSON.stringify({ status }),
         });
       }
-      let platformDeliveredCall = null;
-      for (let attempt = 0; attempt < 40 && !platformDeliveredCall; attempt += 1) {
-        platformDeliveredCall = mock.calls.find((call) =>
-          call.method === "POST" &&
-          call.url === `/web-api/v1/orders/change-status/${platformCase.pid}` &&
-          call.body?.status === "delivered"
+      let platformStatusCalls = [];
+      for (let attempt = 0; attempt < 40 && platformStatusCalls.length < 3; attempt += 1) {
+        platformStatusCalls = mock.calls.filter((call) =>
+          call.method === "POST" && call.url === `/web-api/v1/orders/change-status/${platformCase.pid}`
         );
-        if (!platformDeliveredCall) await delay(50);
+        if (platformStatusCalls.length < 3) await delay(50);
       }
-      assert.ok(platformDeliveredCall, `${platformCase.name} teslim bildirimi Posentegra'ya gitmedi.`);
+      assert.equal(platformStatusCalls.length, 3, `${platformCase.name} durum adimlari Posentegra'ya eksiksiz gitmedi.`);
+      assert.ok(platformStatusCalls.every((call) => call.body === null));
       assert.equal(
         readRow(
           dbFile,

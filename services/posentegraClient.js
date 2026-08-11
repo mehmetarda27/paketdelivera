@@ -6,6 +6,17 @@ function baseUrl() {
   return trimmed(process.env.POSENTEGRA_API_BASE_URL).replace(/\/+$/, "");
 }
 
+const API_V1_PREFIX = "/web-api/v1";
+
+function requestUrl(pathname) {
+  const configuredBase = baseUrl();
+  const normalizedPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  if (configuredBase.toLowerCase().endsWith(API_V1_PREFIX) && normalizedPath.toLowerCase().startsWith(API_V1_PREFIX)) {
+    return `${configuredBase}${normalizedPath.slice(API_V1_PREFIX.length)}`;
+  }
+  return `${configuredBase}${normalizedPath}`;
+}
+
 function apiKey() {
   return trimmed(process.env.POSENTEGRA_API_KEY);
 }
@@ -64,11 +75,11 @@ async function request(pathname, options = {}) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs());
     try {
-      const response = await fetch(`${baseUrl()}${pathname}`, {
+      const response = await fetch(requestUrl(pathname), {
         method,
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           Authorization: `Bearer ${apiKey()}`,
           "X-API-Key": apiKey(),
           ...(options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
@@ -192,8 +203,9 @@ async function assignPackageToRestaurant(posentegraRestaurantId, payload = {}) {
 async function changeOrderStatus(orderId, status, meta = {}) {
   return request(`/web-api/v1/orders/change-status/${encodeURIComponent(orderId)}`, {
     method: "POST",
-    body: { status, ...meta },
-    retryable: true,
+    // FastSiparis change-status hedef durum kabul etmez; siparisi tek adim ilerletir.
+    // Govde veya otomatik HTTP retry gondermek belirsiz bir timeout sonrasinda
+    // ayni siparisi yanlislikla iki kez ilerletebilir.
     idempotencyKey: `status:${orderId}:${status}:${meta.packageId || ""}`,
   });
 }

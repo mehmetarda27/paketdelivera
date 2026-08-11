@@ -319,6 +319,7 @@ const STATIC_FILES = {
   "/styles.css": "styles.css",
   "/landing-final.css": "landing-final.css",
   "/manifest.webmanifest": "manifest.webmanifest",
+  "/privacy.html": "privacy.html",
   "/shared.js": "shared.js",
   "/system-curtain.js": "system-curtain.js",
   "/system-curtain-control.js": "system-curtain-control.js",

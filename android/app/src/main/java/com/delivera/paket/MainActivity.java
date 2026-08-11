@@ -3,6 +3,7 @@ package com.delivera.paket;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.app.DownloadManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -16,6 +17,7 @@ import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.provider.Settings;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -23,8 +25,10 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.URLUtil;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -32,15 +36,20 @@ import androidx.core.content.ContextCompat;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
+import java.util.Locale;
 
 public class MainActivity extends BridgeActivity {
     private static final String COURIER_URL = "https://deliveraexpres.com.tr/courier.html";
+    private static final String PRIVACY_URL = "https://deliveraexpres.com.tr/privacy.html";
     private static final String NOTIFICATION_CHANNEL_ID = "delivera_critical_packages";
     private static final int LOCATION_PERMISSION_REQUEST = 4101;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 4102;
     private static final int BACKGROUND_LOCATION_PERMISSION_REQUEST = 4103;
 
     private WebView webView;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private boolean offlinePageVisible;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,6 +60,9 @@ public class MainActivity extends BridgeActivity {
         webView.addJavascriptInterface(new NotificationBridge(this), "DeliveraNativeNotifications");
         webView.addJavascriptInterface(new NativeAppBridge(this), "DeliveraNativeApp");
         webView.setWebViewClient(new DeliveraWebViewClient(getBridge(), this));
+        configureDownloads(webView);
+        configureBackNavigation();
+        monitorConnectivity();
         requestRuntimePermissions();
 
         if (!isOnline()) {
@@ -66,12 +78,115 @@ public class MainActivity extends BridgeActivity {
         settings.setDatabaseEnabled(true);
         settings.setGeolocationEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(true);
+        settings.setSupportMultipleWindows(false);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setUserAgentString(settings.getUserAgentString() + " Delivera-Android/1.1");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
             CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.setSafeBrowsingEnabled(true);
+        }
         CookieManager.getInstance().setAcceptCookie(true);
+    }
+
+    private void configureDownloads(WebView view) {
+        view.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+            Uri uri;
+            try {
+                uri = Uri.parse(url);
+            } catch (RuntimeException error) {
+                Toast.makeText(this, "Dosya bağlantısı geçersiz.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (!isTrustedDeliveraUri(uri) || !"https".equalsIgnoreCase(uri.getScheme())) {
+                openExternal(uri);
+                return;
+            }
+            try {
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                DownloadManager.Request request = new DownloadManager.Request(uri)
+                    .setTitle(fileName)
+                    .setDescription("Delivera dosyası indiriliyor")
+                    .setMimeType(mimeType)
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+                    .setAllowedOverMetered(true)
+                    .setAllowedOverRoaming(true);
+                String cookies = CookieManager.getInstance().getCookie(url);
+                if (cookies != null && !cookies.isEmpty()) request.addRequestHeader("Cookie", cookies);
+                if (userAgent != null && !userAgent.isEmpty()) request.addRequestHeader("User-Agent", userAgent);
+                DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                if (manager == null) throw new IllegalStateException("Download manager unavailable");
+                manager.enqueue(request);
+                Toast.makeText(this, "İndirme başlatıldı: " + fileName, Toast.LENGTH_LONG).show();
+            } catch (RuntimeException error) {
+                openExternal(uri);
+            }
+        });
+    }
+
+    private void configureBackNavigation() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (webView != null && webView.canGoBack()) {
+                    webView.goBack();
+                    return;
+                }
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+            }
+        });
+    }
+
+    private void monitorConnectivity() {
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(@NonNull Network network) {
+                runOnUiThread(() -> {
+                    if (offlinePageVisible && webView != null) {
+                        offlinePageVisible = false;
+                        webView.loadUrl(COURIER_URL);
+                    }
+                });
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (RuntimeException ignored) {
+            networkCallback = null;
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {}
+        }
+        super.onDestroy();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri uri = intent == null ? null : intent.getData();
+        if (uri != null && isTrustedDeliveraUri(uri) && webView != null) {
+            webView.loadUrl(uri.toString());
+        }
     }
 
     private void requestRuntimePermissions() {
@@ -79,6 +194,10 @@ public class MainActivity extends BridgeActivity {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
         ) {
+            if (!getPreferences(MODE_PRIVATE).getBoolean("location_disclosure_accepted", false)) {
+                showLocationDisclosure();
+                return;
+            }
             ActivityCompat.requestPermissions(
                 this,
                 new String[] { Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION },
@@ -89,6 +208,20 @@ public class MainActivity extends BridgeActivity {
 
         requestNotificationPermission();
         requestBackgroundLocationPermission();
+    }
+
+    private void showLocationDisclosure() {
+        new AlertDialog.Builder(this)
+            .setTitle("Konum verilerinin kullanımı")
+            .setMessage("Delivera, vardiyanız açıkken paket ataması, canlı kurye takibi, rota ve teslimat güvenliği özelliklerini sağlamak için hassas konum verinizi toplar ve operasyon merkezine iletir. Konum, uygulama kapalıyken veya kullanımda değilken de arka planda işlenebilir. Vardiyanız kapalıyken konum gönderilmez ve konum verisi reklam amacıyla kullanılmaz.")
+            .setNeutralButton("Gizlilik Politikası", (dialog, which) -> openExternal(Uri.parse(PRIVACY_URL)))
+            .setNegativeButton("Şimdi değil", (dialog, which) -> requestNotificationPermission())
+            .setPositiveButton("Kabul et ve devam et", (dialog, which) -> {
+                getPreferences(MODE_PRIVATE).edit().putBoolean("location_disclosure_accepted", true).apply();
+                requestRuntimePermissions();
+            })
+            .setCancelable(false)
+            .show();
     }
 
     private void requestNotificationPermission() {
@@ -107,26 +240,26 @@ public class MainActivity extends BridgeActivity {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            ActivityCompat.requestPermissions(
-                this,
-                new String[] { Manifest.permission.ACCESS_BACKGROUND_LOCATION },
-                BACKGROUND_LOCATION_PERMISSION_REQUEST
-            );
-            return;
-        }
         if (getPreferences(MODE_PRIVATE).getBoolean("background_location_prompted", false)) {
             return;
         }
         getPreferences(MODE_PRIVATE).edit().putBoolean("background_location_prompted", true).apply();
         new AlertDialog.Builder(this)
             .setTitle("Arka planda canlı konum")
-            .setMessage("Kurye konumunun ekran kapalıyken de güncellenmesi için Konum izninde ‘Her zaman izin ver’ seçeneğini açın.")
+            .setMessage("Delivera, vardiyanız açıkken uygulama ekranda olmasa bile dağıtım konumunuzu operasyon merkezine iletir. Bu özellik paket ataması, canlı kurye takibi ve teslimat güvenliği için gereklidir. Vardiyanız kapalıyken konum gönderilmez.")
             .setNegativeButton("Daha sonra", null)
-            .setPositiveButton("Ayarları aç", (dialog, which) -> {
-                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                intent.setData(Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
+            .setPositiveButton("Devam et", (dialog, which) -> {
+                if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                    ActivityCompat.requestPermissions(
+                        this,
+                        new String[] { Manifest.permission.ACCESS_BACKGROUND_LOCATION },
+                        BACKGROUND_LOCATION_PERMISSION_REQUEST
+                    );
+                } else {
+                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                }
             })
             .show();
     }
@@ -138,6 +271,7 @@ public class MainActivity extends BridgeActivity {
             Toast
                 .makeText(this, "Konum izni kapali. Mesai, GPS ve rota ozellikleri icin konum iznini acin.", Toast.LENGTH_LONG)
                 .show();
+            requestNotificationPermission();
         } else if (requestCode == LOCATION_PERMISSION_REQUEST) {
             requestNotificationPermission();
             requestBackgroundLocationPermission();
@@ -181,20 +315,35 @@ public class MainActivity extends BridgeActivity {
         }
         Uri uri = Uri.parse(webView.getUrl());
         String host = uri.getHost();
-        return "https".equalsIgnoreCase(uri.getScheme()) && host != null &&
-            (host.equalsIgnoreCase("deliveraexpres.com.tr") || host.toLowerCase().endsWith(".deliveraexpres.com.tr"));
+        return isTrustedDeliveraUri(uri);
+    }
+
+    private static boolean isTrustedDeliveraUri(Uri uri) {
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+        String host = uri.getHost();
+        return host != null &&
+            (host.equalsIgnoreCase("deliveraexpres.com.tr") || host.toLowerCase(Locale.ROOT).endsWith(".deliveraexpres.com.tr"));
+    }
+
+    private void openExternal(Uri uri) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, uri));
+        } catch (ActivityNotFoundException ignored) {
+            Toast.makeText(this, "Bu bağlantı açılamadı.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void loadOfflinePage() {
         if (webView == null) {
             return;
         }
+        offlinePageVisible = true;
         webView.loadDataWithBaseURL(COURIER_URL, offlineHtml(), "text/html", "UTF-8", null);
     }
 
     private static String offlineHtml() {
         return (
-            "<!doctype html><html lang=\"tr\"><head><meta charset=\"utf-8\">" +
+            "<!doctype html><html lang=\"tr\"><head><meta charset=\"utf-8\"><meta name=\"delivera-offline\" content=\"1\">" +
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">" +
             "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07110d;color:#f6fff9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}" +
             ".card{width:min(86vw,380px);padding:28px;border:1px solid rgba(255,255,255,.12);border-radius:28px;background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));box-shadow:0 24px 80px rgba(0,0,0,.42)}" +
@@ -220,15 +369,6 @@ public class MainActivity extends BridgeActivity {
         if (manager != null) {
             manager.createNotificationChannel(channel);
         }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-            return;
-        }
-        super.onBackPressed();
     }
 
     private static class DeliveraWebViewClient extends BridgeWebViewClient {
@@ -272,6 +412,7 @@ public class MainActivity extends BridgeActivity {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            view.evaluateJavascript("Boolean(document.querySelector('meta[name=\\\"delivera-offline\\\"]'))", (value) -> activity.offlinePageVisible = "true".equals(value));
             injectNotificationBridge(view);
             injectNativeSessionBridge(view);
         }
@@ -357,7 +498,7 @@ public class MainActivity extends BridgeActivity {
         }
 
         private String normalizeHost(String host) {
-            return host == null ? null : host.toLowerCase();
+            return host == null ? null : host.toLowerCase(Locale.ROOT);
         }
 
         private void openMaps(Uri uri) {
@@ -396,6 +537,12 @@ public class MainActivity extends BridgeActivity {
             if (!areEnabled() || !activity.isTrustedCourierPage()) {
                 return;
             }
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return;
+            }
             Intent intent = new Intent(activity, MainActivity.class);
             intent.setAction(Intent.ACTION_VIEW);
             intent.setData(Uri.parse(COURIER_URL));
@@ -419,9 +566,13 @@ public class MainActivity extends BridgeActivity {
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent);
 
-            NotificationManagerCompat
-                .from(activity)
-                .notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), builder.build());
+            try {
+                NotificationManagerCompat
+                    .from(activity)
+                    .notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), builder.build());
+            } catch (SecurityException ignored) {
+                // Permission can be revoked while the WebView is running.
+            }
         }
     }
 

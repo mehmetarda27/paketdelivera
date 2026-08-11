@@ -2,7 +2,7 @@
 
 ## Environment
 
-- `POSENTEGRA_API_BASE_URL`: FastSiparis / Posentegra Web API base URL.
+- `POSENTEGRA_API_BASE_URL`: FastSiparis / Posentegra Web API base URL. Hem origin (`https://api.fastsiparis.com`) hem de `/web-api/v1` ile biten koleksiyon adresi kabul edilir; yol iki kez eklenmez.
 - `POSENTEGRA_API_KEY`: API key/token. Sent as `Authorization: Bearer ...` and `X-API-Key`.
 - `POSENTEGRA_BUSINESS_ID`: Optional business id used to link newly created restaurants.
 - `POSENTEGRA_REQUEST_TIMEOUT_MS`: Request timeout, default `8000`.
@@ -66,6 +66,7 @@ Client operations prepared in `services/posentegraClient.js`:
 
 Status change:
 
+- FastSiparis `change-status` isteği body kabul etmez; `POST` çağrısı siparişi yalnızca bir sonraki uzak duruma ilerletir.
 - Restaurant approval for Trendyol Yemek, Getir Yemek, Yemeksepeti, or Migros Yemek is queued as Posentegra `accepted` and routed by that order's `pid` and source platform.
 - Restaurant rejection for those platforms is queued through `POST /web-api/v1/orders/cancel/{orderId}` with the rejection reason.
 - A decision only targets the platform that created the order; approving a Trendyol order never updates Getir, Yemeksepeti, or Migros orders.
@@ -88,11 +89,13 @@ Important id rule:
 
 Manual and extension-created packages are written locally first and queued in `posentegra_outbox` in the same database transaction. The outbox calls `assign-package` with an idempotency key. A Posentegra outage therefore does not block restaurant or courier operations; failures are retried with exponential backoff and become `dead_letter` after 10 delivery cycles.
 
-Restaurant approval/rejection and courier lifecycle changes are persisted locally first. Restaurant approval uses the idempotent `order.status:{packageId}:accepted` key, rejection uses `order.cancel:{packageId}`, and courier `on_route`, `delivered`, and `failed` transitions use their status keys. Failures are retried through the same durable outbox. If Posentegra returns a canonical `pid` for a manually assigned package, `packages.posentegra_id` is updated before later status events are delivered.
+Restaurant approval/rejection and courier lifecycle changes are persisted locally first. Restaurant approval uses the idempotent `order.status:{packageId}:accepted` key, rejection uses `order.cancel:{packageId}`, and courier `on_route`, `delivered`, and `failed` transitions use their status keys. All events use the durable outbox; only idempotent operations are automatically retried. If Posentegra returns a canonical `pid` for a manually assigned package, `packages.posentegra_id` is updated before later status events are delivered.
+
+`change-status` hedef durum yerine "bir adım ilerlet" komutu olduğu için durum olaylarında otomatik HTTP retry kapalıdır. Aynı paket ve aynı durum `dedupe_key` ile tek satıra düşer; tamamlanan satır yeniden kuyruğa alınmaz. Timeout, 5xx veya prosesin gönderim sırasında kapanması gibi uzak sonucun belirsiz olduğu durumlar ilk hatada `dead_letter` olur. Daha ileri durumlar önceki adım tamamlanana kadar bekletilir. Operatör önce Posentegra'daki uzak durumu kontrol eder, ardından gerekiyorsa admin retry endpointini bilinçli olarak kullanır. Bu tercih kaçırılan bir otomatik tekrar yerine yanlışlıkla iki kez durum ilerletmeyi öncelikli olarak engeller.
 
 Operations endpoints (admin session required):
 
-- `GET /api/admin/posentegra-outbox?status=failed&limit=100`
+- `GET /api/admin/posentegra-outbox?status=dead_letter&limit=100`
 - `POST /api/admin/posentegra-outbox/{id}/retry`
 
 ## PID Logic

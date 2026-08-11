@@ -40,6 +40,8 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 Release APK/AAB icin Android Studio'da `Build > Generate Signed Bundle / APK` menusu kullanilir. Keystore dosyasini repo icine koymayin.
 
+Guncel uygulama surumu `1.1` (`versionCode 2`), hedef API seviyesi 36'dir. Google Play'e yeni uygulama yuklemesi APK ile degil, imzali Android App Bundle (`.aab`) ile yapilir. Test icin uretilen debug APK Play'e yuklenmemelidir.
+
 ## URL Degistirme
 
 Ana URL `capacitor.config.ts` icindeki `courierUrl` sabitinden degistirilir.
@@ -97,6 +99,14 @@ INTERNET
 
 Uygulama acilisinda konum izni istenir. Kurye oturum actiginda native foreground servis baslar; vardiya aktifken uygulama arka plana alinsa da GPS konumu `/api/courier/location` endpointine gondermeye devam eder. Android 11 ve uzerinde kullanici `Her zaman izin ver` secenegini uygulama ayarlarindan onaylar.
 
+Konum izninden once uygulama icinde belirgin veri kullanimi aciklamasi gosterilir. Gizlilik politikasi hem bu aciklamadan hem de asagidaki herkese acik URL'den erisilebilir:
+
+```text
+https://deliveraexpres.com.tr/privacy.html
+```
+
+Play Console'da arka plan konumu izin beyan formu, kisa ekran videosu, Data Safety formu ve gizlilik politikasi URL'si ayrica tamamlanmalidir.
+
 ## Bildirim Izni
 
 Android 13 ve uzeri cihazlarda `POST_NOTIFICATIONS` izni uygulama acilisinda istenir.
@@ -134,6 +144,15 @@ GOOGLE_MAPS_EMBED_API_KEY=
 ## Oturum Koruma
 
 WebView'de JavaScript, DOM storage ve cookie destegi aciktir. Kurye login token/cookie/local storage verileri uygulama kapanip acildiginda korunur.
+
+## WebView Uygulama Ozellikleri
+
+- Android geri tusu ve geri hareketi WebView gecmisinde calisir.
+- Harita, telefon ve harici web adresleri uygun Android uygulamasina guvenli sekilde yonlendirilir.
+- HTML dosya alanlari sistem dosya secicisini ve istege bagli kamerayi acar.
+- Delivera alan adindaki indirmeler oturum cerezleri korunarak Android indirme yoneticisine aktarilir.
+- Internet geri geldiginde ozel hata ekrani kurye panelini otomatik yeniden yukler.
+- HTTPS disi karisik icerik engellenir ve WebView Safe Browsing aciktir.
 
 ## Baglanti Yok Ekrani
 
