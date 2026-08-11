@@ -10,27 +10,48 @@
   <link rel="apple-touch-icon" href="/assets/delivera-login.jpg?v=20260809-1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/landing-final.css?v=1">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/landing-final.css?v=2">
 </head>
 <body>
   <div class="landing-page">
     <header class="landing-header" aria-label="Ana menü">
-      <a class="landing-brand" href="/" aria-label="Delivera Express ana sayfa">DELIVERA EXPRESS</a>
+      <a class="landing-brand" href="/" aria-label="Delivera Express ana sayfa">
+        <img src="/assets/delivera-login.jpg?v=20260809-1" alt="" width="48" height="48">
+        <span><strong>DELIVERA</strong><small>EXPRESS</small></span>
+      </a>
       <nav class="landing-header-actions" aria-label="Giriş bağlantıları">
-        <a class="header-login" href="/admin.html">Login</a>
-        <a class="header-start" href="/restaurant.html">Get Started</a>
+        <a class="header-login" href="/admin.html">Yönetici Girişi</a>
+        <a class="header-start" href="/restaurant.html">Restoran Girişi</a>
       </nav>
     </header>
 
     <main class="landing-main">
       <section class="landing-hero" aria-labelledby="landing-title">
         <div class="landing-hero-content">
-          <h1 id="landing-title">Mersin için restoran, operasyon ve<br class="desktop-break"> kurye akışını tek dağıtım omurgasında<br class="desktop-break"> yürüt.</h1>
+          <div class="hero-eyebrow"><span></span>Mersin merkezli teslimat operasyonu</div>
+          <h1 id="landing-title">Restoran, operasyon ve kurye akışını <em>tek merkezde.</em></h1>
+          <p class="hero-summary">Siparişin alınmasından en uygun kuryenin atanmasına, canlı konum takibinden teslimata kadar tüm süreci tek bir operasyon omurgasında yönetin.</p>
+
           <div class="panel-links" aria-label="Panel seçimi">
-            <a class="panel-link panel-link-primary" href="/restaurant.html">Restoran Paneli</a>
-            <a class="panel-link" href="/admin.html">Admin Paneli</a>
-            <a class="panel-link" href="/courier.html">Kurye Paneli</a>
+            <a class="panel-link panel-link-primary" href="/restaurant.html">
+              <span>Restoran Paneli</span>
+              <small>Sipariş ve kurye takibi</small>
+            </a>
+            <a class="panel-link" href="/admin.html">
+              <span>Admin Paneli</span>
+              <small>Operasyon merkezi</small>
+            </a>
+            <a class="panel-link" href="/courier.html">
+              <span>Kurye Paneli</span>
+              <small>Saha ve teslimat</small>
+            </a>
+          </div>
+
+          <div class="hero-features" aria-label="Sistem özellikleri">
+            <span>Canlı kurye konumu</span>
+            <span>Akıllı otomatik atama</span>
+            <span>Tek merkezden yönetim</span>
           </div>
         </div>
       </section>
@@ -38,7 +59,7 @@
 
     <footer class="landing-footer">
       <strong>DELIVERA EXPRESS</strong>
-      <span>© 2026 DELIVERA EXPRESS. All rights reserved.</span>
+      <span>© 2026 Delivera Express. Tüm hakları saklıdır.</span>
     </footer>
   </div>
   <script src="/system-curtain.js?v=20260811-1" defer></script>
