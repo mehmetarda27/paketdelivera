@@ -16223,12 +16223,41 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Kurye bulunamadi." });
       return;
     }
+    const reassignedPackageIds = db.prepare(`
+      SELECT id FROM packages
+      WHERE assigned_courier_id = ?
+        AND status IN ('assigned', 'accepted_by_courier', 'on_route')
+    `).all(targetId).map((row) => row.id);
+    reassignedPackageIds.forEach((packageId) => clearAssignmentRetry(packageId));
     dbFacade.transaction((txDb) => {
       txDb.prepare("DELETE FROM courier_sessions WHERE courier_id = ?").run(targetId);
-      txDb.prepare("UPDATE packages SET assigned_courier_id = NULL, status = 'awaiting_assignment' WHERE assigned_courier_id = ? AND status != 'delivered'").run(targetId);
+      txDb.prepare("DELETE FROM refresh_tokens WHERE actor_role = 'courier' AND actor_id = ?").run(targetId);
+      txDb.prepare("DELETE FROM courier_push_subscriptions WHERE courier_id = ?").run(targetId);
+      txDb.prepare(`
+        UPDATE packages
+        SET assigned_courier_id = NULL,
+            assigned_courier_name = NULL,
+            assigned_at = NULL,
+            accepted_at = NULL,
+            on_route_at = NULL,
+            status = 'awaiting_assignment',
+            assignment_status = 'pending',
+            assignment_reason = 'Atanan kurye admin tarafindan silindi; paket yeniden atama havuzuna alindi.',
+            last_assignment_attempt_at = NULL,
+            last_assignment_error = NULL,
+            updated_at = ?
+        WHERE assigned_courier_id = ?
+          AND status IN ('assigned', 'accepted_by_courier', 'on_route')
+      `).run(nowIso(), targetId);
+      txDb.prepare("DELETE FROM courier_breaks WHERE courier_id = ?").run(targetId);
       txDb.prepare("DELETE FROM courier_shifts WHERE courier_id = ?").run(targetId);
       txDb.prepare("DELETE FROM courier_shift_plans WHERE courier_id = ?").run(targetId);
       txDb.prepare("DELETE FROM cash_reconciliations WHERE courier_id = ?").run(targetId);
+      txDb.prepare(`
+        DELETE FROM courier_earning_items
+        WHERE courier_earning_id IN (SELECT id FROM courier_earnings WHERE courier_id = ?)
+      `).run(targetId);
+      txDb.prepare("DELETE FROM courier_earnings WHERE courier_id = ?").run(targetId);
       txDb.prepare("DELETE FROM couriers WHERE id = ?").run(targetId);
     });
     rebalancePackages();

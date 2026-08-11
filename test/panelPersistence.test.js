@@ -51,6 +51,15 @@ function readRow(dbFile, sql, ...params) {
   }
 }
 
+function runSql(dbFile, sql, ...params) {
+  const db = new DatabaseSync(dbFile);
+  try {
+    return db.prepare(sql).run(...params);
+  } finally {
+    db.close();
+  }
+}
+
 async function stopServer(server) {
   if (server.exitCode !== null || server.signalCode !== null) {
     return;
@@ -283,11 +292,56 @@ test("panel create/update/delete flows persist to database tables", { timeout: 3
         available: false,
       }),
     });
+    const deleteCourierId = deleteCourierState.createdCourier.id;
+    const relatedStamp = new Date().toISOString();
+    runSql(
+      dbFile,
+      "INSERT INTO courier_breaks (id, courier_id, started_at, ended_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "break_delete_test",
+      deleteCourierId,
+      relatedStamp,
+      relatedStamp,
+      relatedStamp,
+      relatedStamp
+    );
+    runSql(
+      dbFile,
+      `INSERT INTO courier_earnings (
+        id, courier_id, report_date, delivered_package_count, per_package_fee, bonus_amount,
+        deduction_amount, total_payable, payment_status, paid_at, admin_note, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "earning_delete_test",
+      deleteCourierId,
+      relatedStamp.slice(0, 10),
+      0,
+      0,
+      0,
+      0,
+      0,
+      "unpaid",
+      null,
+      "Silme bağımlılık testi",
+      relatedStamp,
+      relatedStamp
+    );
+    runSql(
+      dbFile,
+      "INSERT INTO courier_push_subscriptions (id, courier_id, endpoint, subscription_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "push_delete_test",
+      deleteCourierId,
+      "https://push.example/delete-test",
+      JSON.stringify({ endpoint: "https://push.example/delete-test", keys: { p256dh: "test", auth: "test" } }),
+      relatedStamp,
+      relatedStamp
+    );
     await request(baseUrl, `/api/admin/couriers/${deleteCourierState.createdCourier.id}`, {
       method: "DELETE",
       headers: adminHeaders,
     });
-    assert.equal(readRow(dbFile, "SELECT id FROM couriers WHERE id = ?", deleteCourierState.createdCourier.id), undefined);
+    assert.equal(readRow(dbFile, "SELECT id FROM couriers WHERE id = ?", deleteCourierId), undefined);
+    assert.equal(readRow(dbFile, "SELECT id FROM courier_breaks WHERE courier_id = ?", deleteCourierId), undefined);
+    assert.equal(readRow(dbFile, "SELECT id FROM courier_earnings WHERE courier_id = ?", deleteCourierId), undefined);
+    assert.equal(readRow(dbFile, "SELECT id FROM courier_push_subscriptions WHERE courier_id = ?", deleteCourierId), undefined);
 
     const restaurantLogin = await request(baseUrl, "/api/restaurant/session", {
       method: "POST",
