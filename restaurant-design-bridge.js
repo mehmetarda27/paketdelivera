@@ -489,26 +489,10 @@
   function detailModal(pkg) {
     const courier = (state.data?.couriers || []).find((item) => item.id === pkg.assignedCourierId);
     const [label] = statusInfo(pkg.status);
-    const raw = pkg.rawPayload && typeof pkg.rawPayload === "object" ? pkg.rawPayload : {};
-    const itemCandidates = [pkg.items, raw.items, raw.products, raw.lines, raw.order?.items, raw.order?.products, raw.data?.items, raw.data?.products];
-    const items = itemCandidates.find((candidate) => Array.isArray(candidate) && candidate.length) || [];
-    const localized = (value) => {
-      if (value === null || value === undefined) return "";
-      if (typeof value !== "object") return String(value).trim();
-      return String(value.tr || value.en || value.default || value.text || value.name || Object.values(value).find((entry) => typeof entry === "string") || "").trim();
-    };
-    const choices = (value) => (Array.isArray(value) ? value : []).map((choice) => localized(choice?.name ?? choice?.title ?? choice)).filter(Boolean);
-    const itemRows = items.map((item, index) => {
-      const entry = item && typeof item === "object" ? item : { name: item };
-      const name = localized(entry.name ?? entry.productName ?? entry.title ?? entry.product) || `Ürün ${index + 1}`;
-      const quantity = Number(entry.quantity ?? entry.qty ?? entry.count ?? 1) || 1;
-      const amountValue = entry.totalPrice ?? entry.total_price ?? entry.priceWithOption ?? entry.price_with_option ?? entry.price;
-      const amount = amountValue === null || amountValue === undefined || amountValue === "" ? "" : formatMoney(amountValue);
-      const extras = choices(entry.extraIngredients ?? entry.extra_ingredients ?? entry.extras ?? entry.options ?? entry.modifiers);
-      const removed = choices(entry.removedIngredients ?? entry.removed_ingredients);
-      const note = localized(entry.note ?? entry.description);
-      const details = [extras.length ? `Ekstra: ${extras.join(", ")}` : "", removed.length ? `Çıkarılan: ${removed.join(", ")}` : "", note ? `Not: ${note}` : ""].filter(Boolean);
-      return `<div class="zg-list-row" data-order-item><div><b>${safe(quantity)}× ${safe(name)}</b>${details.length ? `<div class="text-xs text-slate-500 mt-1">${safe(details.join(" · "))}</div>` : ""}</div>${amount ? `<strong>${safe(amount)}</strong>` : ""}</div>`;
+    const items = orderItems(pkg);
+    const itemRows = items.map((item) => {
+      const amount = item.lineTotal === null ? "" : formatMoney(item.lineTotal);
+      return `<div class="zg-list-row" data-order-item><div><b>${safe(item.quantity)}× ${safe(item.name)}</b>${item.details.length ? `<div class="text-xs text-slate-500 mt-1">${safe(item.details.join(" · "))}</div>` : ""}</div>${amount ? `<strong>${safe(amount)}</strong>` : ""}</div>`;
     }).join("");
     const products = itemRows || '<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Ürün bilgisi platformdan gelmedi.</div>';
     modal(`Sipariş Detayı · ${pkg.trackingNo || pkg.externalOrderNo || pkg.id}`, `<div class="space-y-4 text-sm"><section><div class="flex items-center justify-between mb-2"><h3 class="font-bold text-base">Sipariş İçeriği</h3><span class="text-xs text-slate-500">${items.length ? `${items.length} kalem` : "Bilgi yok"}</span></div><div class="rounded-lg border overflow-hidden" data-order-items>${products}</div></section><section><h3 class="font-bold text-base mb-2">Teslimat Bilgileri</h3><div class="space-y-1"><div class="zg-list-row"><b>Durum</b><span>${safe(label)}</span></div><div class="zg-list-row"><b>Müşteri</b><span>${safe(pkg.customerName || "-")}</span></div><div class="zg-list-row"><b>Telefon</b><a class="text-blue-600" href="tel:${safe(pkg.phone)}">${safe(pkg.phone || "-")}</a></div><div class="zg-list-row"><b>Adres</b><span class="text-right max-w-md">${safe(pkg.deliveryAddress || "-")}</span></div><div class="zg-list-row"><b>Müşteri notu</b><span>${safe(pkg.customerNote || "-")}</span></div><div class="zg-list-row"><b>Ödeme</b><span>${safe(pkg.paymentMethod || "-")} · ${formatMoney(pkg.orderAmount)}</span></div><div class="zg-list-row"><b>Kurye</b><span>${safe(courier?.name || courier?.fullName || "Atanmadı")}</span></div><div class="zg-list-row"><b>Oluşturulma</b><span>${dateTime(pkg.createdAt)}</span></div></div></section></div>`);
@@ -517,6 +501,49 @@
   function normalizedPaperSize(value) {
     const size = String(value || "80mm").toUpperCase();
     return size === "58MM" ? "58mm" : size === "A4" ? "A4" : "80mm";
+  }
+
+  function localizedItemText(value) {
+    if (value === null || value === undefined) return "";
+    if (typeof value !== "object") return String(value).trim();
+    return String(value.tr || value.en || value.default || value.text || value.name || Object.values(value).find((entry) => typeof entry === "string") || "").trim();
+  }
+
+  function orderItems(pkg) {
+    const raw = pkg?.rawPayload && typeof pkg.rawPayload === "object" ? pkg.rawPayload : {};
+    const candidates = [pkg?.items, raw.items, raw.products, raw.lines, raw.order?.items, raw.order?.products, raw.data?.items, raw.data?.products];
+    const source = candidates.find((candidate) => Array.isArray(candidate) && candidate.length) || [];
+    const choiceNames = (value) => (Array.isArray(value) ? value : [])
+      .map((choice) => localizedItemText(choice?.name ?? choice?.title ?? choice))
+      .filter(Boolean);
+    return source.map((item, index) => {
+      const entry = item && typeof item === "object" ? item : { name: item };
+      const name = localizedItemText(entry.name ?? entry.productName ?? entry.title ?? entry.product) || `Ürün ${index + 1}`;
+      const quantity = Math.max(1, Number(entry.quantity ?? entry.qty ?? entry.count ?? 1) || 1);
+      const unitValue = entry.unitPrice ?? entry.unit_price ?? entry.price;
+      const totalValue = entry.total ?? entry.totalPrice ?? entry.total_price ?? entry.priceWithOption ?? entry.price_with_option;
+      const unitPrice = unitValue === null || unitValue === undefined || unitValue === "" ? null : Number(unitValue);
+      const explicitTotal = totalValue === null || totalValue === undefined || totalValue === "" ? null : Number(totalValue);
+      const lineTotal = Number.isFinite(explicitTotal) ? explicitTotal : Number.isFinite(unitPrice) ? unitPrice * quantity : null;
+      const extras = choiceNames(entry.extraIngredients ?? entry.extra_ingredients ?? entry.extras ?? entry.options ?? entry.modifiers);
+      const removed = choiceNames(entry.removedIngredients ?? entry.removed_ingredients);
+      const note = localizedItemText(entry.note ?? entry.description);
+      return {
+        name,
+        quantity,
+        unitPrice: Number.isFinite(unitPrice) ? unitPrice : null,
+        lineTotal: Number.isFinite(lineTotal) ? lineTotal : null,
+        details: [extras.length ? `Ekstra: ${extras.join(", ")}` : "", removed.length ? `Çıkarılan: ${removed.join(", ")}` : "", note ? `Not: ${note}` : ""].filter(Boolean),
+      };
+    });
+  }
+
+  function receiptItemsHtml(pkg) {
+    const items = orderItems(pkg);
+    if (!items.length) {
+      return `<section class="items"><div class="items-title">SİPARİŞ İÇERİĞİ</div><div class="items-empty">${safe(pkg.packageType || "Ürün bilgisi platformdan gelmedi.")}</div></section>`;
+    }
+    return `<section class="items"><div class="items-title">SİPARİŞ İÇERİĞİ</div><div class="items-head"><b>Adet / Ürün</b><b>Tutar</b></div>${items.map((item) => `<div class="item"><div><strong>${safe(item.quantity)}× ${safe(item.name)}</strong>${item.unitPrice !== null ? `<small>Birim: ${safe(formatMoney(item.unitPrice))}</small>` : ""}${item.details.map((detail) => `<small>${safe(detail)}</small>`).join("")}</div><b>${item.lineTotal === null ? "-" : safe(formatMoney(item.lineTotal))}</b></div>`).join("")}</section>`;
   }
 
   function receiptDocument(pkg, invoice, paperSize, copies) {
@@ -538,14 +565,14 @@
         <div class="row"><b>Müşteri</b><span>${safe(pkg.customerName || "-")}</span></div>
         <div class="row"><b>Telefon</b><span>${safe(pkg.phone || "-")}</span></div>
         <div class="row total"><b>Ödeme / Tutar</b><span>${safe(pkg.paymentMethod || "-")}<br><strong>${formatMoney(pkg.orderAmount)}</strong></span></div>
-        <div class="row"><b>İçerik</b><span>${safe(pkg.packageType || "Menü bilgisi girilmedi")}</span></div>
       </section>
+      ${receiptItemsHtml(pkg)}
       <section class="block"><b>TESLİMAT ADRESİ</b><p>${safe(pkg.deliveryAddress || "-")}</p></section>
       ${pkg.customerNote ? `<section class="block note"><b>MÜŞTERİ NOTU</b><p>${safe(pkg.customerNote)}</p></section>` : ""}
       <footer><strong>DELIVERA EXPRESS</strong><span>Bu teslimat Delivera Express altyapısıyla yönetilmektedir.</span><small>Restoran · Kurye · Operasyon tek sistemde</small>${receiptCount > 1 ? `<small>Kopya ${copyNumber}/${receiptCount}</small>` : ""}</footer>
     </article>`;
     return `<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${invoice ? "Faturalı Fiş" : "Sipariş Fişi"} · ${safe(pkg.trackingNo || pkg.id)}</title><style>
-      @page{size:${pageWidth}${thermal ? " auto" : " portrait"};margin:${thermal ? "0" : "10mm"}}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif}body{width:${contentWidth};max-width:100%;margin:0 auto;padding:${thermal ? "2mm" : "0"};font-size:${size === "58mm" ? "10px" : size === "80mm" ? "12px" : "14px"};line-height:1.35}.receipt{width:100%;margin:0 auto}.page-break{break-after:page;page-break-after:always}.brand{text-align:center;border:2px solid #111;padding:${thermal ? "2mm 1mm" : "14px"};margin-bottom:${thermal ? "2mm" : "18px"}.checkers{font-size:${thermal ? "7px" : "11px"};letter-spacing:1px;white-space:nowrap;overflow:hidden}.brand-name{font-size:${size === "58mm" ? "17px" : size === "80mm" ? "22px" : "32px"};font-weight:900;letter-spacing:.5px}.brand-name span{display:${thermal ? "block" : "inline"};font-size:.58em}.brand-tagline{font-size:.72em;font-weight:700;margin:3px 0}.custom-header{text-align:center;font-weight:800;border:1px dashed #555;padding:6px;margin-bottom:8px}.restaurant{text-align:center;border-bottom:1px dashed #555;padding-bottom:8px;margin-bottom:8px}.restaurant h1{font-size:1.35em;margin:0 0 3px}.restaurant div{font-weight:800;font-size:.88em}.tracking{text-align:center;background:#f2f2f2;border:1px solid #111;padding:${thermal ? "6px 3px" : "12px"};margin-bottom:8px}.tracking small{display:block;font-size:.72em}.tracking strong{display:block;font-size:1.45em;letter-spacing:.7px}.row{display:grid;grid-template-columns:${thermal ? "38% 62%" : "30% 70%"};gap:6px;border-bottom:1px dashed #aaa;padding:${thermal ? "5px 0" : "8px 0"}.row span{text-align:right;overflow-wrap:anywhere}.row.total{border:1px solid #111;margin:7px 0;padding:7px}.row.total span strong{font-size:1.18em}.block{margin-top:8px;border:1px solid #777;padding:${thermal ? "6px" : "10px"}.block>b{font-size:.78em}.block p{margin:4px 0 0;overflow-wrap:anywhere}.note{border-style:dashed}footer{text-align:center;border-top:2px solid #111;margin-top:${thermal ? "10px" : "18px"};padding-top:8px}footer strong,footer span,footer small{display:block}footer strong{font-size:1.15em}footer span{font-weight:700;margin:3px 0}footer small{font-size:.72em;margin-top:3px}@media print{html,body{background:#fff}.receipt{box-shadow:none}}
+      @page{size:${pageWidth}${thermal ? " auto" : " portrait"};margin:${thermal ? "0" : "10mm"}}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif}body{width:${contentWidth};max-width:100%;margin:0 auto;padding:${thermal ? "2mm" : "0"};font-size:${size === "58mm" ? "10px" : size === "80mm" ? "12px" : "14px"};line-height:1.35}.receipt{width:100%;margin:0 auto}.page-break{break-after:page;page-break-after:always}.brand{text-align:center;border:2px solid #111;padding:${thermal ? "2mm 1mm" : "14px"};margin-bottom:${thermal ? "2mm" : "18px"}.checkers{font-size:${thermal ? "7px" : "11px"};letter-spacing:1px;white-space:nowrap;overflow:hidden}.brand-name{font-size:${size === "58mm" ? "17px" : size === "80mm" ? "22px" : "32px"};font-weight:900;letter-spacing:.5px}.brand-name span{display:${thermal ? "block" : "inline"};font-size:.58em}.brand-tagline{font-size:.72em;font-weight:700;margin:3px 0}.custom-header{text-align:center;font-weight:800;border:1px dashed #555;padding:6px;margin-bottom:8px}.restaurant{text-align:center;border-bottom:1px dashed #555;padding-bottom:8px;margin-bottom:8px}.restaurant h1{font-size:1.35em;margin:0 0 3px}.restaurant div{font-weight:800;font-size:.88em}.tracking{text-align:center;background:#f2f2f2;border:1px solid #111;padding:${thermal ? "6px 3px" : "12px"};margin-bottom:8px}.tracking small{display:block;font-size:.72em}.tracking strong{display:block;font-size:1.45em;letter-spacing:.7px}.row{display:grid;grid-template-columns:${thermal ? "38% 62%" : "30% 70%"};gap:6px;border-bottom:1px dashed #aaa;padding:${thermal ? "5px 0" : "8px 0"}.row span{text-align:right;overflow-wrap:anywhere}.row.total{border:1px solid #111;margin:7px 0;padding:7px}.row.total span strong{font-size:1.18em}.items{margin-top:8px;border-top:2px solid #111;border-bottom:2px solid #111;padding:6px 0}.items-title{text-align:center;font-weight:900;font-size:1.08em;margin-bottom:5px}.items-head,.item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:4px 0}.items-head{border-bottom:1px solid #111;font-size:.78em}.item{border-bottom:1px dashed #aaa;align-items:start}.item:last-child{border-bottom:0}.item>div{min-width:0}.item strong{display:block;overflow-wrap:anywhere}.item small{display:block;color:#333;font-size:.78em;overflow-wrap:anywhere}.items-empty{text-align:center;font-style:italic;padding:5px}.block{margin-top:8px;border:1px solid #777;padding:${thermal ? "6px" : "10px"}.block>b{font-size:.78em}.block p{margin:4px 0 0;overflow-wrap:anywhere}.note{border-style:dashed}footer{text-align:center;border-top:2px solid #111;margin-top:${thermal ? "10px" : "18px"};padding-top:8px}footer strong,footer span,footer small{display:block}footer strong{font-size:1.15em}footer span{font-weight:700;margin:3px 0}footer small{font-size:.72em;margin-top:3px}@media print{html,body{background:#fff}.receipt{box-shadow:none}}
     </style></head><body>${Array.from({ length: receiptCount }, (_, index) => receipt(index + 1)).join("")}<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),180));<\/script></body></html>`;
   }
 

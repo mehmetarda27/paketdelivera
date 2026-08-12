@@ -68,6 +68,12 @@ test("new restaurant design filters closed orders and subscribes to named live e
     assert.match(printedHtml, /@page\{size:58mm auto/);
     assert.match(printedHtml, /DELIVERA <span>EXPRESS<\/span>/);
     assert.match(printedHtml, /Delivera Express altyapısıyla yönetilmektedir/);
+    assert.match(printedHtml, /SİPARİŞ İÇERİĞİ/);
+    assert.match(printedHtml, /2× Tantuni/);
+    assert.match(printedHtml, /Birim: 125,00 ₺/);
+    assert.match(printedHtml, /250,00 ₺/);
+    assert.match(printedHtml, /Ekstra: Kaşar/);
+    assert.match(printedHtml, /Not: Acısız/);
     hooks.connectStream();
     ["order:new", "package-created", "package-assigned", "package-status", "courier-location", "courier-availability", "workspace-update"].forEach((type) => assert.ok(eventTypes.has(type), type));
 
