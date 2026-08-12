@@ -153,8 +153,9 @@ test("Posentegra restaurant rejection is idempotent and retries through the dura
     async cancelOrder(orderId, reason, meta) {
       calls += 1;
       assert.equal(orderId, "pid_reject");
-      assert.equal(reason, "Ürün tükendi.");
+      assert.equal(reason, "TECHNICAL_PROBLEM");
       assert.equal(meta.sourcePlatform, "Trendyol Yemek");
+      assert.equal(meta.note, "Ürün tükendi.");
       if (calls === 1) throw new Error("temporary cancellation outage");
       return { ok: true, status: 200 };
     },

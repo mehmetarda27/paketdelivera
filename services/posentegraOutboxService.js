@@ -116,10 +116,12 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     if (!client.configured() || !trimmed(packageId) || !trimmed(orderId)) {
       return null;
     }
+    const cancellationNote = trimmed(reason) || "Restoran siparişi reddetti.";
     return enqueue(EVENT_TYPES.ORDER_CANCEL, packageId, {
       orderId,
-      reason: trimmed(reason) || "Restoran siparişi reddetti.",
-      meta,
+      // FastSiparis sabit neden kodu bekler; insan açıklaması note alanında kalır.
+      reason: "TECHNICAL_PROBLEM",
+      meta: { ...meta, note: trimmed(meta.note) || cancellationNote },
     }, `order.cancel:${packageId}`);
   }
 

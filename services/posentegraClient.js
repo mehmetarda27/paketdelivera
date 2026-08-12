@@ -233,7 +233,13 @@ async function getCancelReasons(orderId) {
 async function cancelOrder(orderId, reason, meta = {}) {
   return request(`/web-api/v1/orders/cancel/${encodeURIComponent(orderId)}`, {
     method: "POST",
-    body: { reason, ...meta },
+    // FastSiparis iptal sozlesmesi yalnizca reason ve opsiyonel note kabul eder.
+    // packageId/reconciliation gibi yerel idempotency metadatasini dis API'ye
+    // gondermek bazi platformlarda 4xx/5xx ile reddedilmeye yol aciyor.
+    body: {
+      reason,
+      ...(meta.note ? { note: meta.note } : {}),
+    },
     retryable: true,
     idempotencyKey: `cancel:${orderId}:${meta.packageId || ""}`,
   });

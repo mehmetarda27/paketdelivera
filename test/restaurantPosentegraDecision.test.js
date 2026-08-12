@@ -285,8 +285,10 @@ test("restaurant approve/reject routes every supported source through an isolate
 
       const rejectedCalls = mock.calls.filter((call) => call.url === `/web-api/v1/orders/cancel/pid-${slug}-reject`);
       assert.equal(rejectedCalls.length, 1);
-      assert.equal(rejectedCalls[0].body.sourcePlatform, platform);
-      assert.equal(rejectedCalls[0].body.reason, `${platform} restoran reddi`);
+      assert.deepEqual(rejectedCalls[0].body, {
+        reason: "TECHNICAL_PROBLEM",
+        note: `${platform} restoran reddi`,
+      });
       assert.equal(rejectedCalls[0].headers["idempotency-key"], `cancel:pid-${slug}-reject:pkg_${slug}_reject`);
 
       assert.equal(withDb(dbFile, (db) => db.prepare("SELECT status FROM platform_orders WHERE id = ?").get(`por_${slug}_approve`).status), "approved");

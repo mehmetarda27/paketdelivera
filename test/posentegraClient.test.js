@@ -55,3 +55,32 @@ test("change-status follows the Postman contract without body, duplicate prefix,
     await new Promise((resolve) => mock.server.close(resolve));
   }
 });
+
+test("cancel follows the Postman contract and keeps local metadata out of the request body", async () => {
+  const mock = await startMock();
+  const previousBase = process.env.POSENTEGRA_API_BASE_URL;
+  const previousKey = process.env.POSENTEGRA_API_KEY;
+  process.env.POSENTEGRA_API_BASE_URL = `${mock.origin}/web-api/v1`;
+  process.env.POSENTEGRA_API_KEY = "test-key";
+  try {
+    await client.cancelOrder("pid-cancel", "TECHNICAL_PROBLEM", {
+      note: "Operasyon iptali",
+      packageId: "pkg-local-only",
+      reconciliation: true,
+    });
+
+    assert.equal(mock.calls.length, 1);
+    assert.equal(mock.calls[0].url, "/web-api/v1/orders/cancel/pid-cancel");
+    assert.deepEqual(JSON.parse(mock.calls[0].raw), {
+      reason: "TECHNICAL_PROBLEM",
+      note: "Operasyon iptali",
+    });
+    assert.equal(mock.calls[0].headers["idempotency-key"], "cancel:pid-cancel:pkg-local-only");
+  } finally {
+    if (previousBase === undefined) delete process.env.POSENTEGRA_API_BASE_URL;
+    else process.env.POSENTEGRA_API_BASE_URL = previousBase;
+    if (previousKey === undefined) delete process.env.POSENTEGRA_API_KEY;
+    else process.env.POSENTEGRA_API_KEY = previousKey;
+    await new Promise((resolve) => mock.server.close(resolve));
+  }
+});
