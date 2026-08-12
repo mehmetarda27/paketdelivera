@@ -6,7 +6,7 @@ const { createPosentegraOutboxService } = require("../services/posentegraOutboxS
 function testDb() {
   const db = new DatabaseSync(":memory:");
   db.exec(`
-    CREATE TABLE packages (id TEXT PRIMARY KEY, posentegra_id TEXT, updated_at TEXT);
+    CREATE TABLE packages (id TEXT PRIMARY KEY, posentegra_id TEXT, status TEXT, failure_reason TEXT, updated_at TEXT);
     CREATE TABLE posentegra_outbox (
       id TEXT PRIMARY KEY,
       event_type TEXT NOT NULL,
@@ -216,6 +216,89 @@ test("Posentegra outbox immediately drains work queued during an active sweep", 
   assert.equal(
     db.prepare("SELECT status FROM posentegra_outbox WHERE dedupe_key = ?").get("order.status:pkg_fast:delivered").status,
     "completed"
+  );
+  db.close();
+});
+
+test("Posentegra reconciliation skips remote-completed steps and sends only the missing delivered step", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, status, updated_at) VALUES (?, ?, ?, ?)")
+    .run("pkg_reconcile", "pid_reconcile", "delivered", new Date().toISOString());
+  const sent = [];
+  let remoteCode = 500;
+  const client = {
+    configured: () => true,
+    async getOrder(orderId) {
+      assert.equal(orderId, "pid_reconcile");
+      return { responseBody: { data: { status: remoteCode } } };
+    },
+    async changeOrderStatus(orderId, status) {
+      assert.equal(orderId, "pid_reconcile");
+      sent.push(status);
+      remoteCode = 600;
+      return { ok: true, status: 200 };
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_reconcile", orderId: "pid_reconcile", status: "accepted" });
+  outbox.enqueueStatus({ packageId: "pkg_reconcile", orderId: "pid_reconcile", status: "on_the_way" });
+  outbox.enqueueStatus({ packageId: "pkg_reconcile", orderId: "pid_reconcile", status: "delivered" });
+  db.prepare("UPDATE posentegra_outbox SET status = 'dead_letter' WHERE dedupe_key = ?")
+    .run("order.status:pkg_reconcile:accepted");
+
+  const result = await outbox.reconcilePackage("pkg_reconcile");
+
+  assert.deepEqual(sent, ["delivered"]);
+  assert.equal(result.remoteBefore, 500);
+  assert.equal(result.remoteAfter, 600);
+  assert.equal(result.action, "advanced_and_verified");
+  assert.deepEqual(
+    db.prepare("SELECT DISTINCT status FROM posentegra_outbox WHERE aggregate_id = ?").all("pkg_reconcile").map((row) => row.status),
+    ["completed"]
+  );
+  db.close();
+});
+
+test("Posentegra reconciliation cancels a locally cancelled package without advancing pending status rows", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, status, failure_reason, updated_at) VALUES (?, ?, ?, ?, ?)")
+    .run("pkg_cancelled", "pid_cancelled", "cancelled", "Admin iptal etti", new Date().toISOString());
+  let remoteCode = 400;
+  let cancelCalls = 0;
+  let statusCalls = 0;
+  const client = {
+    configured: () => true,
+    async getOrder(orderId) {
+      assert.equal(orderId, "pid_cancelled");
+      return { responseBody: { data: { status: remoteCode } } };
+    },
+    async cancelOrder(orderId, reason, meta) {
+      assert.equal(orderId, "pid_cancelled");
+      assert.equal(reason, "Admin iptal etti");
+      assert.equal(meta.reconciliation, true);
+      cancelCalls += 1;
+      remoteCode = 1600;
+      return { ok: true, status: 200 };
+    },
+    async changeOrderStatus() {
+      statusCalls += 1;
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_cancelled", orderId: "pid_cancelled", status: "accepted" });
+  outbox.enqueueStatus({ packageId: "pkg_cancelled", orderId: "pid_cancelled", status: "on_the_way" });
+  db.prepare("UPDATE posentegra_outbox SET status = 'dead_letter' WHERE dedupe_key = ?")
+    .run("order.status:pkg_cancelled:accepted");
+
+  const result = await outbox.reconcilePackage("pkg_cancelled");
+
+  assert.equal(cancelCalls, 1);
+  assert.equal(statusCalls, 0);
+  assert.equal(result.remoteAfter, 1600);
+  assert.equal(result.action, "cancelled");
+  assert.deepEqual(
+    db.prepare("SELECT DISTINCT status FROM posentegra_outbox WHERE aggregate_id = ?").all("pkg_cancelled").map((row) => row.status),
+    ["completed"]
   );
   db.close();
 });

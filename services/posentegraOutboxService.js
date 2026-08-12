@@ -30,6 +30,30 @@ function statusRank(status) {
   return 99;
 }
 
+function remoteStatusCode(result) {
+  const body = result?.responseBody || {};
+  const order = body.data?.order || body.data || body.order || body;
+  const value = order.statusCode ?? order.status_code ?? order.status?.code ?? order.status;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function remoteStatusRank(code) {
+  if (code === 600) return 3;
+  if (code === 500) return 2;
+  if (code === 400) return 1;
+  if ([100, 200, 300].includes(code)) return 0;
+  return null;
+}
+
+function desiredStatusRank(status) {
+  const normalized = trimmed(status).toLowerCase();
+  if (["delivered", "completed"].includes(normalized)) return 3;
+  if (["on_route", "on_the_way", "picked_up"].includes(normalized)) return 2;
+  if (["accepted_by_courier", "accepted", "assigned"].includes(normalized)) return 1;
+  return null;
+}
+
 function responseId(result) {
   const body = result?.responseBody || {};
   return trimmed(body.id || body.pid || body.orderId || body.order_id || body.data?.id || body.data?.pid);
@@ -236,6 +260,178 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     }
   }
 
+  async function reconcilePackage(packageId) {
+    const aggregateId = trimmed(packageId);
+    if (!client.configured()) {
+      const error = new Error("Posentegra baglantisi yapilandirilmamis.");
+      error.statusCode = 503;
+      throw error;
+    }
+    if (!aggregateId) {
+      const error = new Error("Paket kimligi zorunludur.");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (processing) {
+      const error = new Error("Posentegra kuyrugu su anda isleniyor; guvenli uzlastirma icin tekrar deneyin.");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    processing = true;
+    try {
+      const packageRow = db.prepare(`
+        SELECT id, posentegra_id, status, failure_reason
+        FROM packages WHERE id = ?
+      `).get(aggregateId);
+      if (!packageRow) {
+        const error = new Error("Paket bulunamadi.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const orderId = trimmed(packageRow.posentegra_id);
+      if (!orderId) {
+        const error = new Error("Paketin Posentegra pid bilgisi bulunamadi.");
+        error.statusCode = 409;
+        throw error;
+      }
+      const rows = db.prepare(`
+        SELECT * FROM posentegra_outbox
+        WHERE aggregate_id = ? AND event_type = ?
+        ORDER BY created_at ASC
+      `).all(aggregateId, EVENT_TYPES.ORDER_STATUS);
+      if (!rows.length) {
+        const error = new Error("Paket icin uzlastirilacak durum olayi bulunamadi.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      let remoteResult = await client.getOrder(orderId);
+      const beforeCode = remoteStatusCode(remoteResult);
+      const localStatus = trimmed(packageRow.status).toLowerCase();
+      const cancelledLocally = ["cancelled", "canceled", "rejected"].includes(localStatus);
+
+      if (cancelledLocally) {
+        if (beforeCode !== 1600) {
+          await client.cancelOrder(
+            orderId,
+            trimmed(packageRow.failure_reason) || "Delivera operasyonu tarafindan iptal edildi.",
+            { packageId: aggregateId, reconciliation: true }
+          );
+          remoteResult = await client.getOrder(orderId);
+        }
+        const verifiedCode = remoteStatusCode(remoteResult);
+        if (verifiedCode !== 1600) {
+          const error = new Error(`Posentegra iptali dogrulanamadi (uzak durum: ${verifiedCode ?? "bilinmiyor"}).`);
+          error.statusCode = 502;
+          throw error;
+        }
+        const stamp = nowIso();
+        db.prepare(`
+          UPDATE posentegra_outbox
+          SET status = 'completed', completed_at = COALESCE(completed_at, ?), next_attempt_at = NULL,
+              locked_at = NULL, last_error = NULL, updated_at = ?
+          WHERE aggregate_id = ? AND event_type = ? AND status != 'completed'
+        `).run(stamp, stamp, aggregateId, EVENT_TYPES.ORDER_STATUS);
+        return {
+          packageId: aggregateId,
+          orderId,
+          localStatus,
+          remoteBefore: beforeCode,
+          remoteAfter: verifiedCode,
+          action: beforeCode === 1600 ? "already_cancelled" : "cancelled",
+          reconciledRows: rows.filter((row) => row.status !== "completed").length,
+        };
+      }
+
+      const desiredRank = desiredStatusRank(localStatus);
+      let currentRank = remoteStatusRank(beforeCode);
+      if (desiredRank === null || currentRank === null) {
+        const error = new Error(`Durumlar guvenli uzlastirmaya uygun degil (yerel: ${localStatus || "bos"}, uzak: ${beforeCode ?? "bilinmiyor"}).`);
+        error.statusCode = 409;
+        throw error;
+      }
+      if (beforeCode === 1600) {
+        const error = new Error("Posentegra siparisi iptal durumda; yerel paket ilerletilemez.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const sentStatuses = [];
+      while (currentRank < desiredRank) {
+        const nextRank = currentRank + 1;
+        const candidate = rows.find((row) => statusRank(parseJson(row.payload_json, {}).status) === nextRank);
+        if (!candidate) {
+          const error = new Error(`Eksik Posentegra kuyruk adimi var (hedef seviye: ${nextRank}).`);
+          error.statusCode = 409;
+          throw error;
+        }
+        const payload = parseJson(candidate.payload_json, {});
+        try {
+          await client.changeOrderStatus(orderId, payload.status, {
+            ...(payload.meta || {}),
+            packageId: aggregateId,
+            reconciliation: true,
+          });
+          remoteResult = await client.getOrder(orderId);
+        } catch (error) {
+          const stamp = nowIso();
+          db.prepare(`
+            UPDATE posentegra_outbox
+            SET status = 'dead_letter', attempts = attempts + 1, next_attempt_at = NULL,
+                locked_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ?
+          `).run(`Uzlastirma belirsiz: ${String(error.message || error).slice(0, 900)}`, stamp, candidate.id);
+          throw error;
+        }
+        const verifiedCode = remoteStatusCode(remoteResult);
+        const verifiedRank = remoteStatusRank(verifiedCode);
+        if (verifiedRank === null || verifiedRank < nextRank) {
+          const error = new Error(`Posentegra durum ilerlemesi dogrulanamadi (uzak durum: ${verifiedCode ?? "bilinmiyor"}).`);
+          error.statusCode = 502;
+          const stamp = nowIso();
+          db.prepare(`
+            UPDATE posentegra_outbox
+            SET status = 'dead_letter', next_attempt_at = NULL, locked_at = NULL,
+                last_error = ?, updated_at = ? WHERE id = ?
+          `).run(error.message, stamp, candidate.id);
+          throw error;
+        }
+        sentStatuses.push(payload.status);
+        currentRank = verifiedRank;
+      }
+
+      const afterCode = remoteStatusCode(remoteResult);
+      const stamp = nowIso();
+      for (const row of rows) {
+        const rank = statusRank(parseJson(row.payload_json, {}).status);
+        if (rank <= currentRank && row.status !== "completed") {
+          db.prepare(`
+            UPDATE posentegra_outbox
+            SET status = 'completed', completed_at = COALESCE(completed_at, ?), next_attempt_at = NULL,
+                locked_at = NULL, last_error = NULL, updated_at = ? WHERE id = ?
+          `).run(stamp, stamp, row.id);
+        }
+      }
+      return {
+        packageId: aggregateId,
+        orderId,
+        localStatus,
+        remoteBefore: beforeCode,
+        remoteAfter: afterCode,
+        action: sentStatuses.length ? "advanced_and_verified" : "already_reconciled",
+        sentStatuses,
+        reconciledRows: rows.filter((row) => statusRank(parseJson(row.payload_json, {}).status) <= currentRank && row.status !== "completed").length,
+      };
+    } finally {
+      processing = false;
+      if (rerunRequested) {
+        rerunRequested = false;
+        setImmediate(() => processDue().catch((error) => logger?.warn?.("Posentegra outbox post-reconcile sweep failed", { error: error.message })));
+      }
+    }
+  }
+
   function health() {
     const counts = db.prepare(`
       SELECT status, COUNT(*) AS count FROM posentegra_outbox GROUP BY status
@@ -252,6 +448,7 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     enqueueStatus,
     enqueueCancellation,
     processDue,
+    reconcilePackage,
     health,
   };
 }

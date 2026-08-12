@@ -11836,6 +11836,35 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  const posentegraOutboxReconcileMatch = pathname.match(/^\/api\/admin\/posentegra-outbox\/packages\/([^/]+)\/reconcile$/);
+  if (req.method === "POST" && posentegraOutboxReconcileMatch) {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const retryAfter = await applyRateLimit(req, "adminWrites", RATE_LIMITS.adminWrites);
+    if (retryAfter !== null) {
+      sendRateLimited(res, retryAfter);
+      return;
+    }
+    const packageId = decodeURIComponent(posentegraOutboxReconcileMatch[1]);
+    try {
+      const result = await posentegraOutbox.reconcilePackage(packageId);
+      writeAuditLog({
+        actorRole: "admin",
+        actorId: adminActorId(adminSession),
+        action: "posentegra_outbox_package_reconciled",
+        details: result,
+      });
+      sendJson(res, 200, { ok: true, result });
+    } catch (error) {
+      logger.warn("Posentegra package reconciliation failed", { packageId, error: error.message });
+      sendJson(res, Number(error.statusCode) || 502, { error: error.message });
+    }
+    return;
+  }
+
   const posentegraOutboxRetryMatch = pathname.match(/^\/api\/admin\/posentegra-outbox\/([^/]+)\/retry$/);
   if (req.method === "POST" && posentegraOutboxRetryMatch) {
     const adminSession = getAdminSession(req);
