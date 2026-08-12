@@ -274,7 +274,8 @@ test("Posentegra reconciliation cancels a locally cancelled package without adva
     },
     async cancelOrder(orderId, reason, meta) {
       assert.equal(orderId, "pid_cancelled");
-      assert.equal(reason, "Admin iptal etti");
+      assert.equal(reason, "TECHNICAL_PROBLEM");
+      assert.equal(meta.note, "Admin iptal etti");
       assert.equal(meta.reconciliation, true);
       cancelCalls += 1;
       remoteCode = 1600;

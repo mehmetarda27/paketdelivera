@@ -317,10 +317,11 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
 
       if (cancelledLocally) {
         if (beforeCode !== 1600) {
+          const cancellationNote = trimmed(packageRow.failure_reason) || "Delivera operasyonu tarafindan iptal edildi.";
           await client.cancelOrder(
             orderId,
-            trimmed(packageRow.failure_reason) || "Delivera operasyonu tarafindan iptal edildi.",
-            { packageId: aggregateId, reconciliation: true }
+            "TECHNICAL_PROBLEM",
+            { note: cancellationNote, packageId: aggregateId, reconciliation: true }
           );
           remoteResult = await client.getOrder(orderId);
         }
