@@ -39,6 +39,10 @@ function remoteStatusCode(result) {
 }
 
 function remoteStatusRank(code) {
+  // FastSiparis can expose a provider-confirmed terminal delivery as 900
+  // after change-status, even though the transition response documents 600.
+  // Cancellation remains the distinct 1600 terminal state.
+  if (code === 900) return 3;
   if (code === 600) return 3;
   if (code === 500) return 2;
   if (code === 400) return 1;

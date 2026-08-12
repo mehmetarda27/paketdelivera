@@ -302,3 +302,32 @@ test("Posentegra reconciliation cancels a locally cancelled package without adva
   );
   db.close();
 });
+
+test("Posentegra reconciliation treats provider terminal 900 as delivered without sending again", async () => {
+  const db = testDb();
+  db.prepare("INSERT INTO packages (id, posentegra_id, status, updated_at) VALUES (?, ?, ?, ?)")
+    .run("pkg_terminal_900", "pid_terminal_900", "delivered", new Date().toISOString());
+  let statusCalls = 0;
+  const client = {
+    configured: () => true,
+    async getOrder() {
+      return { responseBody: { data: { status: 900, providerResponse: { packageStatus: "Delivered" } } } };
+    },
+    async changeOrderStatus() {
+      statusCalls += 1;
+    },
+  };
+  const outbox = createPosentegraOutboxService({ db, client, logger: { warn() {} } });
+  outbox.enqueueStatus({ packageId: "pkg_terminal_900", orderId: "pid_terminal_900", status: "accepted" });
+  outbox.enqueueStatus({ packageId: "pkg_terminal_900", orderId: "pid_terminal_900", status: "on_the_way" });
+  outbox.enqueueStatus({ packageId: "pkg_terminal_900", orderId: "pid_terminal_900", status: "delivered" });
+
+  const result = await outbox.reconcilePackage("pkg_terminal_900");
+
+  assert.equal(statusCalls, 0);
+  assert.equal(result.remoteBefore, 900);
+  assert.equal(result.remoteAfter, 900);
+  assert.equal(result.action, "already_reconciled");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM posentegra_outbox WHERE status != 'completed'").get().count, 0);
+  db.close();
+});

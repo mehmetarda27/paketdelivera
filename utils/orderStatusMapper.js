@@ -8,7 +8,9 @@ const STATUS_MAP = new Map([
   ["500", { status: "on_route", statusText: "on_the_way" }],
   ["600", { status: "delivered", statusText: "delivered" }],
   ["1600", { status: "cancelled", statusText: "cancelled" }],
-  ["900", { status: "pending", statusText: "completed_or_cancelled_unknown" }],
+  // Canli FastSiparis yaniti, kaynak platformda Delivered olduktan sonra 900 donuyor.
+  // Iptal ayri ve kesin olarak 1600 koduyla temsil ediliyor.
+  ["900", { status: "delivered", statusText: "delivered" }],
   ["new", { status: "pending", statusText: "new" }],
   ["accepted", { status: "preparing", statusText: "accepted" }],
   ["preparing", { status: "preparing", statusText: "preparing" }],
