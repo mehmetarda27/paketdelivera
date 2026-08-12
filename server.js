@@ -286,6 +286,7 @@ const STATUS_TRANSITIONS = {
 const KNOWN_PACKAGE_STATUSES = new Set(Object.keys(STATUS_TRANSITIONS));
 const PLATFORM_POLL_INTERVAL_MS = Number(process.env.DELIVERA_PLATFORM_POLLING_INTERVAL_MS || process.env.DELIVERA_PLATFORM_POLL_INTERVAL_MS || 30_000);
 const PLATFORM_POLLING_ENABLED = ["1", "true", "yes"].includes(String(process.env.DELIVERA_PLATFORM_POLLING_ENABLED || "").toLowerCase());
+const POSENTEGRA_INBOUND_SYNC_INTERVAL_MS = Math.max(5_000, Number(process.env.POSENTEGRA_INBOUND_SYNC_INTERVAL_MS || 30_000));
 const ASSIGNMENT_DEBUG_LOGS = ["1", "true", "yes"].includes(String(process.env.DELIVERA_ASSIGNMENT_DEBUG || "").toLowerCase());
 const PLATFORM_ORDER_STATUSES = new Set(["pending_approval", "approved", "assigned", "completed", "cancelled"]);
 const COURIER_ALLOWED_STATUSES = new Set([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS, DELIVERED_STATUS, FAILED_STATUS]);
@@ -2999,6 +3000,32 @@ function persistRefreshToken(actorRole, actorId, refreshToken, req) {
   );
 
   return expiresAt.toISOString();
+}
+
+function platformOrderStatusForPackageStatus(status, fallback = "approved") {
+  const normalized = normalizeStatus(status);
+  if (normalized === DELIVERED_STATUS) return "completed";
+  if ([CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(normalized)) return "cancelled";
+  if ([ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(normalized)) return "assigned";
+  return fallback;
+}
+
+function shouldApplyIncomingPlatformStatus(currentStatus, incomingStatus) {
+  const current = normalizeStatus(currentStatus);
+  const incoming = normalizeStatus(incomingStatus);
+  if (current === incoming) return false;
+  if ([DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS].includes(current)) return false;
+  if ([DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(incoming)) return true;
+  const rank = {
+    [PENDING_APPROVAL_STATUS]: 0,
+    [PENDING_STATUS]: 0,
+    [PREPARING_STATUS]: 1,
+    [AWAITING_ASSIGNMENT_STATUS]: 1,
+    [ASSIGNED_STATUS]: 2,
+    [ACCEPTED_BY_COURIER_STATUS]: 3,
+    [ON_ROUTE_STATUS]: 4,
+  };
+  return Number(rank[incoming] ?? -1) > Number(rank[current] ?? -1);
 }
 
 function cleanupActorSessions(actorRole, actorId) {
@@ -7983,6 +8010,76 @@ function enqueuePosentegraStatusChange(packageRow, nextStatus, req) {
   return row;
 }
 
+let posentegraInboundSyncRunning = false;
+
+function posentegraRemoteStatus(responseBody = {}) {
+  const data = responseBody?.data || responseBody;
+  return data?.order?.status ?? data?.status ?? responseBody?.order?.status ?? responseBody?.status;
+}
+
+async function syncPosentegraInboundStatuses() {
+  if (!posentegraClient.configured() || posentegraInboundSyncRunning) return { processed: 0, skipped: true };
+  posentegraInboundSyncRunning = true;
+  let processed = 0;
+  try {
+    const activeRows = db.prepare(`
+      SELECT * FROM packages
+      WHERE posentegra_id IS NOT NULL AND posentegra_id != ''
+        AND status NOT IN (?, ?, ?, ?)
+      ORDER BY datetime(updated_at) ASC
+      LIMIT 100
+    `).all(DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS);
+    for (const row of activeRows) {
+      try {
+        const result = await posentegraClient.getOrder(row.posentegra_id);
+        const remoteRawStatus = posentegraRemoteStatus(result.responseBody);
+        if (remoteRawStatus === undefined || remoteRawStatus === null || remoteRawStatus === "") continue;
+        const incomingStatus = mapOrderStatus(remoteRawStatus).status;
+        if (!shouldApplyIncomingPlatformStatus(row.status, incomingStatus)) continue;
+        updatePackageLifecycle(row.id, { status: incomingStatus }, {
+          status: row.status,
+          paymentMethod: row.payment_method,
+          paymentStatus: row.payment_status,
+          failureReason: row.failure_reason,
+          assignedCourierId: row.assigned_courier_id,
+          assignedCourierName: row.assigned_courier_name,
+          assignedAt: row.assigned_at,
+          acceptedAt: row.accepted_at,
+          onRouteAt: row.on_route_at,
+          deliveredAt: row.delivered_at,
+          failedAt: row.failed_at,
+          lastAssignmentAttemptAt: row.last_assignment_attempt_at,
+          lastAssignmentError: row.last_assignment_error,
+          paymentCollectedBy: row.payment_collected_by,
+          collectedAmount: row.collected_amount,
+          courierCollectionNote: row.courier_collection_note,
+          orderAmount: row.order_amount,
+        }, { skipPosentegraStatusSync: true });
+        const updated = getPackageById(row.id);
+        updatePlatformOrderStatusByPackage(updated || row, platformOrderStatusForPackageStatus(incomingStatus));
+        broadcastLiveEvent({
+          type: "package-status",
+          restaurantId: row.restaurant_id,
+          courierId: row.assigned_courier_id,
+          message: `Platform siparis durumu ${incomingStatus} olarak guncellendi.`,
+          orderId: row.id,
+        });
+        processed += 1;
+      } catch (error) {
+        logger.warn("Posentegra inbound status sync failed", {
+          packageId: row.id,
+          posentegraId: row.posentegra_id,
+          error: error.message,
+        });
+      }
+    }
+    if (processed > 0) rebalancePackages();
+    return { processed, selected: activeRows.length };
+  } finally {
+    posentegraInboundSyncRunning = false;
+  }
+}
+
 function enqueuePosentegraRestaurantDecision(packageRow, action, reason, req) {
   if (!packageRow || !isPlatformBackedPackage(packageRow) || !posentegraClient.configured()) {
     return null;
@@ -9044,7 +9141,7 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       UPDATE packages
       SET source_platform = ?, external_order_no = ?, recipient = ?, phone = ?, address = ?, delivery_address = ?,
           payment_method = ?, order_amount = ?, customer_lat = ?, customer_lng = ?, customer_address = ?,
-          customer_note = ?, note = ?, items_json = ?, status = ?, assignment_status = ?,
+          customer_note = ?, note = ?, items_json = ?,
           platform_restaurant_id = COALESCE(NULLIF(?, ''), platform_restaurant_id),
           posentegra_id = COALESCE(NULLIF(?, ''), posentegra_id), updated_at = ?
       WHERE id = ?
@@ -9063,13 +9160,35 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       order.clientNote || existing.customer_note,
       order.clientNote ? `Platform notu: ${order.clientNote}` : existing.note,
       json(apiPackageDraftFromWebhook(order, restaurant).items),
-      nextStatus,
-      nextAssignmentStatus,
       order.externalRestaurantId || "",
       order.posentegraId || "",
       nowIso(),
       existing.id
     );
+    if (!historicalReplay && shouldApplyIncomingPlatformStatus(existingStatus, nextStatus)) {
+      updatePackageLifecycle(existing.id, {
+        status: nextStatus,
+        assignmentStatus: nextAssignmentStatus,
+      }, {
+        status: existing.status,
+        paymentMethod: existing.payment_method,
+        paymentStatus: existing.payment_status,
+        failureReason: existing.failure_reason,
+        assignedCourierId: existing.assigned_courier_id,
+        assignedCourierName: existing.assigned_courier_name,
+        assignedAt: existing.assigned_at,
+        acceptedAt: existing.accepted_at,
+        onRouteAt: existing.on_route_at,
+        deliveredAt: existing.delivered_at,
+        failedAt: existing.failed_at,
+        lastAssignmentAttemptAt: existing.last_assignment_attempt_at,
+        lastAssignmentError: existing.last_assignment_error,
+        paymentCollectedBy: existing.payment_collected_by,
+        collectedAmount: existing.collected_amount,
+        courierCollectionNote: existing.courier_collection_note,
+        orderAmount: existing.order_amount,
+      }, { skipPosentegraStatusSync: true });
+    }
     if (historicalReplay) {
       const replayedAt = nowIso();
       db.prepare(`
@@ -9110,7 +9229,10 @@ function upsertWebhookPackage(order, restaurant, options = {}) {
       totalPrice: order.discountedPrice || order.totalPrice,
       customerNote: order.clientNote,
       rawPayload: order.rawPayload,
-    }, restaurant.id, order.posentegraId ? "approved" : (order.statusText || "pending_approval"), {
+    }, restaurant.id, platformOrderStatusForPackageStatus(
+      getPackageById(existing.id)?.status || nextStatus,
+      order.posentegraId ? "approved" : (order.statusText || "pending_approval")
+    ), {
       requestId: options.requestId || null,
       platformRestaurantId: order.externalRestaurantId,
       posentegraId: order.posentegraId,
@@ -10178,10 +10300,12 @@ function lifecycleColumnsForStatus(status, current = {}) {
   };
 }
 
-function updatePackageLifecycle(packageId, updates, current = {}) {
+function updatePackageLifecycle(packageId, updates, current = {}, options = {}) {
   const status = normalizeStatus(updates.status || current.status);
   const lifecycle = lifecycleColumnsForStatus(status, current);
-  const paymentStatus = normalizePaymentStatus(updates.paymentStatus || current.paymentStatus, updates.paymentMethod || current.paymentMethod);
+  const storedPaymentMethod = db.prepare("SELECT payment_method FROM packages WHERE id = ?").get(packageId)?.payment_method;
+  const paymentMethod = trimmed(updates.paymentMethod ?? updates.payment_method ?? current.paymentMethod ?? current.payment_method ?? storedPaymentMethod);
+  const paymentStatus = normalizePaymentStatus(updates.paymentStatus || current.paymentStatus, paymentMethod);
   const collectedAmount = updates.collectedAmount !== undefined
     ? normalizeMoney(updates.collectedAmount)
     : ([CASH_COLLECTED_PAYMENT_STATUS, CREDIT_CARD_COLLECTED_PAYMENT_STATUS, PAID_ONLINE_PAYMENT_STATUS, RESTAURANT_COLLECTED_PAYMENT_STATUS, COLLECTED_PAYMENT_STATUS].includes(paymentStatus)
@@ -10189,13 +10313,14 @@ function updatePackageLifecycle(packageId, updates, current = {}) {
       : normalizeMoney(current.collectedAmount || 0));
   db.prepare(`
     UPDATE packages
-    SET status = ?, assignment_status = ?, payment_status = ?, failure_reason = ?, assigned_courier_id = ?, assigned_courier_name = ?,
+    SET status = ?, assignment_status = ?, payment_method = ?, payment_status = ?, failure_reason = ?, assigned_courier_id = ?, assigned_courier_name = ?,
         assigned_at = ?, accepted_at = ?, on_route_at = ?, delivered_at = ?, failed_at = ?, last_assignment_attempt_at = ?,
         last_assignment_error = ?, payment_collected_by = ?, collected_amount = ?, courier_collection_note = ?, updated_at = ?
     WHERE id = ?
   `).run(
     status,
     updates.assignmentStatus || lifecycle.assignmentStatus,
+    paymentMethod,
     paymentStatus,
     updates.failureReason ?? current.failureReason ?? null,
     updates.assignedCourierId ?? current.assignedCourierId ?? null,
@@ -10213,7 +10338,7 @@ function updatePackageLifecycle(packageId, updates, current = {}) {
     nowIso(),
     packageId
   );
-  if (normalizeStatus(current.status) !== status) {
+  if (normalizeStatus(current.status) !== status && !options.skipPosentegraStatusSync) {
     const updatedPackage = db.prepare("SELECT * FROM packages WHERE id = ?").get(packageId);
     enqueuePosentegraStatusChange(updatedPackage, status);
   }
@@ -11518,10 +11643,14 @@ async function handleApi(req, res, pathname) {
           duplicate: result.duplicate,
         },
       });
+      const webhookEventType = result.duplicate ? "package-status" : "order:new";
       broadcastLiveEvent({
-        type: "order:new",
+        type: webhookEventType,
         restaurantId: restaurant.id,
-        message: `Yeni ${order.platform} siparisi geldi.`,
+        courierId: createdPackage?.assignedCourierId || null,
+        message: result.duplicate
+          ? `${order.platform} siparis durumu ${createdPackage?.status || order.status} olarak guncellendi.`
+          : `Yeni ${order.platform} siparisi geldi.`,
         orderId: result.packageId,
         platform: order.platform,
         customerName: order.customerName,
@@ -15407,6 +15536,7 @@ async function handleApi(req, res, pathname) {
     let nextPaymentStatus = body.paymentStatus
       ? normalizePaymentStatus(body.paymentStatus, target.payment_method)
       : normalizePaymentStatus(target.payment_status, target.payment_method);
+    let nextPaymentMethod = target.payment_method;
     const collectionNote = trimmed(body.courierCollectionNote ?? body.collectionNote ?? body.note);
 
     if (!isKnownPackageStatus(body.status || target.status)) {
@@ -15544,9 +15674,21 @@ async function handleApi(req, res, pathname) {
       return;
     }
 
+    if (nextStatus === DELIVERED_STATUS) {
+      nextPaymentMethod = {
+        [CASH_COLLECTED_PAYMENT_STATUS]: "Nakit tahsil edildi",
+        [CREDIT_CARD_COLLECTED_PAYMENT_STATUS]: "Kartla tahsil edildi",
+        [RESTAURANT_COLLECTED_PAYMENT_STATUS]: "Restoran tahsil etti",
+        [PAID_ONLINE_PAYMENT_STATUS]: PAYMENT_METHOD_LABELS.paid_online,
+        [COLLECTED_PAYMENT_STATUS]: PAYMENT_METHOD_LABELS.collected,
+        [PAYMENT_ISSUE_STATUS]: PAYMENT_METHOD_LABELS.payment_issue,
+      }[nextPaymentStatus] || target.payment_method;
+    }
+
     updatePackageLifecycle(packageId, {
       status: nextStatus,
       failureReason: courierIssueReported ? failureReason : "",
+      paymentMethod: nextPaymentMethod,
       paymentStatus: nextPaymentStatus,
       paymentCollectedBy: normalizeCollectedBy(nextPaymentStatus, target.payment_collected_by),
       collectedAmount: nextPaymentStatus === PAYMENT_ISSUE_STATUS ? 0 : target.order_amount,
@@ -15594,6 +15736,8 @@ async function handleApi(req, res, pathname) {
         from: currentStatus,
         to: nextStatus,
         failureReason: courierIssueReported ? failureReason : null,
+        paymentMethod: nextPaymentMethod,
+        paymentStatus: nextPaymentStatus,
         courierPackageFeeEligible: courierIssueReported,
       },
     });
@@ -16882,6 +17026,12 @@ setInterval(() => {
 setInterval(() => {
   triggerPosentegraOutbox();
 }, Math.max(5_000, Number(process.env.POSENTEGRA_OUTBOX_POLL_MS || 10_000))).unref();
+
+setInterval(() => {
+  syncPosentegraInboundStatuses().catch((error) => {
+    logger.warn("Posentegra inbound status sweep failed", { error });
+  });
+}, POSENTEGRA_INBOUND_SYNC_INTERVAL_MS).unref();
 
 connectionHealthService = createConnectionHealthService({
   db,

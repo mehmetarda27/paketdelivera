@@ -90,16 +90,42 @@ test("Posentegra webhooks prefer the common restaurant id and safely fall back t
     assert.equal(body.package.restaurantId, "rst_getir_pos");
     assert.equal(body.package.sourcePlatform, "Getir Yemek");
 
+    const progressedStatuses = [400, 500, 600];
+    for (const status of progressedStatuses) {
+      const statusResponse = await fetch(`${baseUrl}/api/webhooks/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-webhook-secret": webhookSecret },
+        body: JSON.stringify({
+          provider: { slug: "getir", api: "getirwh", kaynak: "Getir Yemek" },
+          pid,
+          platformRestaurantId: posentegraRestaurantId,
+          status,
+          customer: { name: "Getir Customer", phone: "05550000006" },
+          deliveryAddress: { address1: "Getir address", district: "Erdemli", city: "Mersin" },
+          totalAmount: 275,
+          items: [{ id: "getir-item-1", name: "Tantuni", quantity: 1, price: 275, totalPrice: 275 }],
+        }),
+      });
+      assert.equal(statusResponse.status, 200);
+    }
+
     const verificationDb = new DatabaseSync(dbFile, { readOnly: true });
     try {
       const row = verificationDb.prepare(`
-        SELECT restaurant_id, platform_restaurant_id, posentegra_id, source_platform
+        SELECT restaurant_id, platform_restaurant_id, posentegra_id, source_platform, status, delivered_at
         FROM packages WHERE id = ?
       `).get(body.package.id);
       assert.equal(row.restaurant_id, "rst_getir_pos");
       assert.equal(row.platform_restaurant_id, posentegraRestaurantId);
       assert.equal(row.posentegra_id, pid);
       assert.equal(row.source_platform, "Getir Yemek");
+      assert.equal(row.status, "delivered");
+      assert.ok(row.delivered_at);
+      assert.equal(
+        verificationDb.prepare("SELECT COUNT(*) AS count FROM posentegra_outbox WHERE aggregate_id = ?").get(body.package.id).count,
+        0,
+        "Posentegra'dan gelen durum tekrar Posentegra'ya gonderilmemeli."
+      );
     } finally {
       verificationDb.close();
     }

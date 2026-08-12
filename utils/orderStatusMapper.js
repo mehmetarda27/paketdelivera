@@ -2,9 +2,12 @@ const STATUS_MAP = new Map([
   ["100", { status: "pending", statusText: "new" }],
   ["200", { status: "preparing", statusText: "accepted" }],
   ["300", { status: "preparing", statusText: "preparing" }],
-  ["400", { status: "on_route", statusText: "on_the_way" }],
-  ["500", { status: "delivered", statusText: "delivered" }],
-  ["600", { status: "cancelled", statusText: "cancelled" }],
+  // FastSiparis ilerletme akisi 300 -> 400 -> 500 -> 600 seklindedir.
+  // 500 yoldaki, 600 teslim edilen siparistir. Iptal ayri olarak 1600 doner.
+  ["400", { status: "accepted_by_courier", statusText: "accepted_by_courier" }],
+  ["500", { status: "on_route", statusText: "on_the_way" }],
+  ["600", { status: "delivered", statusText: "delivered" }],
+  ["1600", { status: "cancelled", statusText: "cancelled" }],
   ["900", { status: "pending", statusText: "completed_or_cancelled_unknown" }],
   ["new", { status: "pending", statusText: "new" }],
   ["accepted", { status: "preparing", statusText: "accepted" }],

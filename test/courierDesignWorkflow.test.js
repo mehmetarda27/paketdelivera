@@ -86,6 +86,15 @@ test("courier design flow accepts, routes, delivers and records a break", { time
     const delivered = workspace.historyPackages.find((pkg) => pkg.id === "pkg_flow");
     assert.equal(delivered.status, "delivered");
     assert.equal(delivered.paymentStatus, "cash_collected");
+    assert.equal(delivered.paymentMethod, "Nakit tahsil edildi");
+    const restaurantLogin = await request(baseUrl, "/api/restaurant/session", "", {
+      method: "POST",
+      body: JSON.stringify({ restaurantId: "rst_flow", apiKey: "flow-api" }),
+    });
+    const restaurantWorkspace = await request(baseUrl, "/api/restaurant/bootstrap", restaurantLogin.token);
+    const restaurantDeliveredPackage = restaurantWorkspace.packages.find((pkg) => pkg.id === "pkg_flow");
+    assert.equal(restaurantDeliveredPackage.paymentStatus, "cash_collected");
+    assert.equal(restaurantDeliveredPackage.paymentMethod, "Nakit tahsil edildi");
     assert.equal(workspace.reportSummary.daily.deliveredCount, 1);
     assert.equal(workspace.reportSummary.weekly.deliveredCount, 1);
     assert.equal(workspace.reportSummary.monthly.deliveredCount, 1);

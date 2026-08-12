@@ -72,6 +72,7 @@ async function stopServer(server) {
 
 function startMockPosentegra() {
   const calls = [];
+  const remoteStatuses = new Map();
   const server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => {
@@ -102,6 +103,13 @@ function startMockPosentegra() {
         res.end(JSON.stringify({ success: true, data: { oldStatus: 500, newStatus: 600 } }));
         return;
       }
+      if (req.method === "GET" && req.url.startsWith("/web-api/v1/orders/")) {
+        const orderId = decodeURIComponent(req.url.split("/").at(-1));
+        if (remoteStatuses.has(orderId)) {
+          res.end(JSON.stringify({ success: true, data: { pid: orderId, status: remoteStatuses.get(orderId) } }));
+          return;
+        }
+      }
       res.statusCode = 404;
       res.end(JSON.stringify({ error: "not found" }));
     });
@@ -111,6 +119,7 @@ function startMockPosentegra() {
       resolve({
         server,
         calls,
+        remoteStatuses,
         baseUrl: `http://127.0.0.1:${server.address().port}`,
       });
     });
@@ -148,6 +157,7 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
       POSENTEGRA_API_BASE_URL: mock.baseUrl,
       POSENTEGRA_API_KEY: "test-api-key",
       POSENTEGRA_BUSINESS_ID: "biz-1",
+      POSENTEGRA_INBOUND_SYNC_INTERVAL_MS: "5000",
       DELIVERA_ASSIGNMENT_RETRY_MS: "60000",
       DELIVERA_COURIER_OFFER_TIMEOUT_MS: "60000",
     },
@@ -409,6 +419,37 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
     assert.equal(
       readRow(dbFile, "SELECT COUNT(*) AS count FROM packages WHERE posentegra_id IS NULL OR posentegra_id = ''").count,
       0
+    );
+
+    const inboundPid = "test-pid-inbound-delivered";
+    const inboundOrder = await request(baseUrl, "/api/webhooks/orders", {
+      method: "POST",
+      headers: { "x-webhook-secret": "test-webhook-secret" },
+      body: JSON.stringify({
+        provider: { slug: "ys", api: "yswh", kaynak: "Yemeksepeti" },
+        pid: inboundPid,
+        restaurantId: "987654321",
+        customerName: "Inbound Delivered Customer",
+        customerPhone: "05550000009",
+        addressText: "Inbound delivered address",
+        totalPrice: 180,
+        paymentMethod: "PAY_WITH_CARD",
+        products: [{ id: "inbound-product", name: "Menu", quantity: 1, price: 180, totalPrice: 180 }],
+      }),
+    });
+    mock.remoteStatuses.set(inboundPid, 600);
+    let inboundRow;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      inboundRow = readRow(dbFile, "SELECT status, delivered_at FROM packages WHERE id = ?", inboundOrder.package.id);
+      if (inboundRow?.status === "delivered") break;
+      await delay(100);
+    }
+    assert.equal(inboundRow.status, "delivered", "Posentegra/Yemeksepeti teslim durumu bizim sisteme alinmadi.");
+    assert.ok(inboundRow.delivered_at);
+    assert.equal(
+      readRow(dbFile, "SELECT COUNT(*) AS count FROM posentegra_outbox WHERE aggregate_id = ?", inboundOrder.package.id).count,
+      0,
+      "Disaridan alinan teslim durumu tekrar Posentegra'ya gonderilmemeli."
     );
   } finally {
     await stopServer(app);

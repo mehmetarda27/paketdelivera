@@ -210,6 +210,10 @@ async function changeOrderStatus(orderId, status, meta = {}) {
   });
 }
 
+async function getOrder(orderId) {
+  return request(`/web-api/v1/orders/${encodeURIComponent(orderId)}`);
+}
+
 async function verifyOrder(orderId) {
   return request(`/web-api/v1/orders/verify/${encodeURIComponent(orderId)}`, { method: "POST", body: {} });
 }
@@ -248,6 +252,7 @@ module.exports = {
   linkRestaurantToBusiness,
   assignPackageToRestaurant,
   changeOrderStatus,
+  getOrder,
   verifyOrder,
   markOrderReported,
   getPendingReports,
