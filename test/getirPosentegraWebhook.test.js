@@ -90,7 +90,7 @@ test("Posentegra webhooks prefer the common restaurant id and safely fall back t
     assert.equal(body.package.restaurantId, "rst_getir_pos");
     assert.equal(body.package.sourcePlatform, "Getir Yemek");
 
-    const progressedStatuses = [400, 500, 600];
+    const progressedStatuses = [400, 500, 600, 700, 800, 900];
     for (const status of progressedStatuses) {
       const statusResponse = await fetch(`${baseUrl}/api/webhooks/orders`, {
         method: "POST",
@@ -110,7 +110,7 @@ test("Posentegra webhooks prefer the common restaurant id and safely fall back t
       const intermediateDb = new DatabaseSync(dbFile, { readOnly: true });
       try {
         const intermediate = intermediateDb.prepare("SELECT status, assigned_courier_id, on_route_at FROM packages WHERE id = ?").get(body.package.id);
-        if (status === 400 || status === 500) {
+        if (status >= 400 && status < 900) {
           assert.equal(intermediate.status, "awaiting_assignment");
           assert.equal(intermediate.assigned_courier_id, null);
           assert.equal(intermediate.on_route_at, null);

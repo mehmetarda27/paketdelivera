@@ -30,13 +30,18 @@ test("Posentegra status outbox does not automatically repeat an ambiguous status
   const db = testDb();
   db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_1", "pid_current", new Date().toISOString());
   let calls = 0;
+  let remoteCode = 700;
   const client = {
     configured: () => true,
+    async getOrder() {
+      return { responseBody: { data: { status: remoteCode } } };
+    },
     async changeOrderStatus(orderId, status) {
       calls += 1;
       assert.equal(orderId, "pid_current");
       assert.equal(status, "delivered");
       if (calls === 1) throw new Error("temporary outage");
+      remoteCode = 900;
       return { ok: true, status: 200, responseBody: { ok: true } };
     },
     async assignPackageToRestaurant() {
@@ -68,10 +73,15 @@ test("Posentegra completed status dedupe key is never sent twice", async () => {
   const db = testDb();
   db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_once", "pid_once", new Date().toISOString());
   let calls = 0;
+  let remoteCode = 700;
   const client = {
     configured: () => true,
+    async getOrder() {
+      return { responseBody: { data: { status: remoteCode } } };
+    },
     async changeOrderStatus() {
       calls += 1;
+      remoteCode = 900;
       return { ok: true, status: 200 };
     },
   };
@@ -91,8 +101,12 @@ test("Posentegra later status waits when an earlier status needs manual review",
   const db = testDb();
   db.prepare("INSERT INTO packages (id, posentegra_id, updated_at) VALUES (?, ?, ?)").run("pkg_ordered", "pid_ordered", new Date().toISOString());
   const statuses = [];
+  let remoteCode = 700;
   const client = {
     configured: () => true,
+    async getOrder() {
+      return { responseBody: { data: { status: remoteCode } } };
+    },
     async changeOrderStatus(orderId, status) {
       assert.equal(orderId, "pid_ordered");
       statuses.push(status);
@@ -192,12 +206,17 @@ test("Posentegra outbox immediately drains work queued during an active sweep", 
   let releaseFirst;
   const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
   const statuses = [];
+  let remoteCode = 700;
   const client = {
     configured: () => true,
+    async getOrder() {
+      return { responseBody: { data: { status: remoteCode } } };
+    },
     async changeOrderStatus(orderId, status) {
       assert.equal(orderId, "pid_fast");
       statuses.push(status);
       if (status === "accepted") await firstGate;
+      if (status === "delivered") remoteCode = 900;
       return { ok: true, status: 200 };
     },
     async assignPackageToRestaurant() {
@@ -221,12 +240,12 @@ test("Posentegra outbox immediately drains work queued during an active sweep", 
   db.close();
 });
 
-test("Posentegra reconciliation skips remote-completed steps and sends only the missing delivered step", async () => {
+test("Posentegra reconciliation advances every missing remote step until terminal delivery 900", async () => {
   const db = testDb();
   db.prepare("INSERT INTO packages (id, posentegra_id, status, updated_at) VALUES (?, ?, ?, ?)")
     .run("pkg_reconcile", "pid_reconcile", "delivered", new Date().toISOString());
   const sent = [];
-  let remoteCode = 500;
+  let remoteCode = 700;
   const client = {
     configured: () => true,
     async getOrder(orderId) {
@@ -236,7 +255,7 @@ test("Posentegra reconciliation skips remote-completed steps and sends only the 
     async changeOrderStatus(orderId, status) {
       assert.equal(orderId, "pid_reconcile");
       sent.push(status);
-      remoteCode = 600;
+      remoteCode += 100;
       return { ok: true, status: 200 };
     },
   };
@@ -249,9 +268,9 @@ test("Posentegra reconciliation skips remote-completed steps and sends only the 
 
   const result = await outbox.reconcilePackage("pkg_reconcile");
 
-  assert.deepEqual(sent, ["delivered"]);
-  assert.equal(result.remoteBefore, 500);
-  assert.equal(result.remoteAfter, 600);
+  assert.deepEqual(sent, ["delivered", "delivered"]);
+  assert.equal(result.remoteBefore, 700);
+  assert.equal(result.remoteAfter, 900);
   assert.equal(result.action, "advanced_and_verified");
   assert.deepEqual(
     db.prepare("SELECT DISTINCT status FROM posentegra_outbox WHERE aggregate_id = ?").all("pkg_reconcile").map((row) => row.status),

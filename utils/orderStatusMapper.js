@@ -2,11 +2,13 @@ const STATUS_MAP = new Map([
   ["100", { status: "pending", statusText: "new" }],
   ["200", { status: "preparing", statusText: "accepted" }],
   ["300", { status: "preparing", statusText: "preparing" }],
-  // FastSiparis ilerletme akisi 300 -> 400 -> 500 -> 600 seklindedir.
-  // 500 yoldaki, 600 teslim edilen siparistir. Iptal ayri olarak 1600 doner.
+  // FastSiparis ilerletme akisi platforma gore ara kodlar icerebilir.
+  // Canli API'de teslim terminali 900, iptal terminali 1600'dur.
   ["400", { status: "accepted_by_courier", statusText: "accepted_by_courier" }],
   ["500", { status: "on_route", statusText: "on_the_way" }],
-  ["600", { status: "delivered", statusText: "delivered" }],
+  ["600", { status: "on_route", statusText: "on_the_way" }],
+  ["700", { status: "on_route", statusText: "on_the_way" }],
+  ["800", { status: "on_route", statusText: "on_the_way" }],
   ["1600", { status: "cancelled", statusText: "cancelled" }],
   // Canli FastSiparis yaniti, kaynak platformda Delivered olduktan sonra 900 donuyor.
   // Iptal ayri ve kesin olarak 1600 koduyla temsil ediliyor.

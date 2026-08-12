@@ -39,12 +39,11 @@ function remoteStatusCode(result) {
 }
 
 function remoteStatusRank(code) {
-  // FastSiparis can expose a provider-confirmed terminal delivery as 900
-  // after change-status, even though the transition response documents 600.
+  // FastSiparis change-status advances one remote step at a time. Live orders
+  // continue through 600/700/800 and are only terminally delivered at 900.
   // Cancellation remains the distinct 1600 terminal state.
   if (code === 900) return 3;
-  if (code === 600) return 3;
-  if (code === 500) return 2;
+  if ([500, 600, 700, 800].includes(code)) return 2;
   if (code === 400) return 1;
   if ([100, 200, 300].includes(code)) return 0;
   return null;
@@ -125,6 +124,54 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
     }, `order.cancel:${packageId}`);
   }
 
+  async function advanceOrderToDelivered(orderId, meta = {}) {
+    const allowedForwardCodes = new Set([100, 200, 300, 400, 500, 600, 700, 800]);
+    const transitions = [];
+    let remoteResult = await client.getOrder(orderId);
+    let currentCode = remoteStatusCode(remoteResult);
+
+    for (let step = 0; step < 10; step += 1) {
+      if (currentCode === 900) {
+        return { remoteResult, remoteCode: currentCode, transitions };
+      }
+      if (currentCode === 1600) {
+        const error = new Error("Posentegra siparisi iptal durumda; teslim durumuna ilerletilemez.");
+        error.statusCode = 409;
+        throw error;
+      }
+      if (!allowedForwardCodes.has(currentCode)) {
+        const error = new Error(`Posentegra teslim ilerlemesi guvenli degil (uzak durum: ${currentCode ?? "bilinmiyor"}).`);
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const beforeCode = currentCode;
+      await client.changeOrderStatus(orderId, "delivered", {
+        ...meta,
+        reconciliation: true,
+        remoteBefore: beforeCode,
+      });
+      remoteResult = await client.getOrder(orderId);
+      currentCode = remoteStatusCode(remoteResult);
+      transitions.push({ from: beforeCode, to: currentCode });
+
+      if (currentCode === 900) {
+        return { remoteResult, remoteCode: currentCode, transitions };
+      }
+      if (!Number.isFinite(currentCode) || currentCode <= beforeCode) {
+        const error = new Error(
+          `Posentegra teslim ilerlemesi dogrulanamadi (once: ${beforeCode}, sonra: ${currentCode ?? "bilinmiyor"}).`
+        );
+        error.statusCode = 502;
+        throw error;
+      }
+    }
+
+    const error = new Error(`Posentegra teslim durumu 900 koduna ulasmadi (son durum: ${currentCode ?? "bilinmiyor"}).`);
+    error.statusCode = 502;
+    throw error;
+  }
+
   async function deliver(row) {
     const payload = parseJson(row.payload_json, {});
     if (row.event_type === EVENT_TYPES.PACKAGE_ASSIGN) {
@@ -141,10 +188,14 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
       if (!currentOrderId) {
         throw new Error("Posentegra order pid bulunamadi.");
       }
-      return client.changeOrderStatus(currentOrderId, payload.status, {
+      const meta = {
         ...(payload.meta || {}),
         packageId: row.aggregate_id,
-      });
+      };
+      if (trimmed(payload.status).toLowerCase() === "delivered") {
+        return advanceOrderToDelivered(currentOrderId, meta);
+      }
+      return client.changeOrderStatus(currentOrderId, payload.status, meta);
     }
     if (row.event_type === EVENT_TYPES.ORDER_CANCEL) {
       const packageRow = db.prepare("SELECT posentegra_id FROM packages WHERE id = ?").get(row.aggregate_id);
@@ -365,6 +416,15 @@ function createPosentegraOutboxService({ db, client, logger, maxAttempts = 10 } 
       }
 
       const sentStatuses = [];
+      if (desiredRank === 3 && beforeCode !== 900) {
+        const deliveredResult = await advanceOrderToDelivered(orderId, {
+          packageId: aggregateId,
+          reconciliation: true,
+        });
+        remoteResult = deliveredResult.remoteResult;
+        currentRank = remoteStatusRank(deliveredResult.remoteCode);
+        sentStatuses.push(...deliveredResult.transitions.map(() => "delivered"));
+      }
       while (currentRank < desiredRank) {
         const nextRank = currentRank + 1;
         const candidate = rows.find((row) => statusRank(parseJson(row.payload_json, {}).status) === nextRank);

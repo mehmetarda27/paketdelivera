@@ -100,7 +100,11 @@ function startMockPosentegra() {
         return;
       }
       if (req.method === "POST" && req.url.startsWith("/web-api/v1/orders/change-status/")) {
-        res.end(JSON.stringify({ success: true, data: { oldStatus: 500, newStatus: 600 } }));
+        const orderId = decodeURIComponent(req.url.split("/").at(-1));
+        const oldStatus = remoteStatuses.get(orderId) || 300;
+        const newStatus = oldStatus === 300 ? 400 : oldStatus === 400 ? 500 : 900;
+        remoteStatuses.set(orderId, newStatus);
+        res.end(JSON.stringify({ success: true, data: { oldStatus, newStatus } }));
         return;
       }
       if (req.method === "GET" && req.url.startsWith("/web-api/v1/orders/")) {
@@ -437,7 +441,7 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
         products: [{ id: "inbound-product", name: "Menu", quantity: 1, price: 180, totalPrice: 180 }],
       }),
     });
-    mock.remoteStatuses.set(inboundPid, 600);
+    mock.remoteStatuses.set(inboundPid, 900);
     let inboundRow;
     for (let attempt = 0; attempt < 80; attempt += 1) {
       inboundRow = readRow(dbFile, "SELECT status, delivered_at FROM packages WHERE id = ?", inboundOrder.package.id);
