@@ -227,8 +227,7 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
     ));
 
     const rollbackUsername = `rollback_${Date.now()}`;
-    await assert.rejects(
-      () => request(baseUrl, "/api/admin/restaurants", {
+    const localOnlyRestaurantState = await request(baseUrl, "/api/admin/restaurants", {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({
@@ -239,10 +238,11 @@ test("all supported platform deliveries sync through Posentegra ids", { timeout:
           latitude: 36.603,
           longitude: 34.322,
         }),
-      }),
-      (error) => error.status === 500
-    );
-    assert.equal(readRow(dbFile, "SELECT id FROM restaurants WHERE username = ?", rollbackUsername), undefined);
+      });
+    assert.ok(localOnlyRestaurantState.createdRestaurant?.id);
+    assert.equal(localOnlyRestaurantState.createdRestaurant.posentegraId, "");
+    assert.equal(localOnlyRestaurantState.createdRestaurant.verification, false);
+    assert.ok(readRow(dbFile, "SELECT id FROM restaurants WHERE username = ?", rollbackUsername));
     assert.ok(mock.calls.some((call) => call.method === "DELETE" && call.url === "/web-api/v1/restaurants/rollback-posentegra-003"));
 
     const courierState = await request(baseUrl, "/couriers", {

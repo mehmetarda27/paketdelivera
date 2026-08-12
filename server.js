@@ -8371,10 +8371,15 @@ async function createRestaurantInPosentegraOrRollback(restaurant, requestId) {
         });
       }
     }
-    dbFacade.transaction(() => {
-      db.prepare("DELETE FROM restaurants WHERE id = ?").run(restaurant.id);
+    // Posentegra is an optional integration. A remote create/link failure must
+    // not roll back the Delivera restaurant account; the operator can match it
+    // later from the unmatched-orders/integration screens.
+    logger.warn("restaurant_created_without_posentegra_connection", {
+      request_id: requestId,
+      internal_restaurant_id: restaurant.id,
+      error_message: error.message,
     });
-    throw error;
+    return "";
   }
 }
 
@@ -14335,7 +14340,7 @@ async function handleApi(req, res, pathname) {
       if (!createdRestaurant?.id) {
         throw new Error(`restaurants insert committed but getRestaurants returned empty for id ${restaurant.id}`);
       }
-      if (posentegraClient.configured() && (!createdRestaurant.posentegraId || createdRestaurant.posentegraId !== createdPosentegraId)) {
+      if (createdPosentegraId && createdRestaurant.posentegraId !== createdPosentegraId) {
         logger.error("posentegra_id_db_verify_failed", {
           request_id: req.requestId,
           internal_restaurant_id: restaurant.id,
