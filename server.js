@@ -57,6 +57,8 @@ const {
 } = require("./services/connectionHealthService");
 const { verifyPlatformSignature } = require("./services/platformSignature");
 const { mapOrderStatus } = require("./utils/orderStatusMapper");
+const { createTelegramService } = require("./services/telegramService");
+const { createOperationsSupervisor } = require("./services/operationsSupervisor");
 
 const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = resolveDbFile();
@@ -17126,6 +17128,60 @@ currentState().packages
   .filter((pkg) => normalizeStatus(pkg.status) === ASSIGNED_STATUS)
   .forEach((pkg) => syncAssignmentRetryForPackage(pkg));
 
+const telegramService = createTelegramService({ logger });
+
+function operationsSupervisorSnapshot() {
+  const rows = db.prepare(`
+    SELECT * FROM packages
+    WHERE status IN (?, ?, ?, ?, ?, ?, ?)
+    ORDER BY datetime(created_at) DESC
+  `).all(
+    PENDING_STATUS,
+    PREPARING_STATUS,
+    AWAITING_ASSIGNMENT_STATUS,
+    FAILED_STATUS,
+    ASSIGNED_STATUS,
+    ACCEPTED_BY_COURIER_STATUS,
+    ON_ROUTE_STATUS
+  );
+  const restaurantMap = new Map(getRestaurants().map((restaurant) => [restaurant.id, restaurant.name]));
+  return {
+    packages: rows.map((row) => mapPackageRow(row, restaurantMap, null)),
+    couriers: getCouriers(),
+  };
+}
+
+function operationsDailySummary(reportDate) {
+  const start = new Date(`${reportDate}T00:00:00+03:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const counts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS delivered,
+      SUM(CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END) AS cancelled
+    FROM packages
+    WHERE created_at >= ? AND created_at < ?
+  `).get(DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, start.toISOString(), end.toISOString());
+  const live = operationsSupervisorSnapshot();
+  return {
+    total: Number(counts.total || 0),
+    delivered: Number(counts.delivered || 0),
+    cancelled: Number(counts.cancelled || 0),
+    active: live.packages.filter((pkg) => [ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(pkg.status)).length,
+    waiting: live.packages.filter((pkg) => [PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(pkg.status) && !pkg.assignedCourierId).length,
+    onlineCouriers: live.couriers.filter((courier) => ["online", "busy"].includes(courier.status)).length,
+  };
+}
+
+const operationsSupervisor = createOperationsSupervisor({
+  getSnapshot: () => operationsSupervisorSnapshot(),
+  getDailySummary: (reportDate) => operationsDailySummary(reportDate),
+  rebalance: () => rebalancePackages(),
+  telegram: telegramService,
+  logger,
+});
+operationsSupervisor.start();
+
 server.listen(PORT, () => {
   logger.info("Delivera Express ready", { url: `http://localhost:${PORT}`, port: PORT });
 });
@@ -17140,6 +17196,7 @@ async function gracefulShutdown(signal) {
     process.exit(1);
   }, 15_000);
   forceTimer.unref();
+  operationsSupervisor.stop();
   liveStreams.forEach((stream) => closeLiveStream(stream.id));
   server.close(async () => {
     try {
