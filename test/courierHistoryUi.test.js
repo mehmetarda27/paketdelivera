@@ -38,6 +38,32 @@ test("courier can open real completed order history with delivery details", asyn
   dom.window.close();
 });
 
+test("courier active package sheet shows customer phone and keeps the call action", async () => {
+  const root = path.join(__dirname, "..");
+  const html = fs.readFileSync(path.join(root, "courier-design-source", "performans_raporlar", "code.html"), "utf8");
+  const bridge = fs.readFileSync(path.join(root, "courier-design-bridge.js"), "utf8");
+  const dom = new JSDOM(html, { url: "http://localhost:3000/courier-reports.html", runScripts: "outside-only", pretendToBeVisual: true });
+  const { window } = dom;
+  const workspace = {
+    courier: { id: "cr_phone", name: "Telefon Kuryesi", available: true },
+    packages: [{ id: "pkg_phone", trackingNo: "PKT-TELEFON", status: "on_route", recipient: "Müşteri", phone: "0531 466 89 27", restaurantName: "Test Restoran", deliveryAddress: "Test adresi", paymentMethod: "Online ödendi" }],
+    historyPackages: [], notifications: [], dayMetrics: {}, earningsSummary: { today: {}, last7Days: {} }, reportSummary: { daily: {} }, shiftSummary: {},
+  };
+  window.__DELIVERA_TEST__ = true;
+  window.EventSource = class { addEventListener() {} close() {} };
+  window.fetch = async () => ({ ok: true, status: 200, json: async () => workspace });
+  window.localStorage.setItem("kuryeTakipCourierToken", "phone-token");
+  window.eval(bridge);
+  await delay(70);
+
+  window.__courierDesignTest.packageSheet("road");
+  const modal = window.document.querySelector(".delivera-modal");
+  assert.match(modal.textContent, /Müşteri telefonu/);
+  assert.match(modal.textContent, /0531 466 89 27/);
+  assert.equal(modal.querySelector('a[href="tel:05314668927"]')?.textContent, "Müşteriyi Ara");
+  dom.window.close();
+});
+
 test("courier sees admin payment changes and earning adjustments", async () => {
   const root = path.join(__dirname, "..");
   const html = fs.readFileSync(path.join(root, "courier-design-source", "performans_raporlar", "code.html"), "utf8");
