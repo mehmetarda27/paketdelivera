@@ -489,7 +489,29 @@
   function detailModal(pkg) {
     const courier = (state.data?.couriers || []).find((item) => item.id === pkg.assignedCourierId);
     const [label] = statusInfo(pkg.status);
-    modal(`Sipariş ${pkg.trackingNo || pkg.externalOrderNo || "Detayı"}`, `<div class="space-y-1 text-sm"><div class="zg-list-row"><b>Durum</b><span>${safe(label)}</span></div><div class="zg-list-row"><b>Müşteri</b><span>${safe(pkg.customerName || "-")}</span></div><div class="zg-list-row"><b>Telefon</b><a class="text-blue-600" href="tel:${safe(pkg.phone)}">${safe(pkg.phone || "-")}</a></div><div class="zg-list-row"><b>Adres</b><span class="text-right max-w-md">${safe(pkg.deliveryAddress || "-")}</span></div><div class="zg-list-row"><b>Sipariş içeriği</b><span>${safe(pkg.packageType || "-")}</span></div><div class="zg-list-row"><b>Müşteri notu</b><span>${safe(pkg.customerNote || "-")}</span></div><div class="zg-list-row"><b>Ödeme</b><span>${safe(pkg.paymentMethod || "-")} · ${formatMoney(pkg.orderAmount)}</span></div><div class="zg-list-row"><b>Kurye</b><span>${safe(courier?.name || courier?.fullName || "Atanmadı")}</span></div><div class="zg-list-row"><b>Oluşturulma</b><span>${dateTime(pkg.createdAt)}</span></div></div>`);
+    const raw = pkg.rawPayload && typeof pkg.rawPayload === "object" ? pkg.rawPayload : {};
+    const itemCandidates = [pkg.items, raw.items, raw.products, raw.lines, raw.order?.items, raw.order?.products, raw.data?.items, raw.data?.products];
+    const items = itemCandidates.find((candidate) => Array.isArray(candidate) && candidate.length) || [];
+    const localized = (value) => {
+      if (value === null || value === undefined) return "";
+      if (typeof value !== "object") return String(value).trim();
+      return String(value.tr || value.en || value.default || value.text || value.name || Object.values(value).find((entry) => typeof entry === "string") || "").trim();
+    };
+    const choices = (value) => (Array.isArray(value) ? value : []).map((choice) => localized(choice?.name ?? choice?.title ?? choice)).filter(Boolean);
+    const itemRows = items.map((item, index) => {
+      const entry = item && typeof item === "object" ? item : { name: item };
+      const name = localized(entry.name ?? entry.productName ?? entry.title ?? entry.product) || `Ürün ${index + 1}`;
+      const quantity = Number(entry.quantity ?? entry.qty ?? entry.count ?? 1) || 1;
+      const amountValue = entry.totalPrice ?? entry.total_price ?? entry.priceWithOption ?? entry.price_with_option ?? entry.price;
+      const amount = amountValue === null || amountValue === undefined || amountValue === "" ? "" : formatMoney(amountValue);
+      const extras = choices(entry.extraIngredients ?? entry.extra_ingredients ?? entry.extras ?? entry.options ?? entry.modifiers);
+      const removed = choices(entry.removedIngredients ?? entry.removed_ingredients);
+      const note = localized(entry.note ?? entry.description);
+      const details = [extras.length ? `Ekstra: ${extras.join(", ")}` : "", removed.length ? `Çıkarılan: ${removed.join(", ")}` : "", note ? `Not: ${note}` : ""].filter(Boolean);
+      return `<div class="zg-list-row" data-order-item><div><b>${safe(quantity)}× ${safe(name)}</b>${details.length ? `<div class="text-xs text-slate-500 mt-1">${safe(details.join(" · "))}</div>` : ""}</div>${amount ? `<strong>${safe(amount)}</strong>` : ""}</div>`;
+    }).join("");
+    const products = itemRows || '<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Ürün bilgisi platformdan gelmedi.</div>';
+    modal(`Sipariş Detayı · ${pkg.trackingNo || pkg.externalOrderNo || pkg.id}`, `<div class="space-y-4 text-sm"><section><div class="flex items-center justify-between mb-2"><h3 class="font-bold text-base">Sipariş İçeriği</h3><span class="text-xs text-slate-500">${items.length ? `${items.length} kalem` : "Bilgi yok"}</span></div><div class="rounded-lg border overflow-hidden" data-order-items>${products}</div></section><section><h3 class="font-bold text-base mb-2">Teslimat Bilgileri</h3><div class="space-y-1"><div class="zg-list-row"><b>Durum</b><span>${safe(label)}</span></div><div class="zg-list-row"><b>Müşteri</b><span>${safe(pkg.customerName || "-")}</span></div><div class="zg-list-row"><b>Telefon</b><a class="text-blue-600" href="tel:${safe(pkg.phone)}">${safe(pkg.phone || "-")}</a></div><div class="zg-list-row"><b>Adres</b><span class="text-right max-w-md">${safe(pkg.deliveryAddress || "-")}</span></div><div class="zg-list-row"><b>Müşteri notu</b><span>${safe(pkg.customerNote || "-")}</span></div><div class="zg-list-row"><b>Ödeme</b><span>${safe(pkg.paymentMethod || "-")} · ${formatMoney(pkg.orderAmount)}</span></div><div class="zg-list-row"><b>Kurye</b><span>${safe(courier?.name || courier?.fullName || "Atanmadı")}</span></div><div class="zg-list-row"><b>Oluşturulma</b><span>${dateTime(pkg.createdAt)}</span></div></div></section></div>`);
   }
 
   function normalizedPaperSize(value) {

@@ -36,7 +36,7 @@ test("new restaurant design filters closed orders and subscribes to named live e
     const today = new Date().toISOString();
     hooks.hydrate({
       packages: [
-        { id: "pkg_active", trackingNo: "PKT-ACTIVE", status: "on_route", sourcePlatform: "Trendyol Yemek", updatedAt: yesterday },
+        { id: "pkg_active", trackingNo: "PKT-ACTIVE", status: "on_route", sourcePlatform: "Trendyol Yemek", updatedAt: yesterday, items: [{ name: "Tantuni", quantity: 2, price: 125, extraIngredients: [{ name: "Kaşar" }], note: "Acısız" }] },
         { id: "pkg_delivered", trackingNo: "PKT-DELIVERED", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: today },
         { id: "pkg_old", trackingNo: "PKT-OLD", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: yesterday },
       ],
@@ -51,7 +51,11 @@ test("new restaurant design filters closed orders and subscribes to named live e
     ["Yazdır", "Zaman", "Sipariş Detayı"].forEach((label) => assert.ok(actionLabels.includes(label), label));
     assert.equal(actionLabels.includes("Faturalı Fiş"), false);
     dom.window.document.querySelector('#restaurantOrders button[data-action="detail"]').click();
-    assert.match(dom.window.document.querySelector(".zg-modal-root")?.textContent || "", /PKT-ACTIVE/);
+    const detailModalText = dom.window.document.querySelector(".zg-modal-root")?.textContent || "";
+    assert.match(detailModalText, /PKT-ACTIVE/);
+    assert.match(detailModalText, /2× Tantuni/);
+    assert.match(detailModalText, /Ekstra: Kaşar/);
+    assert.match(detailModalText, /Not: Acısız/);
     dom.window.document.querySelector(".zg-modal-root [data-close]")?.click();
     let printedHtml = "";
     dom.window.open = () => ({ document: { write(value) { printedHtml += value; }, close() {} } });
