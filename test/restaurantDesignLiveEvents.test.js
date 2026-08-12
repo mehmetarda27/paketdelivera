@@ -48,7 +48,11 @@ test("new restaurant design filters closed orders and subscribes to named live e
     hooks.state.filter = "all";
     assert.deepEqual(Array.from(hooks.currentPackages(), (pkg) => pkg.id), ["pkg_active", "pkg_delivered"]);
     const actionLabels = Array.from(dom.window.document.querySelectorAll("#restaurantOrders [data-action]"), (button) => button.textContent.trim());
-    ["Yazdır", "Zaman", "Faturalı Fiş"].forEach((label) => assert.ok(actionLabels.includes(label), label));
+    ["Yazdır", "Zaman", "Sipariş Detayı"].forEach((label) => assert.ok(actionLabels.includes(label), label));
+    assert.equal(actionLabels.includes("Faturalı Fiş"), false);
+    dom.window.document.querySelector('#restaurantOrders button[data-action="detail"]').click();
+    assert.match(dom.window.document.querySelector(".zg-modal-root")?.textContent || "", /PKT-ACTIVE/);
+    dom.window.document.querySelector(".zg-modal-root [data-close]")?.click();
     let printedHtml = "";
     dom.window.open = () => ({ document: { write(value) { printedHtml += value; }, close() {} } });
     dom.window.document.querySelector('#restaurantOrders [data-action="print"]').click();
