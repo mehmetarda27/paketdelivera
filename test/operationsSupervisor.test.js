@@ -39,6 +39,67 @@ test("supervisor reuses rebalance engine and deduplicates alerts", async () => {
   assert.match(messages[0], /uygun kurye yok/);
 });
 
+test("supervisor sends severity health alerts and a non-mutating day-close report", async () => {
+  const messages = [];
+  const fixedNow = new Date("2026-08-12T21:10:00.000Z");
+  const reportDates = [];
+  const supervisor = createOperationsSupervisor({
+    getSnapshot: async () => ({ couriers: [], packages: [] }),
+    getDailySummary: async (date) => {
+      reportDates.push(date);
+      return { total: 12, delivered: 10, cancelled: 2, active: 0, waiting: 0, onlineCouriers: 0 };
+    },
+    getHealthSnapshot: async () => ({
+      database: { ok: true },
+      integrations: { incomingWebhook: { enabled: true, secretConfigured: true }, posentegra: { outbox: { counts: { failed: 2 } } } },
+      platformHealth: { error: 0, webhookErrorsLast24h: 0 },
+      queues: { queueService: { initError: null } },
+    }),
+    telegram: {
+      configured: () => true,
+      sendMessage: async (message) => { messages.push(message); return { ok: true }; },
+    },
+    now: () => fixedNow,
+    dailyReportHour: 9,
+    dayCloseHour: 0,
+    dayCloseMinute: 5,
+    healthCheckIntervalMs: 1,
+  });
+
+  await supervisor.inspect();
+  assert.deepEqual(reportDates, ["2026-08-12"]);
+  assert.ok(messages.some((message) => message.includes("[KRİTİK]") && message.includes("Posentegra")));
+  assert.ok(messages.some((message) => message.includes("Gün sonu kapanış raporu") && message.includes("2026-08-12")));
+});
+
+test("Telegram commands accept only the authorized chat and retry through supplied safe callback", async () => {
+  const sent = [];
+  let updates = [{ update_id: 10, message: { chat: { id: "42" }, text: "/start" } }];
+  let retryCalls = 0;
+  const telegram = {
+    configured: () => true,
+    authorizedChatId: () => "42",
+    getUpdates: async () => ({ ok: true, updates }),
+    sendMessage: async (message) => { sent.push(message); return { ok: true }; },
+  };
+  const supervisor = createOperationsSupervisor({
+    getSnapshot: async () => ({ couriers: [], packages: [] }),
+    retryPackage: async (reference) => { retryCalls += 1; return { ok: true, message: `${reference} yeniden denendi.` }; },
+    telegram,
+  });
+
+  await supervisor.pollCommands();
+  assert.equal(sent.length, 0);
+  updates = [
+    { update_id: 11, message: { chat: { id: "999" }, text: "/tekrarla PKT-1" } },
+    { update_id: 12, message: { chat: { id: "42" }, text: "/tekrarla PKT-2" } },
+  ];
+  await supervisor.pollCommands();
+  assert.equal(retryCalls, 1);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /PKT-2 yeniden denendi/);
+});
+
 test("supervisor reports stale couriers and stuck active packages", async () => {
   const messages = [];
   const fixedNow = new Date("2026-08-13T07:00:00.000Z");

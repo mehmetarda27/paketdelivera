@@ -69,7 +69,36 @@ function createTelegramService(options = {}) {
     return { ok: false, error: lastError?.message || "telegram_send_failed" };
   }
 
-  return { configured, sendMessage };
+  async function getUpdates(options = {}) {
+    if (!configured()) return { ok: false, skipped: true, reason: "not_configured", updates: [] };
+    const offset = Number.isFinite(Number(options.offset)) ? Number(options.offset) : undefined;
+    const timeoutSeconds = Math.max(0, Math.min(25, Number(options.timeoutSeconds || 0)));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(timeoutMs, (timeoutSeconds + 3) * 1000));
+    try {
+      const response = await fetchImpl(`${TELEGRAM_API_ROOT}/bot${token}/getUpdates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(offset !== undefined ? { offset } : {}),
+          timeout: timeoutSeconds,
+          allowed_updates: ["message"],
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        return { ok: false, error: `telegram_http_${response.status}`, updates: [] };
+      }
+      return { ok: true, updates: Array.isArray(payload.result) ? payload.result : [] };
+    } catch (error) {
+      return { ok: false, error: error?.name === "AbortError" ? "timeout" : error?.message || "telegram_updates_failed", updates: [] };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { configured, sendMessage, getUpdates, authorizedChatId: () => chatId };
 }
 
 module.exports = { createTelegramService };

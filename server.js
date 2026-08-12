@@ -17173,9 +17173,53 @@ function operationsDailySummary(reportDate) {
   };
 }
 
+function operationsFindPackage(reference) {
+  const needle = trimmed(reference);
+  if (!needle) return null;
+  const row = db.prepare(`
+    SELECT * FROM packages
+    WHERE LOWER(id) = LOWER(?)
+       OR LOWER(tracking_no) = LOWER(?)
+       OR LOWER(COALESCE(external_order_no, '')) = LOWER(?)
+    ORDER BY datetime(created_at) DESC
+    LIMIT 1
+  `).get(needle, needle, needle);
+  if (!row) return null;
+  const restaurantMap = new Map(getRestaurants().map((restaurant) => [restaurant.id, restaurant.name]));
+  return mapPackageRow(row, restaurantMap, null);
+}
+
+async function operationsRetryPackage(reference) {
+  const pkg = operationsFindPackage(reference);
+  if (!pkg) return { ok: false, message: `${reference} bulunamadı.` };
+  const status = normalizeStatus(pkg.status);
+  if ([DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS].includes(status)) {
+    return { ok: false, message: `${packageLabelForLog(pkg)} terminal durumda (${status}); değiştirilmedi.` };
+  }
+  if ([ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(status)) {
+    return { ok: false, message: `${packageLabelForLog(pkg)} zaten ${status} durumunda; ataması değiştirilmedi.` };
+  }
+  if (![PENDING_STATUS, PREPARING_STATUS, AWAITING_ASSIGNMENT_STATUS, FAILED_STATUS].includes(status)) {
+    return { ok: false, message: `${packageLabelForLog(pkg)} için tekrar deneme güvenli değil (${status}).` };
+  }
+  await rebalancePackages();
+  const updated = operationsFindPackage(reference);
+  return {
+    ok: true,
+    message: `${packageLabelForLog(updated || pkg)} için mevcut güvenli atama motoru çalıştırıldı. Güncel durum: ${updated?.status || status}.`,
+  };
+}
+
+function packageLabelForLog(pkg) {
+  return pkg?.trackingNo || pkg?.externalOrderNo || pkg?.id || "Paket";
+}
+
 const operationsSupervisor = createOperationsSupervisor({
   getSnapshot: () => operationsSupervisorSnapshot(),
   getDailySummary: (reportDate) => operationsDailySummary(reportDate),
+  getHealthSnapshot: () => systemStatusPayload(),
+  findPackage: (reference) => operationsFindPackage(reference),
+  retryPackage: (reference) => operationsRetryPackage(reference),
   rebalance: () => rebalancePackages(),
   telegram: telegramService,
   logger,
