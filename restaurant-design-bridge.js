@@ -73,10 +73,11 @@
   };
   const platformKey = (value) => {
     const text = normalize(value);
-    if (text.includes("yemek")) return "yemeksepeti";
-    if (text.includes("getir")) return "getir";
-    if (text.includes("migros")) return "migros";
-    if (text.includes("trendyol")) return "trendyol";
+    const compact = text.replace(/[^a-z0-9]/g, "");
+    if (["ty", "trendyol", "trendyolyemek"].includes(compact) || text.includes("trendyol")) return "trendyol";
+    if (["gy", "getir", "getiryemek"].includes(compact) || text.includes("getir")) return "getir";
+    if (["my", "migros", "migrosyemek"].includes(compact) || text.includes("migros")) return "migros";
+    if (["ys", "yemeksepeti"].includes(compact) || text.includes("yemek sepet")) return "yemeksepeti";
     return "manual";
   };
   const platformLabels = {
@@ -1102,7 +1103,7 @@
   }
 
   if (globalThis.__DELIVERA_TEST__) {
-    globalThis.__restaurantDesignTest = { state, currentPackages, hydrate, connectStream, updateRestaurantCourierMap, refreshRestaurantMapData, restaurantLiveMapCouriers };
+    globalThis.__restaurantDesignTest = { state, currentPackages, hydrate, connectStream, updateRestaurantCourierMap, refreshRestaurantMapData, restaurantLiveMapCouriers, platformKey };
   }
 
   window.addEventListener("beforeunload", () => { stopRestaurantMapRefresh(); state.stream?.close(); clearInterval(state.poll); });

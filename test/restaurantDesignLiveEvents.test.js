@@ -27,6 +27,11 @@ test("new restaurant design filters closed orders and subscribes to named live e
     await new Promise((resolve) => dom.window.setTimeout(resolve, 30));
 
     const hooks = dom.window.__restaurantDesignTest;
+    assert.equal(hooks.platformKey("ty"), "trendyol");
+    assert.equal(hooks.platformKey("Trendyol Yemek"), "trendyol");
+    assert.equal(hooks.platformKey("gy"), "getir");
+    assert.equal(hooks.platformKey("my"), "migros");
+    assert.equal(hooks.platformKey("ys"), "yemeksepeti");
     const yesterday = new Date(Date.now() - 86400000).toISOString();
     const today = new Date().toISOString();
     hooks.hydrate({
