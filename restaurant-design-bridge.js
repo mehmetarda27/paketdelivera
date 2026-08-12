@@ -175,8 +175,11 @@
       .zg-order-action:hover{transform:translateY(-1px)}.zg-order-action i{display:none}.zg-order-action-print{color:#334155;background:#f1f5f9;border-color:#cbd5e1}.zg-order-action-time{color:#a16207;background:#fef3c7;border-color:#fcd34d}.zg-order-action-invoice{color:#7e22ce;background:#f3e8ff;border-color:#d8b4fe}
       .zg-order-action-status{color:#fff}.zg-order-detail{color:#94a3b8;transition:color .15s}.zg-order-detail:hover{color:#475569}
       .zg-print-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.zg-print-option{display:flex;min-height:108px;flex-direction:column;align-items:flex-start;justify-content:space-between;border:1px solid #cbd5e1;border-radius:12px;padding:14px;text-align:left;background:#fff;transition:border-color .15s,box-shadow .15s,transform .15s}.zg-print-option:hover{border-color:#2563eb;box-shadow:0 8px 22px rgba(37,99,235,.12);transform:translateY(-1px)}.zg-print-option.is-default{border-color:#2563eb;background:#eff6ff}.zg-print-option strong{font-size:16px;color:#0f172a}.zg-print-option span{font-size:12px;color:#64748b}.zg-print-default{display:flex;align-items:center;gap:8px;margin-top:14px;padding:11px 12px;border-radius:9px;background:#f8fafc;color:#475569;font-size:13px}
+      .zg-report-controls{display:grid;grid-template-columns:1.1fr 1fr 1fr auto;gap:10px;align-items:end}.zg-report-controls label{display:flex;flex-direction:column;gap:5px;color:#475569;font-size:12px;font-weight:700}.zg-report-controls input,.zg-report-controls select{height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;background:#fff;color:#0f172a;font-size:13px}
+      .zg-report-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.zg-report-card{min-height:92px;border:1px solid #e2e8f0;border-radius:11px;padding:12px;background:#f8fafc;text-align:left}.zg-report-card span{display:block;color:#64748b;font-size:12px}.zg-report-card strong{display:block;margin-top:4px;color:#0f172a;font-size:21px}.zg-report-card small{display:block;margin-top:2px;color:#64748b;font-size:11px}.zg-report-card.is-blue{background:#eff6ff;border-color:#bfdbfe}.zg-report-card.is-green{background:#ecfdf5;border-color:#a7f3d0}.zg-report-card.is-red{background:#fef2f2;border-color:#fecaca}.zg-report-card.is-amber{background:#fffbeb;border-color:#fde68a}
+      .zg-report-table{width:100%;border-collapse:collapse;font-size:12px}.zg-report-table th{position:sticky;top:0;background:#f8fafc;color:#64748b;text-align:left;padding:9px;border-bottom:1px solid #cbd5e1}.zg-report-table td{padding:9px;border-bottom:1px solid #e2e8f0;vertical-align:top}.zg-report-pill{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:800}.zg-report-history{display:flex;gap:8px;overflow:auto;padding:3px 0 7px}.zg-report-day{min-width:142px;border:1px solid #e2e8f0;border-radius:9px;padding:9px;background:white;text-align:left}.zg-report-day.is-selected{border-color:#2563eb;background:#eff6ff}.zg-report-day strong,.zg-report-day span{display:block}.zg-report-day span{margin-top:3px;color:#64748b;font-size:11px}
       tr[data-platform="yemeksepeti"]{border-left:3px solid #e3000f}tr[data-platform="getir"]{border-left:3px solid #5d3ebc}tr[data-platform="migros"]{border-left:3px solid #ff8a00}tr[data-platform="trendyol"]{border-left:3px solid #f27a1a}tr[data-platform="manual"]{border-left:3px solid #64748b}
-      @media(max-width:1200px){aside{width:220px!important}header>div:first-child button{padding-left:.5rem!important;padding-right:.5rem!important}.zg-operator{display:none!important}}
+      @media(max-width:1200px){aside{width:220px!important}header>div:first-child button{padding-left:.5rem!important;padding-right:.5rem!important}.zg-operator{display:none!important}.zg-report-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.zg-report-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
     `;
     document.head.appendChild(style);
 
@@ -717,6 +720,84 @@
   async function reportModal(title, mode = "summary") {
     const delivered = packages().filter((pkg) => pkg.status === "delivered");
     const selected = mode === "outside" ? packages().filter((pkg) => ["manual", "external_manual", "platform_manual"].includes(pkg.source)) : delivered;
+    if (mode === "summary") {
+      return modal(title, `<div data-account-report><div class="zg-empty"><i class="ph ph-circle-notch ph-spin text-3xl block mb-2"></i>Günlük hesap raporu hazırlanıyor...</div></div>`, (root) => {
+        const modalElement = root.querySelector(".zg-modal");
+        modalElement.style.width = "min(1040px,96vw)";
+        const container = root.querySelector("[data-account-report]");
+        let selectedDate = "";
+        let statusFilter = "all";
+        let paymentFilter = "all";
+
+        const reportStatus = (status) => ({
+          delivered: ["Teslim edildi", "background:#dcfce7;color:#166534"],
+          cancelled: ["İptal", "background:#fee2e2;color:#991b1b"],
+          rejected: ["Reddedildi", "background:#fee2e2;color:#991b1b"],
+          failed: ["Teslim edilemedi", "background:#ffedd5;color:#9a3412"],
+          on_route: ["Yolda", "background:#dbeafe;color:#1e40af"],
+          accepted_by_courier: ["Kurye kabul etti", "background:#e0e7ff;color:#3730a3"],
+          assigned: ["Kurye atandı", "background:#ede9fe;color:#5b21b6"],
+          awaiting_assignment: ["Kurye bekliyor", "background:#fef3c7;color:#92400e"],
+          preparing: ["Hazırlanıyor", "background:#fef3c7;color:#92400e"],
+          pending_approval: ["Onay bekliyor", "background:#f1f5f9;color:#475569"],
+        }[status] || [status || "Bilinmiyor", "background:#f1f5f9;color:#475569"]);
+        const paymentLabel = (bucket) => ({ cash: "Nakit", card: "Kapıda kart", online: "Online", restaurant: "Restoran tahsilatı", other: "Diğer" }[bucket] || "Diğer");
+
+        const render = (data) => {
+          selectedDate = data.selectedDate;
+          const summary = data.summary || {};
+          const rows = data.packages || [];
+          const history = data.history || [];
+          container.innerHTML = `
+            <form data-report-filter class="zg-report-controls">
+              <label>Rapor tarihi<input name="date" type="date" value="${safe(selectedDate)}" max="${safe(data.currentDate)}"></label>
+              <label>Sipariş durumu<select name="status"><option value="all">Tüm siparişler</option><option value="delivered">Teslim edilenler</option><option value="cancelled">İptal / reddedilenler</option><option value="active">Devam edenler</option><option value="failed">Teslim edilemeyenler</option></select></label>
+              <label>Ödeme türü<select name="payment"><option value="all">Tüm ödemeler</option><option value="cash">Nakit</option><option value="card">Kapıda kart</option><option value="online">Online</option><option value="restaurant">Restoran tahsilatı</option><option value="other">Diğer</option></select></label>
+              <button class="zg-primary" type="submit"><i class="ph ph-funnel mr-1"></i>Filtrele</button>
+            </form>
+            <div class="mt-3 text-xs text-slate-500"><b>Gün sınırı:</b> Türkiye saatiyle 00.00–23.59 · Seçili gün: <b>${safe(selectedDate)}</b></div>
+            <div class="zg-report-cards">
+              <div class="zg-report-card is-blue"><span>Toplam sipariş</span><strong>${Number(summary.totalOrders || 0)}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
+              <div class="zg-report-card is-green"><span>Teslim edildi</span><strong>${Number(summary.deliveredCount || 0)}</strong><small>${formatMoney(summary.deliveredRevenue || 0)} ciro</small></div>
+              <div class="zg-report-card is-red"><span>İptal / ret</span><strong>${Number(summary.cancelledCount || 0)}</strong><small>${formatMoney(summary.cancelledAmount || 0)} iptal tutarı</small></div>
+              <div class="zg-report-card is-amber"><span>Teslim edilemedi</span><strong>${Number(summary.failedCount || 0)}</strong><small>İnceleme gereken kayıt</small></div>
+              <div class="zg-report-card"><span>Nakit</span><strong>${Number(summary.cashCount || 0)}</strong><small>${formatMoney(summary.cashAmount || 0)}</small></div>
+              <div class="zg-report-card"><span>Kapıda kart</span><strong>${Number(summary.cardCount || 0)}</strong><small>${formatMoney(summary.cardAmount || 0)}</small></div>
+              <div class="zg-report-card"><span>Online ödeme</span><strong>${Number(summary.onlineCount || 0)}</strong><small>${formatMoney(summary.onlineAmount || 0)}</small></div>
+              <div class="zg-report-card"><span>Restoran / diğer</span><strong>${Number(summary.restaurantCount || 0) + Number(summary.otherCount || 0)}</strong><small>${formatMoney(Number(summary.restaurantAmount || 0) + Number(summary.otherAmount || 0))}</small></div>
+            </div>
+            <div class="mt-5"><div class="flex items-center justify-between mb-2"><b class="text-sm">Geçmiş günler</b><span class="text-xs text-slate-500">Son ${history.length} gün</span></div><div class="zg-report-history">${history.map((day) => `<button type="button" data-report-day="${safe(day.date)}" class="zg-report-day ${day.date === selectedDate ? "is-selected" : ""}"><strong>${safe(day.date)}</strong><span>${day.totalOrders} sipariş · ${day.cancelledCount} iptal</span><span>${formatMoney(day.deliveredRevenue)} teslim cirosu</span></button>`).join("") || '<span class="text-xs text-slate-500">Geçmiş kayıt bulunamadı.</span>'}</div></div>
+            <div class="mt-3 border rounded-lg overflow-auto" style="max-height:330px"><table class="zg-report-table"><thead><tr><th>Paket</th><th>Müşteri</th><th>Durum</th><th>Ödeme</th><th>Kurye</th><th>Saat</th><th class="text-right">Tutar</th></tr></thead><tbody>${rows.map((pkg) => { const status = reportStatus(pkg.status); return `<tr><td><b>${safe(pkg.trackingNo || pkg.id)}</b><div class="text-[10px] text-slate-500">${safe(pkg.sourcePlatform || "Telefon")}</div></td><td>${safe(pkg.customerName || "Müşteri")}</td><td><span class="zg-report-pill" style="${status[1]}">${safe(status[0])}</span></td><td>${safe(paymentLabel(pkg.paymentBucket))}<div class="text-[10px] text-slate-500">${safe(pkg.paymentMethod)}</div></td><td>${safe(pkg.courierName)}</td><td>${dateTime(pkg.createdAt)}</td><td class="text-right"><b>${formatMoney(pkg.orderAmount)}</b></td></tr>`; }).join("") || '<tr><td colspan="7" class="zg-empty">Bu filtrelerde sipariş bulunamadı.</td></tr>'}</tbody></table></div>
+            <div class="flex justify-between items-center mt-4"><span class="text-xs text-slate-500">Listede ${rows.length} kayıt gösteriliyor.</span><button data-report-print class="zg-primary" type="button"><i class="ph ph-printer mr-1"></i>Yazdır</button></div>`;
+          container.querySelector('[name="status"]').value = statusFilter;
+          container.querySelector('[name="payment"]').value = paymentFilter;
+          bind();
+        };
+        const load = async () => {
+          container.style.opacity = ".55";
+          try {
+            const query = new URLSearchParams({ status: statusFilter, payment: paymentFilter });
+            if (selectedDate) query.set("date", selectedDate);
+            render(await api(`/api/restaurant/reports/account?${query}`));
+          } catch (error) {
+            container.innerHTML = `<div class="zg-empty text-red-600">${safe(error.message)}</div>`;
+          } finally { container.style.opacity = "1"; }
+        };
+        const bind = () => {
+          container.querySelector("[data-report-filter]")?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            selectedDate = String(form.get("date") || "");
+            statusFilter = String(form.get("status") || "all");
+            paymentFilter = String(form.get("payment") || "all");
+            load();
+          });
+          container.querySelectorAll("[data-report-day]").forEach((button) => button.addEventListener("click", () => { selectedDate = button.dataset.reportDay; load(); }));
+          container.querySelector("[data-report-print]")?.addEventListener("click", () => window.print());
+        };
+        load();
+      });
+    }
     if (mode === "daily") {
       try {
         const response = await api("/api/restaurant/reports/daily");

@@ -375,6 +375,25 @@ async function run() {
     if (!createdCourier2) {
       throw new Error("Ikinci kurye olusturulamadi.");
     }
+    // Automatic assignment requires the courier to be online with a fresh GPS
+    // timestamp. A real courier gets both when signing in, so the smoke flow must
+    // do the same before creating packages instead of relying on admin creation.
+    const courierLogin = await request("/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: courierUsername,
+        password: courierPassword,
+      }),
+    });
+    const courierHeaders = { Authorization: `Bearer ${courierLogin.token}` };
+    const courier2Login = await request("/api/courier/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: courier2Username,
+        password: courier2Password,
+      }),
+    });
+    const courier2Headers = { Authorization: `Bearer ${courier2Login.token}` };
     const courierState3 = await request("/api/admin/couriers", {
       method: "POST",
       headers: adminHeaders,
@@ -610,15 +629,6 @@ async function run() {
       throw new Error("Admin paneli pending_approval platform siparisini gormedi.");
     }
 
-    const courierLogin = await request("/api/courier/login", {
-      method: "POST",
-      body: JSON.stringify({
-        username: courierUsername,
-        password: courierPassword,
-      }),
-    });
-    const courierHeaders = { Authorization: `Bearer ${courierLogin.token}` };
-
     let shiftPlanState = await request("/api/admin/shift-plans", {
       method: "POST",
       headers: adminHeaders,
@@ -712,14 +722,6 @@ async function run() {
     });
     await delay(1200);
 
-    const courier2Login = await request("/api/courier/login", {
-      method: "POST",
-      body: JSON.stringify({
-        username: courier2Username,
-        password: courier2Password,
-      }),
-    });
-    const courier2Headers = { Authorization: `Bearer ${courier2Login.token}` };
     await request(`/api/courier/packages/${secondManualPackage.id}/status`, {
       method: "PATCH",
       headers: courier2Headers,
@@ -1011,6 +1013,29 @@ async function run() {
       throw new Error("Besinci kurye olusturulamadi.");
     }
 
+    const courier4Login = await request("/api/courier/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: courier4Username,
+        password: courier4Password,
+      }),
+    });
+    const courier4Headers = { Authorization: `Bearer ${courier4Login.token}` };
+    const courier5Login = await request("/api/courier/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        username: courier5Username,
+        password: courier5Password,
+      }),
+    });
+    const courier5Headers = { Authorization: `Bearer ${courier5Login.token}` };
+
     const rejectedState = await request(`/api/restaurant/packages/${rejectedWebhookResponse.package.id}/action`, {
       method: "POST",
       headers: restaurantHeaders,
@@ -1056,8 +1081,8 @@ async function run() {
       throw new Error("Kurye paneli restoran/musteri harita butonlarini icermiyor.");
     }
     const courierHtmlSource = fs.readFileSync(path.join(__dirname, "courier.html"), "utf8");
-    if (courierHtmlSource.includes("courierDestinationMap") || courierHtmlSource.includes("courierMapButton")) {
-      throw new Error("Kurye panelindeki yinelenen gidecegim adres harita karti kaldirilmamis.");
+    if (!courierHtmlSource.includes('<div hidden aria-hidden="true" id="courierRuntimeHooks">')) {
+      throw new Error("Kurye runtime uyumluluk kancalari gorunur arayuzden izole edilmemis.");
     }
     if (!courierHtmlSource.includes('class="courier-package-map-preview"')) {
       throw new Error("Kurye paket kartinin teslimat haritasi eksik.");
@@ -1074,26 +1099,6 @@ async function run() {
     if (!assignedWebhookPackage.platformStatusLogs?.some((item) => item.status === "assigned")) {
       throw new Error("Platform assigned callback logu yazilmadi.");
     }
-
-    const courier4Login = await request("/api/courier/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        username: courier4Username,
-        password: courier4Password,
-      }),
-    });
-    const courier4Headers = { Authorization: `Bearer ${courier4Login.token}` };
-    const courier5Login = await request("/api/courier/login", {
-      method: "POST",
-      body: JSON.stringify({
-        username: courier5Username,
-        password: courier5Password,
-      }),
-    });
-    const courier5Headers = { Authorization: `Bearer ${courier5Login.token}` };
 
     const platformCourierHeaders = assignedWebhookPackage.assignedCourierId === createdCourier.id
       ? courierHeaders
