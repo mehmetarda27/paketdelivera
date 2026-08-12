@@ -107,6 +107,17 @@ test("Posentegra webhooks prefer the common restaurant id and safely fall back t
         }),
       });
       assert.equal(statusResponse.status, 200);
+      const intermediateDb = new DatabaseSync(dbFile, { readOnly: true });
+      try {
+        const intermediate = intermediateDb.prepare("SELECT status, assigned_courier_id, on_route_at FROM packages WHERE id = ?").get(body.package.id);
+        if (status === 400 || status === 500) {
+          assert.equal(intermediate.status, "awaiting_assignment");
+          assert.equal(intermediate.assigned_courier_id, null);
+          assert.equal(intermediate.on_route_at, null);
+        }
+      } finally {
+        intermediateDb.close();
+      }
     }
 
     const verificationDb = new DatabaseSync(dbFile, { readOnly: true });

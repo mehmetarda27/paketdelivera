@@ -3015,6 +3015,9 @@ function shouldApplyIncomingPlatformStatus(currentStatus, incomingStatus) {
   const incoming = normalizeStatus(incomingStatus);
   if (current === incoming) return false;
   if ([DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS].includes(current)) return false;
+  // Kurye kabul/yola cikis yerel teslimat akisi tarafindan yonetilir. Dis
+  // platformdaki ara durum, kurye atamasini atlayarak paketi yolda yapamaz.
+  if ([ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(incoming)) return false;
   if ([DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(incoming)) return true;
   const rank = {
     [PENDING_APPROVAL_STATUS]: 0,
@@ -8021,7 +8024,25 @@ async function syncPosentegraInboundStatuses() {
   if (!posentegraClient.configured() || posentegraInboundSyncRunning) return { processed: 0, skipped: true };
   posentegraInboundSyncRunning = true;
   let processed = 0;
+  let repaired = 0;
   try {
+    const repairStamp = nowIso();
+    const repairResult = db.prepare(`
+      UPDATE packages
+      SET status = ?, assignment_status = 'unassigned', assigned_courier_name = NULL,
+          assigned_at = NULL, accepted_at = NULL, on_route_at = NULL,
+          assignment_reason = ?, last_assignment_error = NULL, updated_at = ?
+      WHERE assigned_courier_id IS NULL AND status IN (?, ?, ?)
+    `).run(
+      AWAITING_ASSIGNMENT_STATUS,
+      'Kuryesiz ara durum onarildi; paket yeniden atama havuzuna alindi.',
+      repairStamp,
+      ASSIGNED_STATUS,
+      ACCEPTED_BY_COURIER_STATUS,
+      ON_ROUTE_STATUS
+    );
+    repaired = Number(repairResult.changes || 0);
+    if (repaired > 0) logger.warn('Unassigned courier lifecycle states repaired', { repaired });
     const activeRows = db.prepare(`
       SELECT * FROM packages
       WHERE posentegra_id IS NOT NULL AND posentegra_id != ''
@@ -8073,8 +8094,8 @@ async function syncPosentegraInboundStatuses() {
         });
       }
     }
-    if (processed > 0) rebalancePackages();
-    return { processed, selected: activeRows.length };
+    if (processed > 0 || repaired > 0) rebalancePackages();
+    return { processed, repaired, selected: activeRows.length };
   } finally {
     posentegraInboundSyncRunning = false;
   }
@@ -10303,6 +10324,10 @@ function lifecycleColumnsForStatus(status, current = {}) {
 function updatePackageLifecycle(packageId, updates, current = {}, options = {}) {
   const status = normalizeStatus(updates.status || current.status);
   const lifecycle = lifecycleColumnsForStatus(status, current);
+  const assignedCourierId = updates.assignedCourierId ?? current.assignedCourierId ?? null;
+  if ([ASSIGNED_STATUS, ACCEPTED_BY_COURIER_STATUS, ON_ROUTE_STATUS].includes(status) && !trimmed(assignedCourierId)) {
+    throw validationError('Kurye atanmadan paket atanmis, kabul edildi veya yolda durumuna gecemez.');
+  }
   const storedPaymentMethod = db.prepare("SELECT payment_method FROM packages WHERE id = ?").get(packageId)?.payment_method;
   const paymentMethod = trimmed(updates.paymentMethod ?? updates.payment_method ?? current.paymentMethod ?? current.payment_method ?? storedPaymentMethod);
   const paymentStatus = normalizePaymentStatus(updates.paymentStatus || current.paymentStatus, paymentMethod);
@@ -10323,7 +10348,7 @@ function updatePackageLifecycle(packageId, updates, current = {}, options = {}) 
     paymentMethod,
     paymentStatus,
     updates.failureReason ?? current.failureReason ?? null,
-    updates.assignedCourierId ?? current.assignedCourierId ?? null,
+    assignedCourierId,
     updates.assignedCourierName ?? current.assignedCourierName ?? null,
     updates.assignedAt ?? lifecycle.assignedAt,
     updates.acceptedAt ?? lifecycle.acceptedAt,
