@@ -1,13 +1,18 @@
 (() => {
   "use strict";
 
+  window.deliveraDesktop?.markBridgeReady?.();
+
   const TOKEN_KEY = "deliveraRestaurantToken";
   const REFRESH_KEY = "deliveraRestaurantRefreshToken";
   const ID_KEY = "deliveraRestaurantId";
   const API_KEY = "deliveraRestaurantApiKey";
+  const SEEN_ORDER_ALERTS_KEY = "deliveraRestaurantSeenOrderAlerts";
+  const INITIAL_ORDER_ALERT_WINDOW_MS = 30 * 60 * 1000;
   const terminalStatuses = new Set(["delivered", "failed", "rejected", "cancelled", "canceled"]);
   let pushInitialized = false;
   let orderAudioContext = null;
+  let orderReminderTimer = null;
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     refreshToken: localStorage.getItem(REFRESH_KEY) || "",
@@ -240,7 +245,8 @@
   }
 
   async function initializeRestaurantPush(requestPermission = false) {
-    if (pushInitialized || !state.token || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification === "undefined") return false;
+    if (pushInitialized) return true;
+    if (!state.token || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification === "undefined") return false;
     let permission = Notification.permission;
     if (requestPermission && permission === "default") permission = await Notification.requestPermission();
     if (permission !== "granted") return false;
@@ -266,6 +272,7 @@
   }
 
   function playOrderSignal() {
+    if (state.panelData.generalSettings?.orderSound === false) return;
     try {
       unlockOrderAudio();
       if (orderAudioContext.state !== "running") return;
@@ -281,6 +288,33 @@
         oscillator.start(start); oscillator.stop(start + 0.16);
       });
     } catch {}
+  }
+
+  function seenOrderAlerts() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SEEN_ORDER_ALERTS_KEY) || "[]");
+      return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function orderAlertId(pkg) {
+    return String(pkg?.id || pkg?.trackingNo || pkg?.externalOrderNo || "").trim();
+  }
+
+  function rememberOrderAlerts(packagesToRemember) {
+    const seen = seenOrderAlerts();
+    packagesToRemember.forEach((pkg) => {
+      const id = orderAlertId(pkg);
+      if (id) seen.add(id);
+    });
+    localStorage.setItem(SEEN_ORDER_ALERTS_KEY, JSON.stringify([...seen].slice(-500)));
+  }
+
+  function isRecentOrder(pkg) {
+    const createdAt = new Date(pkg?.createdAt || pkg?.updatedAt || 0).getTime();
+    return Number.isFinite(createdAt) && createdAt > 0 && Date.now() - createdAt <= INITIAL_ORDER_ALERT_WINDOW_MS;
   }
 
   function showNotificationCenter() {
@@ -305,6 +339,10 @@
       description: message,
       fields: `<label class="delivera-auth-field full"><span>Kullanıcı adı</span><input name="username" autocomplete="username"></label><label class="delivera-auth-field full"><span>Parola</span><input name="password" type="password" autocomplete="current-password"></label><div class="delivera-auth-separator">veya API erişimi</div><label class="delivera-auth-field"><span>Restoran ID</span><input name="restaurantId"></label><label class="delivera-auth-field"><span>API key</span><input name="apiKey" type="password"></label>`,
       onSubmit: async (form) => {
+        unlockOrderAudio();
+        const notificationRequest = notificationPermission() === "default"
+          ? Promise.resolve(Notification.requestPermission()).catch(() => "default")
+          : Promise.resolve(notificationPermission());
         const restaurantId = String(form.get("restaurantId") || "").trim();
         const apiKey = String(form.get("apiKey") || "").trim();
         const auth = await api("/api/restaurant/session", {
@@ -316,6 +354,8 @@
         window.DeliveraLoginShell.hide();
         hydrate(auth.state);
         await loadPanelData();
+        await notificationRequest;
+        await initializeRestaurantPush(false);
         connectStream();
         startPolling();
         toast("Restoran paneli açıldı.", "success");
@@ -409,8 +449,31 @@
     });
     if (groups.size) {
       playOrderSignal();
+      window.clearTimeout(orderReminderTimer);
+      orderReminderTimer = window.setTimeout(() => {
+        playOrderSignal();
+        navigator.vibrate?.([250, 100, 500]);
+        orderReminderTimer = null;
+      }, 10 * 1000);
       navigator.vibrate?.([250, 100, 500]);
-      if (notificationPermission() === "granted") {
+      window.deliveraDesktop?.showNotification?.({
+        title: "Delivera Express - Yeni Sipariş",
+        body: `${incoming.length} yeni sipariş geldi. Fiş varsayılan yazıcıya gönderiliyor.`,
+      }).catch(() => {});
+      if (window.deliveraDesktop?.autoPrintReceipt) {
+        const settings = state.panelData.printerSettings || {};
+        incoming.filter((pkg) => !terminalStatuses.has(pkg.status)).forEach((pkg) => {
+          const packageId = String(pkg.id || pkg.trackingNo || pkg.externalOrderNo || "").trim();
+          if (!packageId) return;
+          window.deliveraDesktop.autoPrintReceipt({
+            packageId,
+            trackingNo: pkg.trackingNo || pkg.externalOrderNo || packageId,
+            customerName: pkg.customerName || "Müşteri",
+            html: receiptDocument(pkg, false, settings.paperSize || "80mm", settings.copies || 1, false),
+          }).catch(() => {});
+        });
+      }
+      if (!window.deliveraDesktop && !pushInitialized && notificationPermission() === "granted") {
         navigator.serviceWorker?.getRegistration("/").then((registration) => registration?.showNotification("Delivera Express - Yeni Sipariş", {
           body: `${incoming.length} yeni sipariş geldi.`, tag: "delivera-restaurant-orders", renotify: true, requireInteraction: true,
           vibrate: [250, 100, 500], data: { url: "/restaurant-panel" },
@@ -433,9 +496,15 @@
   function hydrate(data) {
     const hadData = Boolean(state.data);
     const previousIds = new Set((state.data?.packages || []).map((pkg) => pkg.id));
-    const incoming = hadData ? (data.packages || []).filter((pkg) => !previousIds.has(pkg.id)) : [];
+    const seen = seenOrderAlerts();
+    const incoming = (data.packages || []).filter((pkg) => {
+      const id = orderAlertId(pkg);
+      if (!id || terminalStatuses.has(pkg.status) || seen.has(id)) return false;
+      return hadData ? !previousIds.has(pkg.id) : isRecentOrder(pkg);
+    });
     state.data = data;
     if (incoming.length) announceNewPackages(incoming);
+    rememberOrderAlerts(data.packages || []);
     updateBusiness(); updateCounters(); renderOrders();
     const badge = refs.notificationButton?.querySelector(".zg-notification-badge");
     if (badge) { badge.textContent = String((data.notifications || []).length); badge.hidden = !(data.notifications || []).length; }
@@ -546,7 +615,7 @@
     return `<section class="items"><div class="items-title">SİPARİŞ İÇERİĞİ</div><div class="items-head"><b>Adet / Ürün</b><b>Tutar</b></div>${items.map((item) => `<div class="item"><div><strong>${safe(item.quantity)}× ${safe(item.name)}</strong>${item.unitPrice !== null ? `<small>Birim: ${safe(formatMoney(item.unitPrice))}</small>` : ""}${item.details.map((detail) => `<small>${safe(detail)}</small>`).join("")}</div><b>${item.lineTotal === null ? "-" : safe(formatMoney(item.lineTotal))}</b></div>`).join("")}</section>`;
   }
 
-  function receiptDocument(pkg, invoice, paperSize, copies) {
+  function receiptDocument(pkg, invoice, paperSize, copies, invokeBrowserPrint = true) {
     const size = normalizedPaperSize(paperSize);
     const thermal = size !== "A4";
     const pageWidth = size === "58mm" ? "58mm" : size === "80mm" ? "80mm" : "A4";
@@ -573,7 +642,7 @@
     </article>`;
     return `<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${invoice ? "Faturalı Fiş" : "Sipariş Fişi"} · ${safe(pkg.trackingNo || pkg.id)}</title><style>
       @page{size:${pageWidth}${thermal ? " auto" : " portrait"};margin:${thermal ? "0" : "10mm"}}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif}body{width:${contentWidth};max-width:100%;margin:0 auto;padding:${thermal ? "2mm" : "0"};font-size:${size === "58mm" ? "10px" : size === "80mm" ? "12px" : "14px"};line-height:1.35}.receipt{width:100%;margin:0 auto}.page-break{break-after:page;page-break-after:always}.brand{text-align:center;border:2px solid #111;padding:${thermal ? "2mm 1mm" : "14px"};margin-bottom:${thermal ? "2mm" : "18px"}.checkers{font-size:${thermal ? "7px" : "11px"};letter-spacing:1px;white-space:nowrap;overflow:hidden}.brand-name{font-size:${size === "58mm" ? "17px" : size === "80mm" ? "22px" : "32px"};font-weight:900;letter-spacing:.5px}.brand-name span{display:${thermal ? "block" : "inline"};font-size:.58em}.brand-tagline{font-size:.72em;font-weight:700;margin:3px 0}.custom-header{text-align:center;font-weight:800;border:1px dashed #555;padding:6px;margin-bottom:8px}.restaurant{text-align:center;border-bottom:1px dashed #555;padding-bottom:8px;margin-bottom:8px}.restaurant h1{font-size:1.35em;margin:0 0 3px}.restaurant div{font-weight:800;font-size:.88em}.tracking{text-align:center;background:#f2f2f2;border:1px solid #111;padding:${thermal ? "6px 3px" : "12px"};margin-bottom:8px}.tracking small{display:block;font-size:.72em}.tracking strong{display:block;font-size:1.45em;letter-spacing:.7px}.row{display:grid;grid-template-columns:${thermal ? "38% 62%" : "30% 70%"};gap:6px;border-bottom:1px dashed #aaa;padding:${thermal ? "5px 0" : "8px 0"}.row span{text-align:right;overflow-wrap:anywhere}.row.total{border:1px solid #111;margin:7px 0;padding:7px}.row.total span strong{font-size:1.18em}.items{margin-top:8px;border-top:2px solid #111;border-bottom:2px solid #111;padding:6px 0}.items-title{text-align:center;font-weight:900;font-size:1.08em;margin-bottom:5px}.items-head,.item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:4px 0}.items-head{border-bottom:1px solid #111;font-size:.78em}.item{border-bottom:1px dashed #aaa;align-items:start}.item:last-child{border-bottom:0}.item>div{min-width:0}.item strong{display:block;overflow-wrap:anywhere}.item small{display:block;color:#333;font-size:.78em;overflow-wrap:anywhere}.items-empty{text-align:center;font-style:italic;padding:5px}.block{margin-top:8px;border:1px solid #777;padding:${thermal ? "6px" : "10px"}.block>b{font-size:.78em}.block p{margin:4px 0 0;overflow-wrap:anywhere}.note{border-style:dashed}footer{text-align:center;border-top:2px solid #111;margin-top:${thermal ? "10px" : "18px"};padding-top:8px}footer strong,footer span,footer small{display:block}footer strong{font-size:1.15em}footer span{font-weight:700;margin:3px 0}footer small{font-size:.72em;margin-top:3px}@media print{html,body{background:#fff}.receipt{box-shadow:none}}
-    </style></head><body>${Array.from({ length: receiptCount }, (_, index) => receipt(index + 1)).join("")}<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),180));<\/script></body></html>`;
+    </style></head><body>${Array.from({ length: receiptCount }, (_, index) => receipt(index + 1)).join("")}${invokeBrowserPrint ? '<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),180));<\\/script>' : ""}</body></html>`;
   }
 
   function printPackage(pkg, invoice = false, options = {}) {
@@ -1082,9 +1151,14 @@
   refs.search?.addEventListener("input", (event) => { state.search = event.target.value; renderOrders(); });
   refs.notificationButton?.addEventListener("click", async () => {
     try {
+      unlockOrderAudio();
       if (notificationPermission() !== "granted") {
         const enabled = await initializeRestaurantPush(true);
         toast(enabled ? "Bildirim ve sipariş sesi açıldı." : "Bildirim izni verilmedi.", enabled ? "success" : "error");
+        if (enabled) playOrderSignal();
+      } else {
+        await initializeRestaurantPush(false);
+        playOrderSignal();
       }
       showNotificationCenter();
     } catch (error) { toast(error.message, "error"); }

@@ -214,8 +214,14 @@ public class DeliveraCourierService extends Service implements LocationListener 
                 JSONObject item = notifications.optJSONObject(index);
                 if (item == null) continue;
                 String id = item.optString("id", "notification-" + index);
+                String eventType = item.optString("eventType", "");
                 currentNotificationIds.add(id);
-                if (firstWorkspaceLoaded && !seenNotificationIds.contains(id)) {
+                boolean assignmentDuplicate = "package-assigned".equals(eventType)
+                    || "package-override".equals(eventType)
+                    || "package-reassign".equals(eventType)
+                    || "restaurant-confirmed".equals(eventType)
+                    || "package-status".equals(eventType);
+                if (firstWorkspaceLoaded && !assignmentDuplicate && !seenNotificationIds.contains(id)) {
                     showCriticalNotification("Delivera", item.optString("message", "Yeni bildiriminiz var."), "notification-" + id);
                 }
             }
@@ -228,7 +234,7 @@ public class DeliveraCourierService extends Service implements LocationListener 
                 JSONObject item = packages.optJSONObject(index);
                 if (item == null || !"assigned".equalsIgnoreCase(item.optString("status"))) continue;
                 String id = item.optString("id", "package-" + index);
-                String key = id + ":" + item.optString("updatedAt", item.optString("assignedAt", ""));
+                String key = id + ":" + item.optString("assignedAt", "");
                 currentAssignmentKeys.add(key);
                 if (!seenAssignmentKeys.contains(key)) {
                     String restaurant = item.optString("restaurantName", "Restoran");

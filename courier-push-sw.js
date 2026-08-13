@@ -24,7 +24,22 @@ self.addEventListener("push", (event) => {
     vibrate: [300, 100, 300, 100, 600],
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const targetPath = new URL(options.data.url, self.location.origin).pathname;
+    const visiblePanel = windows.some((client) => {
+      if (client.visibilityState !== "visible") return false;
+      const clientPath = new URL(client.url).pathname;
+      if (targetPath.startsWith("/restaurant")) return clientPath.startsWith("/restaurant");
+      if (targetPath.startsWith("/courier")) return clientPath.startsWith("/courier");
+      return clientPath === targetPath;
+    });
+
+    // Açık panel kendi sesini ve ekran içi uyarısını üretir. Burada ikinci bir
+    // sistem bildirimi göstermek aynı paket için çift/üçlü uyarıya yol açar.
+    if (visiblePanel) return;
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {

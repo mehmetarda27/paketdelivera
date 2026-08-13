@@ -173,7 +173,10 @@ test("restaurant web push subscription is authenticated, isolated and idempotent
 
     const workerResponse = await fetch(`${baseUrl}/courier-push-sw.js`);
     assert.equal(workerResponse.status, 200);
-    assert.match(await workerResponse.text(), /payload\.url/);
+    const workerSource = await workerResponse.text();
+    assert.match(workerSource, /payload\.url/);
+    assert.match(workerSource, /targetPath\.startsWith\("\/restaurant"\)/);
+    assert.match(workerSource, /if \(visiblePanel\) return/);
     const panelResponse = await fetch(`${baseUrl}/restaurant.html`);
     assert.equal(panelResponse.status, 200);
     assert.match(await panelResponse.text(), /restaurant-design-bridge\.js/);

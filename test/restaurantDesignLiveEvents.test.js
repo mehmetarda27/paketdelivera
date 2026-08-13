@@ -12,6 +12,8 @@ function jsonResponse(payload) {
 
 test("new restaurant design filters closed orders and subscribes to named live events", async () => {
   const eventTypes = new Set();
+  const desktopPrints = [];
+  const desktopNotifications = [];
   class FakeEventSource {
     addEventListener(type) { eventTypes.add(type); }
     close() {}
@@ -21,6 +23,10 @@ test("new restaurant design filters closed orders and subscribes to named live e
   try {
     dom.window.__DELIVERA_TEST__ = true;
     dom.window.EventSource = FakeEventSource;
+    dom.window.deliveraDesktop = {
+      autoPrintReceipt: async (payload) => { desktopPrints.push(payload); return { ok: true }; },
+      showNotification: async (payload) => { desktopNotifications.push(payload); return { ok: true }; },
+    };
     dom.window.localStorage.setItem("deliveraRestaurantToken", "test-token");
     dom.window.fetch = async () => jsonResponse({ packages: [], couriers: [], restaurants: [] });
     dom.window.eval(fs.readFileSync(path.join(rootDir, "restaurant-design-bridge.js"), "utf8"));
@@ -43,6 +49,12 @@ test("new restaurant design filters closed orders and subscribes to named live e
       couriers: [],
       restaurants: [],
     });
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    assert.equal(desktopPrints.length, 1);
+    assert.equal(desktopPrints[0].packageId, "pkg_active");
+    assert.match(desktopPrints[0].html, /SİPARİŞ İÇERİĞİ|SÄ°PARÄ°Å Ä°Ã‡ERÄ°ÄÄ°/);
+    assert.doesNotMatch(desktopPrints[0].html, /window\.print/);
+    assert.equal(desktopNotifications.length, 1);
     hooks.state.filter = "active";
     assert.deepEqual(Array.from(hooks.currentPackages(), (pkg) => pkg.id), ["pkg_active"]);
     hooks.state.filter = "all";

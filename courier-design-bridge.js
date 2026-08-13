@@ -3,6 +3,10 @@
 
   const TOKEN_KEY = "kuryeTakipCourierToken";
   const REFRESH_KEY = "kuryeTakipCourierRefreshToken";
+  const ASSIGNMENT_SIGNAL_KEY = "deliveraCourierAssignmentSignals";
+  const ASSIGNMENT_SIGNAL_TTL_MS = 30 * 60 * 1000;
+  const ASSIGNMENT_REMINDER_MS = 45 * 1000;
+  const MAX_ASSIGNMENT_SIGNALS = 2;
   const CLOSED = new Set(["delivered", "failed", "cancelled"]);
   const route = location.pathname;
   const reportView = new URLSearchParams(location.search).get("view") || "overview";
@@ -26,6 +30,7 @@
   let assignmentTitleTimer = null;
   let assignmentAudioContext = null;
   let lastAssignmentSignalAt = 0;
+  let assignmentSignalCount = 0;
   let assignmentSnapshot = new Map();
   let pushInitialized = false;
   const originalDocumentTitle = document.title;
@@ -205,17 +210,39 @@
     window.clearInterval(assignmentTitleTimer);
     assignmentAlertTimer = null;
     assignmentTitleTimer = null;
+    assignmentSignalCount = 0;
     document.title = originalDocumentTitle;
+  }
+
+  function shouldSignalAssignment(pkg) {
+    const signature = `${pkg.id}|${pkg.assignedAt || ""}`;
+    let recent = {};
+    try { recent = JSON.parse(localStorage.getItem(ASSIGNMENT_SIGNAL_KEY) || "{}"); } catch {}
+    const cutoff = Date.now() - ASSIGNMENT_SIGNAL_TTL_MS;
+    recent = Object.fromEntries(Object.entries(recent).filter(([, at]) => Number(at) >= cutoff));
+    if (Number(recent[signature]) >= cutoff) return false;
+    recent[signature] = Date.now();
+    localStorage.setItem(ASSIGNMENT_SIGNAL_KEY, JSON.stringify(recent));
+    return true;
   }
 
   function startAssignmentAttention(pkg) {
     playAssignmentSignal();
+    assignmentSignalCount = 1;
     window.clearInterval(assignmentAlertTimer);
-    assignmentAlertTimer = window.setInterval(playAssignmentSignal, 9000);
+    assignmentAlertTimer = window.setInterval(() => {
+      if (assignmentSignalCount >= MAX_ASSIGNMENT_SIGNALS) {
+        window.clearInterval(assignmentAlertTimer);
+        assignmentAlertTimer = null;
+        return;
+      }
+      assignmentSignalCount += 1;
+      playAssignmentSignal();
+    }, ASSIGNMENT_REMINDER_MS);
     window.clearInterval(assignmentTitleTimer);
     let visible = false;
     assignmentTitleTimer = window.setInterval(() => { visible = !visible; document.title = visible ? "🔔 YENİ PAKETİ KABUL ET" : originalDocumentTitle; }, 850);
-    if (notificationPermission() === "granted") {
+    if (!pushInitialized && notificationPermission() === "granted") {
       navigator.serviceWorker?.getRegistration("/").then((registration) => registration?.showNotification("Delivera Express - Yeni Paket", {
         body: `${pkg.restaurantName || "Restoran"} - ${pkg.deliveryAddress || pkg.address || "Paket detayını açın"}`,
         tag: `delivera-package-${pkg.id}`,
@@ -265,7 +292,7 @@
     assigned.forEach((pkg) => {
       const signature = `${pkg.status}|${pkg.assignedAt || ""}`;
       nextSnapshot.set(pkg.id, signature);
-      if (assignmentSnapshot.get(pkg.id) !== signature) {
+      if (assignmentSnapshot.get(pkg.id) !== signature && shouldSignalAssignment(pkg)) {
         startAssignmentAttention(pkg);
         toast(`${pkg.restaurantName || "Restoran"} tarafından yeni paket düştü.`, "success");
       }
@@ -332,7 +359,6 @@
       let payload = {};
       try { payload = event.data ? JSON.parse(event.data) : {}; } catch {}
       if (payload.type === "package-assigned") {
-        playAssignmentSignal();
         toast(payload.message || "Yeni paket düştü.", "success");
       }
       if (route === "/courier.html") scheduleCourierMapRefresh();

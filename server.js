@@ -124,8 +124,10 @@ const RATE_LIMITS = {
 };
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 200;
-const COURIER_PUSH_EVENT_TYPES = new Set(["package-assigned", "package-override", "package-reassign", "restaurant-confirmed"]);
+const COURIER_PUSH_EVENT_TYPES = new Set(["package-assigned", "package-override", "package-reassign"]);
 const RESTAURANT_PUSH_EVENT_TYPES = new Set(["package-created", "platform-order-pending", "integration-order", "order:new", "restaurant-push-test"]);
+const WEB_PUSH_DEDUPE_MS = 90 * 1000;
+const recentWebPushes = new Map();
 const WEB_PUSH_SETTINGS_ID = "courier_web_push_vapid";
 const WEB_PUSH_SUBJECT = trimmed(process.env.DELIVERA_VAPID_SUBJECT) || "mailto:bildirim@paketdelivera.app";
 
@@ -4018,10 +4020,22 @@ function courierPushPayload(event) {
   };
 }
 
+function claimWebPush(key) {
+  const now = Date.now();
+  for (const [existingKey, sentAt] of recentWebPushes) {
+    if (now - sentAt > WEB_PUSH_DEDUPE_MS) recentWebPushes.delete(existingKey);
+  }
+  if (recentWebPushes.has(key)) return false;
+  recentWebPushes.set(key, now);
+  return true;
+}
+
 function dispatchCourierPush(event) {
   if (!event?.courierId || !COURIER_PUSH_EVENT_TYPES.has(event.type)) {
     return;
   }
+  const pushKey = `courier:${event.courierId}:${event.packageId || "general"}`;
+  if (!claimWebPush(pushKey)) return;
 
   let subscriptions = [];
   try {
@@ -4093,6 +4107,9 @@ function dispatchRestaurantPush(event) {
   if (!event?.restaurantId || !RESTAURANT_PUSH_EVENT_TYPES.has(event.type) || shouldSuppressRestaurantAlert(event)) {
     return;
   }
+  const packageId = event.packageId || event.orderId;
+  const pushKey = packageId ? `restaurant:${event.restaurantId}:${packageId}` : "";
+  if (event.type !== "restaurant-push-test" && pushKey && !claimWebPush(pushKey)) return;
 
   let subscriptions = [];
   try {
