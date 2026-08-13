@@ -251,7 +251,8 @@
     if (requestPermission && permission === "default") permission = await Notification.requestPermission();
     if (permission !== "granted") return false;
     try {
-      const registration = await navigator.serviceWorker.register("/courier-push-sw.js", { scope: "/" });
+      const registration = await navigator.serviceWorker.register("/courier-push-sw.js?v=20260814-1", { scope: "/" });
+      await registration.update().catch(() => {});
       const keyResponse = await api("/api/restaurant/push/public-key");
       let subscription = await registration.pushManager.getSubscription();
       if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushApplicationServerKey(keyResponse.publicKey) });
@@ -1163,7 +1164,11 @@
       showNotificationCenter();
     } catch (error) { toast(error.message, "error"); }
   });
-  document.addEventListener("pointerdown", unlockOrderAudio, { once: true });
+  document.addEventListener("pointerdown", () => {
+    unlockOrderAudio();
+    if (notificationPermission() === "default") initializeRestaurantPush(true);
+    else if (notificationPermission() === "granted") initializeRestaurantPush(false);
+  }, { once: true });
   refs.phoneButton?.addEventListener("click", phoneOrderModal);
   refs.sidebarLinks.forEach((link) => {
     const handler = () => normalize(link.textContent).includes("çıkış yap") ? (clearAuth(), location.reload()) : showRoute(link.dataset.route);

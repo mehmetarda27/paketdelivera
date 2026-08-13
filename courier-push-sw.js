@@ -27,6 +27,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const targetPath = new URL(options.data.url, self.location.origin).pathname;
+    const isRestaurantNotification = targetPath.startsWith("/restaurant");
     const visiblePanel = windows.some((client) => {
       if (client.visibilityState !== "visible") return false;
       const clientPath = new URL(client.url).pathname;
@@ -35,10 +36,20 @@ self.addEventListener("push", (event) => {
       return clientPath === targetPath;
     });
 
-    // Açık panel kendi sesini ve ekran içi uyarısını üretir. Burada ikinci bir
-    // sistem bildirimi göstermek aynı paket için çift/üçlü uyarıya yol açar.
-    if (visiblePanel) return;
-    await self.registration.showNotification(title, options);
+    // Kurye paneli açıkken ekran içi kabul penceresi yeterlidir. Restoran
+    // bildirimi ise siparişin kaçmaması için panel açık olsa da mutlaka görünür.
+    if (visiblePanel && !isRestaurantNotification) return;
+    const notificationOptions = visiblePanel && isRestaurantNotification
+      ? { ...options, silent: true }
+      : options;
+    await self.registration.showNotification(title, notificationOptions);
+    if (isRestaurantNotification && payload.packageId) {
+      await new Promise((resolve) => setTimeout(resolve, 10 * 1000));
+      await self.registration.showNotification(title, {
+        ...notificationOptions,
+        body: `Hatırlatma: ${options.body}`,
+      });
+    }
   })());
 });
 

@@ -153,7 +153,7 @@ test("courier web push subscription is authenticated, idempotent and removable",
     const workerSource = await workerResponse.text();
     assert.match(workerSource, /self\.addEventListener\("push"/);
     assert.match(workerSource, /client\.visibilityState !== "visible"/);
-    assert.match(workerSource, /if \(visiblePanel\) return/);
+    assert.match(workerSource, /if \(visiblePanel && !isRestaurantNotification\) return/);
 
     const removed = await jsonRequest(baseUrl, "/api/courier/push/subscriptions", {
       method: "DELETE",
