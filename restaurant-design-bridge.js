@@ -978,6 +978,7 @@
         modalElement.style.width = "min(1040px,96vw)";
         const container = root.querySelector("[data-account-report]");
         let selectedDate = "";
+        let periodFilter = "day";
         let statusFilter = "all";
         let paymentFilter = "all";
 
@@ -997,17 +998,19 @@
 
         const render = (data) => {
           selectedDate = data.selectedDate;
+          periodFilter = data.period || periodFilter;
           const summary = data.summary || {};
           const rows = data.packages || [];
           const history = data.history || [];
           container.innerHTML = `
             <form data-report-filter class="zg-report-controls">
+              <label>Rapor dönemi<select name="period"><option value="day">Günlük</option><option value="week">Haftalık</option></select></label>
               <label>Rapor tarihi<input name="date" type="date" value="${safe(selectedDate)}" max="${safe(data.currentDate)}"></label>
               <label>Sipariş durumu<select name="status"><option value="all">Tüm siparişler</option><option value="delivered">Teslim edilenler</option><option value="cancelled">İptal / reddedilenler</option><option value="active">Devam edenler</option><option value="failed">Teslim edilemeyenler</option></select></label>
               <label>Ödeme türü<select name="payment"><option value="all">Tüm ödemeler</option><option value="cash">Nakit</option><option value="card">Kapıda kart</option><option value="online">Online</option><option value="restaurant">Restoran tahsilatı</option><option value="other">Diğer</option></select></label>
               <button class="zg-primary" type="submit"><i class="ph ph-funnel mr-1"></i>Filtrele</button>
             </form>
-            <div class="mt-3 text-xs text-slate-500"><b>Gün sınırı:</b> Türkiye saatiyle 00.00–23.59 · Seçili gün: <b>${safe(selectedDate)}</b></div>
+            <div class="mt-3 text-xs text-slate-500"><b>${periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${periodFilter === "week" ? `${safe(data.rangeStart)} – ${safe(data.rangeEnd)}` : "Türkiye saatiyle 00.00–23.59"} · Seçili tarih: <b>${safe(selectedDate)}</b></div>
             <div class="zg-report-cards">
               <div class="zg-report-card is-blue"><span>Toplam sipariş</span><strong>${Number(summary.totalOrders || 0)}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
               <div class="zg-report-card is-green"><span>Teslim edildi</span><strong>${Number(summary.deliveredCount || 0)}</strong><small>${formatMoney(summary.deliveredRevenue || 0)} ciro</small></div>
@@ -1018,9 +1021,10 @@
               <div class="zg-report-card"><span>Online ödeme</span><strong>${Number(summary.onlineCount || 0)}</strong><small>${formatMoney(summary.onlineAmount || 0)}</small></div>
               <div class="zg-report-card"><span>Restoran / diğer</span><strong>${Number(summary.restaurantCount || 0) + Number(summary.otherCount || 0)}</strong><small>${formatMoney(Number(summary.restaurantAmount || 0) + Number(summary.otherAmount || 0))}</small></div>
             </div>
-            <div class="mt-5"><div class="flex items-center justify-between mb-2"><b class="text-sm">Geçmiş günler</b><span class="text-xs text-slate-500">Son ${history.length} gün</span></div><div class="zg-report-history">${history.map((day) => `<button type="button" data-report-day="${safe(day.date)}" class="zg-report-day ${day.date === selectedDate ? "is-selected" : ""}"><strong>${safe(day.date)}</strong><span>${day.totalOrders} sipariş · ${day.cancelledCount} iptal</span><span>${formatMoney(day.deliveredRevenue)} teslim cirosu</span></button>`).join("") || '<span class="text-xs text-slate-500">Geçmiş kayıt bulunamadı.</span>'}</div></div>
+            <div class="mt-5"><div class="flex items-center justify-between mb-2"><b class="text-sm">Geçmiş ${periodFilter === "week" ? "haftalar" : "günler"}</b><span class="text-xs text-slate-500">Son ${history.length} dönem</span></div><div class="zg-report-history">${history.map((day) => `<button type="button" data-report-day="${safe(day.date)}" class="zg-report-day ${day.date === (periodFilter === "week" ? data.rangeStart : selectedDate) ? "is-selected" : ""}"><strong>${safe(day.date)}${day.endDate ? ` – ${safe(day.endDate)}` : ""}</strong><span>${day.totalOrders} sipariş · ${day.cancelledCount} iptal</span><span>${formatMoney(day.deliveredRevenue)} teslim cirosu</span></button>`).join("") || '<span class="text-xs text-slate-500">Geçmiş kayıt bulunamadı.</span>'}</div></div>
             <div class="mt-3 border rounded-lg overflow-auto" style="max-height:330px"><table class="zg-report-table"><thead><tr><th>Paket</th><th>Müşteri</th><th>Durum</th><th>Ödeme</th><th>Kurye</th><th>Saat</th><th class="text-right">Tutar</th></tr></thead><tbody>${rows.map((pkg) => { const status = reportStatus(pkg.status); return `<tr><td><b>${safe(pkg.trackingNo || pkg.id)}</b><div class="text-[10px] text-slate-500">${safe(pkg.sourcePlatform || "Telefon")}</div></td><td>${safe(pkg.customerName || "Müşteri")}</td><td><span class="zg-report-pill" style="${status[1]}">${safe(status[0])}</span></td><td>${safe(paymentLabel(pkg.paymentBucket))}<div class="text-[10px] text-slate-500">${safe(pkg.paymentMethod)}</div></td><td>${safe(pkg.courierName)}</td><td>${dateTime(pkg.createdAt)}</td><td class="text-right"><b>${formatMoney(pkg.orderAmount)}</b></td></tr>`; }).join("") || '<tr><td colspan="7" class="zg-empty">Bu filtrelerde sipariş bulunamadı.</td></tr>'}</tbody></table></div>
             <div class="flex justify-between items-center mt-4"><span class="text-xs text-slate-500">Listede ${rows.length} kayıt gösteriliyor.</span><button data-report-print class="zg-primary" type="button"><i class="ph ph-printer mr-1"></i>Yazdır</button></div>`;
+          container.querySelector('[name="period"]').value = periodFilter;
           container.querySelector('[name="status"]').value = statusFilter;
           container.querySelector('[name="payment"]').value = paymentFilter;
           bind();
@@ -1028,7 +1032,7 @@
         const load = async () => {
           container.style.opacity = ".55";
           try {
-            const query = new URLSearchParams({ status: statusFilter, payment: paymentFilter });
+            const query = new URLSearchParams({ period: periodFilter, status: statusFilter, payment: paymentFilter });
             if (selectedDate) query.set("date", selectedDate);
             render(await api(`/api/restaurant/reports/account?${query}`));
           } catch (error) {
@@ -1040,6 +1044,7 @@
             event.preventDefault();
             const form = new FormData(event.currentTarget);
             selectedDate = String(form.get("date") || "");
+            periodFilter = String(form.get("period") || "day");
             statusFilter = String(form.get("status") || "all");
             paymentFilter = String(form.get("payment") || "all");
             load();

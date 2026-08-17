@@ -5932,6 +5932,182 @@ function restaurantReportPaymentBucket(paymentMethod, paymentStatus) {
   return "other";
 }
 
+function accountReportWeekRange(dateKey) {
+  const selected = new Date(`${dateKey}T12:00:00.000Z`);
+  if (Number.isNaN(selected.getTime())) return { startDate: dateKey, endDate: dateKey };
+  const mondayOffset = (selected.getUTCDay() + 6) % 7;
+  const start = new Date(selected);
+  start.setUTCDate(start.getUTCDate() - mondayOffset);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 6);
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
+  };
+}
+
+function emptyAccountReportSummary(date, period = "day") {
+  return {
+    date,
+    period,
+    totalOrders: 0,
+    deliveredCount: 0,
+    cancelledCount: 0,
+    activeCount: 0,
+    failedCount: 0,
+    deliveredRevenue: 0,
+    cancelledAmount: 0,
+    cashCount: 0,
+    cashAmount: 0,
+    cardCount: 0,
+    cardAmount: 0,
+    onlineCount: 0,
+    onlineAmount: 0,
+    restaurantCount: 0,
+    restaurantAmount: 0,
+    otherCount: 0,
+    otherAmount: 0,
+  };
+}
+
+function mergeAccountReportSummary(target, source) {
+  for (const key of [
+    "totalOrders", "deliveredCount", "cancelledCount", "activeCount", "failedCount",
+    "cashCount", "cardCount", "onlineCount", "restaurantCount", "otherCount",
+  ]) target[key] += Number(source[key] || 0);
+  for (const key of [
+    "deliveredRevenue", "cancelledAmount", "cashAmount", "cardAmount", "onlineAmount",
+    "restaurantAmount", "otherAmount",
+  ]) target[key] = normalizeMoney(target[key] + Number(source[key] || 0));
+  return target;
+}
+
+function buildAccountOrderReport({ restaurantId = "", requestedDate, period = "day", statusFilter = "all", paymentFilter = "all" }) {
+  const selectedRange = period === "week"
+    ? accountReportWeekRange(requestedDate)
+    : { startDate: requestedDate, endDate: requestedDate };
+  const reportDateExpr = restaurantReportDateExpression("created_at");
+  const scopeSql = restaurantId ? "WHERE restaurant_id = ?" : "";
+  const scopeParams = restaurantId ? [restaurantId] : [];
+  const aggregateRows = db.prepare(`
+    SELECT
+      ${reportDateExpr} AS report_date,
+      status,
+      payment_method,
+      payment_status,
+      COUNT(*) AS package_count,
+      SUM(COALESCE(order_amount, 0)) AS total_amount
+    FROM packages
+    ${scopeSql}
+    GROUP BY ${reportDateExpr}, status, payment_method, payment_status
+    ORDER BY report_date DESC
+  `).all(...scopeParams);
+
+  const byDate = new Map();
+  for (const row of aggregateRows) {
+    const date = trimmed(row.report_date);
+    if (!date) continue;
+    const summary = byDate.get(date) || emptyAccountReportSummary(date);
+    const count = Number(row.package_count || 0);
+    const amount = normalizeMoney(row.total_amount);
+    const status = normalizeStatus(row.status);
+    const isCancelled = status === CANCELED_STATUS || status === REJECTED_STATUS;
+    const isDelivered = status === DELIVERED_STATUS;
+    const isFailed = status === FAILED_STATUS;
+    summary.totalOrders += count;
+    if (isDelivered) {
+      summary.deliveredCount += count;
+      summary.deliveredRevenue = normalizeMoney(summary.deliveredRevenue + amount);
+    } else if (isCancelled) {
+      summary.cancelledCount += count;
+      summary.cancelledAmount = normalizeMoney(summary.cancelledAmount + amount);
+    } else if (isFailed) summary.failedCount += count;
+    else summary.activeCount += count;
+    if (!isCancelled) {
+      const bucket = restaurantReportPaymentBucket(row.payment_method, row.payment_status);
+      summary[`${bucket}Count`] += count;
+      summary[`${bucket}Amount`] = normalizeMoney(summary[`${bucket}Amount`] + amount);
+    }
+    byDate.set(date, summary);
+  }
+
+  const summary = emptyAccountReportSummary(selectedRange.startDate, period);
+  for (const [date, daySummary] of byDate) {
+    if (date >= selectedRange.startDate && date <= selectedRange.endDate) mergeAccountReportSummary(summary, daySummary);
+  }
+  const packageDateExpr = restaurantReportDateExpression("p.created_at");
+  const rangeSql = `${packageDateExpr} BETWEEN ? AND ?`;
+  const rawPackages = db.prepare(`
+    SELECT
+      p.id, p.tracking_no, COALESCE(r.name, 'Isletme') AS restaurant_name,
+      p.recipient, p.phone, p.address, p.delivery_address, p.customer_address,
+      p.assigned_courier_name, p.payment_method, p.payment_status, p.order_amount,
+      p.source, p.source_platform, p.external_order_no, p.status,
+      p.created_at, p.updated_at, p.delivered_at, p.failed_at
+    FROM packages p
+    LEFT JOIN restaurants r ON r.id = p.restaurant_id
+    WHERE ${restaurantId ? "p.restaurant_id = ? AND " : ""}${rangeSql}
+    ORDER BY p.created_at DESC
+    LIMIT 10000
+  `).all(...scopeParams, selectedRange.startDate, selectedRange.endDate);
+
+  const matchesStatus = (status) => {
+    const normalized = normalizeStatus(status);
+    if (statusFilter === "all") return true;
+    if (statusFilter === "cancelled") return normalized === CANCELED_STATUS || normalized === REJECTED_STATUS;
+    if (statusFilter === "delivered") return normalized === DELIVERED_STATUS;
+    if (statusFilter === "failed") return normalized === FAILED_STATUS;
+    return ![DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(normalized);
+  };
+  const packages = rawPackages
+    .filter((pkg) => matchesStatus(pkg.status))
+    .filter((pkg) => paymentFilter === "all" || restaurantReportPaymentBucket(pkg.payment_method, pkg.payment_status) === paymentFilter)
+    .map((pkg) => ({
+      id: pkg.id,
+      trackingNo: pkg.tracking_no,
+      restaurantName: pkg.restaurant_name || "Isletme",
+      customerName: pkg.recipient || "Musteri",
+      phone: pkg.phone || "",
+      deliveryAddress: pkg.delivery_address || pkg.customer_address || pkg.address || "",
+      courierName: pkg.assigned_courier_name || "Atanmadi",
+      paymentMethod: pkg.payment_method || "Belirtilmedi",
+      paymentStatus: pkg.payment_status || "",
+      paymentBucket: restaurantReportPaymentBucket(pkg.payment_method, pkg.payment_status),
+      orderAmount: normalizeMoney(pkg.order_amount),
+      sourcePlatform: pkg.source_platform || pkg.source || "Telefon",
+      status: normalizeStatus(pkg.status),
+      createdAt: pkg.created_at,
+      deliveredAt: pkg.delivered_at,
+      failedAt: pkg.failed_at,
+    }));
+
+  let history;
+  if (period === "week") {
+    const byWeek = new Map();
+    for (const daySummary of byDate.values()) {
+      const range = accountReportWeekRange(daySummary.date);
+      const weekly = byWeek.get(range.startDate) || { ...emptyAccountReportSummary(range.startDate, "week"), endDate: range.endDate };
+      mergeAccountReportSummary(weekly, daySummary);
+      byWeek.set(range.startDate, weekly);
+    }
+    history = [...byWeek.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 52);
+  } else history = [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 180);
+
+  return {
+    ok: true,
+    timezone: RESTAURANT_REPORT_TIME_ZONE,
+    currentDate: restaurantReportDayKey(),
+    selectedDate: requestedDate,
+    period,
+    rangeStart: selectedRange.startDate,
+    rangeEnd: selectedRange.endDate,
+    filters: { status: statusFilter, payment: paymentFilter },
+    summary,
+    history,
+    packages,
+  };
+}
+
 function deliveredPackagesForCourierOnDate(courierId, reportDate = dayKey()) {
   const excludedApprovedPackagesSql = dbFacade.clientName() === "postgres"
     ? `SELECT package_item.value #>> '{}'
@@ -12086,6 +12262,27 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/reports/account") {
+    const adminSession = getAdminSession(req);
+    if (!adminSession) {
+      sendJson(res, 401, { error: "Admin oturumu bulunamadi." });
+      return;
+    }
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    const requestedDate = trimmed(requestUrl.searchParams.get("date")) || restaurantReportDayKey();
+    const period = trimmed(requestUrl.searchParams.get("period")).toLowerCase() || "day";
+    const statusFilter = trimmed(requestUrl.searchParams.get("status")).toLowerCase() || "all";
+    const paymentFilter = trimmed(requestUrl.searchParams.get("payment")).toLowerCase() || "all";
+    const validStatuses = new Set(["all", "delivered", "cancelled", "active", "failed"]);
+    const validPayments = new Set(["all", "cash", "card", "online", "restaurant", "other"]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !["day", "week"].includes(period) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)) {
+      sendJson(res, 400, { error: "Gecersiz rapor filtresi." });
+      return;
+    }
+    sendJson(res, 200, buildAccountOrderReport({ requestedDate, period, statusFilter, paymentFilter }));
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/api/system-curtain/control") {
     const suppliedToken = trimmed(req.headers["x-delivera-curtain-control"]);
     if (!systemCurtainControlTokenIsValid(suppliedToken)) {
@@ -12874,132 +13071,22 @@ async function handleApi(req, res, pathname) {
 
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const requestedDate = trimmed(requestUrl.searchParams.get("date")) || restaurantReportDayKey();
+    const period = trimmed(requestUrl.searchParams.get("period")).toLowerCase() || "day";
     const statusFilter = trimmed(requestUrl.searchParams.get("status")).toLowerCase() || "all";
     const paymentFilter = trimmed(requestUrl.searchParams.get("payment")).toLowerCase() || "all";
     const validStatuses = new Set(["all", "delivered", "cancelled", "active", "failed"]);
     const validPayments = new Set(["all", "cash", "card", "online", "restaurant", "other"]);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !["day", "week"].includes(period) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)) {
       sendJson(res, 400, { error: "Gecersiz rapor filtresi." });
       return;
     }
-
-    const reportDateExpr = restaurantReportDateExpression("created_at");
-    const aggregateRows = db.prepare(`
-      SELECT
-        ${reportDateExpr} AS report_date,
-        status,
-        payment_method,
-        payment_status,
-        COUNT(*) AS package_count,
-        SUM(COALESCE(order_amount, 0)) AS total_amount
-      FROM packages
-      WHERE restaurant_id = ?
-      GROUP BY ${reportDateExpr}, status, payment_method, payment_status
-      ORDER BY report_date DESC
-    `).all(session.restaurant_id);
-
-    const emptySummary = (date) => ({
-      date,
-      totalOrders: 0,
-      deliveredCount: 0,
-      cancelledCount: 0,
-      activeCount: 0,
-      failedCount: 0,
-      deliveredRevenue: 0,
-      cancelledAmount: 0,
-      cashCount: 0,
-      cashAmount: 0,
-      cardCount: 0,
-      cardAmount: 0,
-      onlineCount: 0,
-      onlineAmount: 0,
-      restaurantCount: 0,
-      restaurantAmount: 0,
-      otherCount: 0,
-      otherAmount: 0,
-    });
-    const byDate = new Map();
-    for (const row of aggregateRows) {
-      const date = trimmed(row.report_date);
-      if (!date) continue;
-      const summary = byDate.get(date) || emptySummary(date);
-      const count = Number(row.package_count || 0);
-      const amount = normalizeMoney(row.total_amount);
-      const status = normalizeStatus(row.status);
-      const isCancelled = status === CANCELED_STATUS || status === REJECTED_STATUS;
-      const isDelivered = status === DELIVERED_STATUS;
-      const isFailed = status === FAILED_STATUS;
-      summary.totalOrders += count;
-      if (isDelivered) {
-        summary.deliveredCount += count;
-        summary.deliveredRevenue = normalizeMoney(summary.deliveredRevenue + amount);
-      } else if (isCancelled) {
-        summary.cancelledCount += count;
-        summary.cancelledAmount = normalizeMoney(summary.cancelledAmount + amount);
-      } else if (isFailed) {
-        summary.failedCount += count;
-      } else {
-        summary.activeCount += count;
-      }
-      if (!isCancelled) {
-        const bucket = restaurantReportPaymentBucket(row.payment_method, row.payment_status);
-        summary[`${bucket}Count`] += count;
-        summary[`${bucket}Amount`] = normalizeMoney(summary[`${bucket}Amount`] + amount);
-      }
-      byDate.set(date, summary);
-    }
-
-    const rawPackages = db.prepare(`
-      SELECT
-        id, tracking_no, recipient, phone, address, delivery_address, customer_address,
-        assigned_courier_name, payment_method, payment_status, order_amount,
-        source, source_platform, external_order_no, status,
-        created_at, updated_at, delivered_at, failed_at
-      FROM packages
-      WHERE restaurant_id = ? AND ${reportDateExpr} = ?
-      ORDER BY created_at DESC
-      LIMIT 5000
-    `).all(session.restaurant_id, requestedDate);
-
-    const matchesStatus = (status) => {
-      const normalized = normalizeStatus(status);
-      if (statusFilter === "all") return true;
-      if (statusFilter === "cancelled") return normalized === CANCELED_STATUS || normalized === REJECTED_STATUS;
-      if (statusFilter === "delivered") return normalized === DELIVERED_STATUS;
-      if (statusFilter === "failed") return normalized === FAILED_STATUS;
-      return ![DELIVERED_STATUS, CANCELED_STATUS, REJECTED_STATUS, FAILED_STATUS].includes(normalized);
-    };
-    const packages = rawPackages
-      .filter((pkg) => matchesStatus(pkg.status))
-      .filter((pkg) => paymentFilter === "all" || restaurantReportPaymentBucket(pkg.payment_method, pkg.payment_status) === paymentFilter)
-      .map((pkg) => ({
-        id: pkg.id,
-        trackingNo: pkg.tracking_no,
-        customerName: pkg.recipient || "Musteri",
-        phone: pkg.phone || "",
-        deliveryAddress: pkg.delivery_address || pkg.customer_address || pkg.address || "",
-        courierName: pkg.assigned_courier_name || "Atanmadi",
-        paymentMethod: pkg.payment_method || "Belirtilmedi",
-        paymentStatus: pkg.payment_status || "",
-        paymentBucket: restaurantReportPaymentBucket(pkg.payment_method, pkg.payment_status),
-        orderAmount: normalizeMoney(pkg.order_amount),
-        sourcePlatform: pkg.source_platform || pkg.source || "Telefon",
-        status: normalizeStatus(pkg.status),
-        createdAt: pkg.created_at,
-        deliveredAt: pkg.delivered_at,
-        failedAt: pkg.failed_at,
-      }));
-    const history = [...byDate.values()].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 180);
-    sendJson(res, 200, {
-      ok: true,
-      timezone: RESTAURANT_REPORT_TIME_ZONE,
-      currentDate: restaurantReportDayKey(),
-      selectedDate: requestedDate,
-      filters: { status: statusFilter, payment: paymentFilter },
-      summary: byDate.get(requestedDate) || emptySummary(requestedDate),
-      history,
-      packages,
-    });
+    sendJson(res, 200, buildAccountOrderReport({
+      restaurantId: session.restaurant_id,
+      requestedDate,
+      period,
+      statusFilter,
+      paymentFilter,
+    }));
     return;
   }
 

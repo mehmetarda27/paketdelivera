@@ -56,6 +56,8 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
       DATABASE_PATH: dbFile,
       DB_PATH: dbFile,
       DELIVERA_DB_FILE: dbFile,
+      DELIVERA_ADMIN_USERNAME: "report-admin",
+      DELIVERA_ADMIN_PASSWORD: "ReportAdmin123!",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -111,6 +113,31 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     const previousDay = await previousDayResponse.json();
     assert.equal(previousDayResponse.status, 200, previousDay.error);
     assert.deepEqual(previousDay.packages.map((pkg) => pkg.id), ["pkg_before_midnight"]);
+
+    const weeklyResponse = await fetch(`${baseUrl}/api/restaurant/reports/account?date=2026-08-12&period=week`, { headers });
+    const weekly = await weeklyResponse.json();
+    assert.equal(weeklyResponse.status, 200, weekly.error);
+    assert.equal(weekly.period, "week");
+    assert.equal(weekly.rangeStart, "2026-08-10");
+    assert.equal(weekly.rangeEnd, "2026-08-16");
+    assert.equal(weekly.summary.totalOrders, 3);
+    assert.equal(weekly.summary.deliveredCount, 2);
+    assert.equal(weekly.summary.cancelledCount, 1);
+
+    const adminLoginResponse = await fetch(`${baseUrl}/api/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "report-admin", password: "ReportAdmin123!" }),
+    });
+    const adminLogin = await adminLoginResponse.json();
+    assert.equal(adminLoginResponse.status, 200, adminLogin.error);
+    const adminReportResponse = await fetch(`${baseUrl}/api/admin/reports/account?date=2026-08-12&period=week`, {
+      headers: { Authorization: `Bearer ${adminLogin.token}` },
+    });
+    const adminReport = await adminReportResponse.json();
+    assert.equal(adminReportResponse.status, 200, adminReport.error);
+    assert.equal(adminReport.summary.totalOrders, 3);
+    assert.deepEqual(new Set(adminReport.packages.map((pkg) => pkg.restaurantName)), new Set(["Günlük Rapor Restoranı"]));
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
