@@ -10,11 +10,16 @@
   const SEEN_ORDER_ALERTS_KEY = "deliveraRestaurantSeenOrderAlerts";
   const KIOSK_MODE_KEY = "deliveraRestaurantKioskMode";
   const KIOSK_PRINTED_ORDERS_KEY = "deliveraRestaurantKioskPrintedOrders";
+  const PLATFORM_ATTENTION_ACK_KEY = "deliveraRestaurantPlatformAttentionAcknowledged";
   const INITIAL_ORDER_ALERT_WINDOW_MS = 30 * 60 * 1000;
   const terminalStatuses = new Set(["delivered", "failed", "rejected", "cancelled", "canceled"]);
   let pushInitialized = false;
   let orderAudioContext = null;
   let orderReminderTimer = null;
+  let platformAttentionTimer = null;
+  let platformTitleTimer = null;
+  let platformAttentionPackageId = "";
+  const normalDocumentTitle = "Restoran Paneli | Delivera Express";
   const state = {
     token: localStorage.getItem(TOKEN_KEY) || "",
     refreshToken: localStorage.getItem(REFRESH_KEY) || "",
@@ -209,6 +214,14 @@
       .zg-platform-alert span:nth-last-of-type(1){transform:scale(1.12);box-shadow:0 0 0 4px rgba(249,115,22,.18)}
       .zg-notification-button{position:relative;width:38px;height:38px;border:1px solid #dbe4ee;border-radius:9px;background:#fff;color:#325ecc;display:grid;place-items:center;margin-left:8px}.zg-notification-badge{position:absolute;right:-5px;top:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#dc2626;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
       @keyframes zgPlatformPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(.94)}}
+      .zg-platform-attention-root{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(2,6,23,.82);backdrop-filter:blur(7px);animation:zgAttentionBackdrop .9s ease-in-out infinite alternate}
+      .zg-platform-attention{width:min(680px,96vw);overflow:hidden;border:4px solid #fb923c;border-radius:24px;background:#fff;box-shadow:0 0 0 10px rgba(249,115,22,.18),0 30px 90px rgba(0,0,0,.55);animation:zgAttentionCard .8s ease-in-out infinite alternate}
+      .zg-platform-attention-head{padding:18px 24px;background:linear-gradient(135deg,#c2410c,#f97316);color:#fff;text-align:center;font-size:14px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
+      .zg-platform-attention-body{padding:30px;text-align:center}.zg-platform-attention-icon{width:78px;height:78px;margin:0 auto 18px;border-radius:999px;background:#fff7ed;color:#ea580c;display:grid;place-items:center;font-size:42px}
+      .zg-platform-attention h2{margin:0;color:#0f172a;font-size:clamp(27px,4vw,42px);line-height:1.12;font-weight:900}.zg-platform-attention h2 strong{color:#ea580c}.zg-platform-attention-code{display:inline-flex;margin-top:18px;padding:8px 15px;border-radius:999px;background:#f1f5f9;color:#334155;font-weight:800}
+      .zg-platform-attention-info{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:22px 0;text-align:left}.zg-platform-attention-info div{padding:13px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc}.zg-platform-attention-info small{display:block;color:#64748b;font-size:11px}.zg-platform-attention-info b{display:block;margin-top:3px;color:#0f172a;overflow-wrap:anywhere}
+      .zg-platform-seen{width:100%;min-height:62px;border:0;border-radius:14px;background:#16a34a;color:#fff;font-size:22px;font-weight:900;box-shadow:0 10px 24px rgba(22,163,74,.25)}.zg-platform-seen:hover{background:#15803d}.zg-platform-attention-note{margin-top:12px;color:#64748b;font-size:12px}
+      @keyframes zgAttentionBackdrop{from{background:rgba(2,6,23,.76)}to{background:rgba(67,20,7,.88)}}@keyframes zgAttentionCard{from{transform:scale(.985);border-color:#fb923c}to{transform:scale(1.01);border-color:#ef4444}}
       .zg-source{display:inline-flex;align-items:center;gap:5px;margin-top:4px;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid transparent}
       .zg-source-yemeksepeti{color:#b91c1c;background:#fef2f2;border-color:#fecaca}.zg-source-getir{color:#5b21b6;background:#f5f3ff;border-color:#ddd6fe}
       .zg-source-migros{color:#c2410c;background:#fff7ed;border-color:#fed7aa}.zg-source-trendyol{color:#c2410c;background:#fff7ed;border-color:#fdba74}
@@ -523,6 +536,84 @@
     }
   }
 
+  function acknowledgedPlatformAlerts() {
+    try {
+      const values = JSON.parse(localStorage.getItem(PLATFORM_ATTENTION_ACK_KEY) || "[]");
+      return new Set(Array.isArray(values) ? values.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function platformAttentionId(pkg) {
+    return String(pkg?.id || pkg?.trackingNo || pkg?.externalOrderNo || "").trim();
+  }
+
+  function rememberPlatformAlertSeen(packageId) {
+    const values = [...acknowledgedPlatformAlerts(), String(packageId)].slice(-1500);
+    localStorage.setItem(PLATFORM_ATTENTION_ACK_KEY, JSON.stringify(values));
+  }
+
+  function stopPlatformAttention() {
+    window.clearInterval(platformAttentionTimer);
+    window.clearInterval(platformTitleTimer);
+    platformAttentionTimer = null;
+    platformTitleTimer = null;
+    platformAttentionPackageId = "";
+    document.title = normalDocumentTitle;
+    document.querySelector(".zg-platform-attention-root")?.remove();
+  }
+
+  function platformOrdersWaitingForAttention(packagesToCheck = packages()) {
+    const acknowledged = acknowledgedPlatformAlerts();
+    return packagesToCheck.filter((pkg) => {
+      const id = platformAttentionId(pkg);
+      return id && !acknowledged.has(id) && !terminalStatuses.has(String(pkg.status || "").toLowerCase()) && platformKey(sourceName(pkg)) !== "manual";
+    }).sort((left, right) => new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime());
+  }
+
+  function showPlatformAttention(pkg) {
+    const packageId = platformAttentionId(pkg);
+    if (!packageId || platformAttentionPackageId === packageId) return;
+    stopPlatformAttention();
+    platformAttentionPackageId = packageId;
+    const key = platformKey(sourceName(pkg));
+    const platform = platformLabels[key] || sourceName(pkg) || "Platform";
+    const root = document.createElement("section");
+    root.className = "zg-platform-attention-root";
+    root.setAttribute("role", "alertdialog");
+    root.setAttribute("aria-modal", "true");
+    root.setAttribute("aria-live", "assertive");
+    root.innerHTML = `<div class="zg-platform-attention"><div class="zg-platform-attention-head">Yeni platform siparişi</div><div class="zg-platform-attention-body"><div class="zg-platform-attention-icon"><i class="ph ph-bell-ringing"></i></div><h2>Merhaba, <strong>${safe(platform)}</strong>'dan yeni siparişiniz var!</h2><div class="zg-platform-attention-code">${safe(pkg.trackingNo || pkg.externalOrderNo || packageId)}</div><div class="zg-platform-attention-info"><div><small>Müşteri</small><b>${safe(pkg.customerName || "Müşteri")}</b></div><div><small>Sipariş tutarı</small><b>${safe(formatMoney(pkg.orderAmount))}</b></div></div><button type="button" class="zg-platform-seen" data-platform-seen>Gördüm</button><p class="zg-platform-attention-note">Bu düğme yalnızca uyarıyı kapatır; sipariş durumunu değiştirmez.</p></div></div>`;
+    root.querySelector("[data-platform-seen]").addEventListener("click", () => {
+      rememberPlatformAlertSeen(packageId);
+      stopPlatformAttention();
+      syncPlatformAttention();
+    });
+    document.body.appendChild(root);
+    let titleVisible = false;
+    const signal = () => { playOrderSignal(); navigator.vibrate?.([250, 100, 500]); };
+    const repeatSignal = () => {
+      if (!platformAttentionPackageId) return;
+      signal();
+      platformAttentionTimer = window.setTimeout(repeatSignal, 10 * 1000);
+    };
+    if (!orderReminderTimer) signal();
+    platformAttentionTimer = window.setTimeout(repeatSignal, orderReminderTimer ? 20 * 1000 : 10 * 1000);
+    platformTitleTimer = window.setInterval(() => {
+      titleVisible = !titleVisible;
+      document.title = titleVisible ? `🔔 YENİ ${platform.toLocaleUpperCase("tr-TR")} SİPARİŞİ` : normalDocumentTitle;
+    }, 700);
+  }
+
+  function syncPlatformAttention(packagesToCheck = packages()) {
+    const waiting = platformOrdersWaitingForAttention(packagesToCheck);
+    const currentStillWaiting = waiting.find((pkg) => platformAttentionId(pkg) === platformAttentionPackageId);
+    if (currentStillWaiting) return;
+    stopPlatformAttention();
+    if (waiting[0]) showPlatformAttention(waiting[0]);
+  }
+
   function updateBusiness() {
     const restaurant = state.data?.restaurants?.[0];
     if (!restaurant) return;
@@ -546,6 +637,7 @@
     state.data = data;
     if (incoming.length) announceNewPackages(incoming, { allowKioskPrint: hadData });
     rememberOrderAlerts(data.packages || []);
+    syncPlatformAttention(data.packages || []);
     updateBusiness(); updateCounters(); renderOrders();
     const badge = refs.notificationButton?.querySelector(".zg-notification-badge");
     if (badge) { badge.textContent = String((data.notifications || []).length); badge.hidden = !(data.notifications || []).length; }
@@ -1270,9 +1362,10 @@
   }
 
   if (globalThis.__DELIVERA_TEST__) {
-    globalThis.__restaurantDesignTest = { state, currentPackages, hydrate, connectStream, updateRestaurantCourierMap, refreshRestaurantMapData, restaurantLiveMapCouriers, platformKey };
+    globalThis.__restaurantDesignTest = { state, currentPackages, hydrate, connectStream, updateRestaurantCourierMap, refreshRestaurantMapData, restaurantLiveMapCouriers, platformKey, platformOrdersWaitingForAttention, syncPlatformAttention };
   }
 
-  window.addEventListener("beforeunload", () => { stopRestaurantMapRefresh(); state.stream?.close(); clearInterval(state.poll); });
+  window.addEventListener("storage", (event) => { if (event.key === PLATFORM_ATTENTION_ACK_KEY) syncPlatformAttention(); });
+  window.addEventListener("beforeunload", () => { stopRestaurantMapRefresh(); stopPlatformAttention(); state.stream?.close(); clearInterval(state.poll); });
   bootstrap();
 })();

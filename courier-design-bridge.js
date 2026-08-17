@@ -230,8 +230,9 @@
     playAssignmentSignal();
     assignmentSignalCount = 1;
     window.clearInterval(assignmentAlertTimer);
+    const maxSignals = window.DeliveraNativeApp ? 1 : MAX_ASSIGNMENT_SIGNALS;
     assignmentAlertTimer = window.setInterval(() => {
-      if (assignmentSignalCount >= MAX_ASSIGNMENT_SIGNALS) {
+      if (assignmentSignalCount >= maxSignals) {
         window.clearInterval(assignmentAlertTimer);
         assignmentAlertTimer = null;
         return;

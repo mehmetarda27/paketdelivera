@@ -31,6 +31,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -49,9 +50,13 @@ public class DeliveraCourierService extends Service implements LocationListener 
     private static final String SERVICE_CHANNEL = "delivera_background_location";
     private static final String ALERT_CHANNEL = "delivera_critical_packages";
     private static final int SERVICE_NOTIFICATION_ID = 7201;
-    private static final long POLL_SECONDS = 12L;
-    private static final long LOCATION_MIN_TIME_MS = 10_000L;
+    private static final String KEY_SEEN_ASSIGNMENTS = "seen_assignment_keys";
+    private static final long POLL_SECONDS = 20L;
+    private static final long LOCATION_MIN_TIME_MS = 15_000L;
     private static final float LOCATION_MIN_DISTANCE_METERS = 8f;
+    private static final long LOCATION_SEND_MIN_INTERVAL_MS = 25_000L;
+    private static final long LAST_KNOWN_LOCATION_MAX_AGE_MS = 5 * 60_000L;
+    private static final int MAX_PERSISTED_ASSIGNMENTS = 250;
 
     private final Object tokenLock = new Object();
     private final Set<String> seenNotificationIds = new HashSet<>();
@@ -61,6 +66,7 @@ public class DeliveraCourierService extends Service implements LocationListener 
     private volatile boolean available;
     private volatile boolean firstWorkspaceLoaded;
     private volatile Location latestLocation;
+    private volatile long lastLocationSentAtElapsedMs;
 
     public static void start(Context context) {
         Intent intent = new Intent(context, DeliveraCourierService.class);
@@ -82,6 +88,9 @@ public class DeliveraCourierService extends Service implements LocationListener 
         startForeground(SERVICE_NOTIFICATION_ID, buildServiceNotification("Kurye sistemi bağlanıyor"));
         scheduler = Executors.newSingleThreadScheduledExecutor();
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        seenAssignmentKeys.addAll(
+            getSharedPreferences(PREFS, MODE_PRIVATE).getStringSet(KEY_SEEN_ASSIGNMENTS, new HashSet<>())
+        );
         startLocationUpdatesIfPermitted();
         scheduler.scheduleWithFixedDelay(this::pollWorkspaceSafely, 0, POLL_SECONDS, TimeUnit.SECONDS);
     }
@@ -122,7 +131,9 @@ public class DeliveraCourierService extends Service implements LocationListener 
             return;
         }
         try {
+            Location newestLastKnown = null;
             if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                newestLastKnown = newerLocation(newestLastKnown, recentLastKnownLocation(locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)));
                 locationManager.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
                     LOCATION_MIN_TIME_MS,
@@ -131,6 +142,7 @@ public class DeliveraCourierService extends Service implements LocationListener 
                 );
             }
             if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                newestLastKnown = newerLocation(newestLastKnown, recentLastKnownLocation(locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)));
                 locationManager.requestLocationUpdates(
                     LocationManager.NETWORK_PROVIDER,
                     LOCATION_MIN_TIME_MS,
@@ -138,6 +150,7 @@ public class DeliveraCourierService extends Service implements LocationListener 
                     this
                 );
             }
+            latestLocation = newerLocation(latestLocation, newestLastKnown);
         } catch (RuntimeException ignored) {
             updateServiceNotification("Konum servisi bekleniyor");
         }
@@ -155,6 +168,18 @@ public class DeliveraCourierService extends Service implements LocationListener 
         if (available && scheduler != null) {
             scheduler.execute(this::sendLatestLocationSafely);
         }
+    }
+
+    private Location newerLocation(Location first, Location second) {
+        if (second == null) return first;
+        if (first == null || second.getTime() >= first.getTime()) return second;
+        return first;
+    }
+
+    private Location recentLastKnownLocation(Location location) {
+        if (location == null) return null;
+        long ageMs = System.currentTimeMillis() - location.getTime();
+        return ageMs >= -60_000L && ageMs <= LAST_KNOWN_LOCATION_MAX_AGE_MS ? location : null;
     }
 
     @Override
@@ -240,15 +265,30 @@ public class DeliveraCourierService extends Service implements LocationListener 
                     String restaurant = item.optString("restaurantName", "Restoran");
                     String address = item.optString("customerAddress", item.optString("deliveryAddress", "Paket ayrıntısını açın"));
                     showCriticalNotification("Yeni paket düştü", restaurant + " · " + address, "package-" + id);
+                    rememberAssignmentKey(key);
                 }
             }
         }
 
         seenNotificationIds.clear();
         seenNotificationIds.addAll(currentNotificationIds);
-        seenAssignmentKeys.clear();
         seenAssignmentKeys.addAll(currentAssignmentKeys);
         firstWorkspaceLoaded = true;
+    }
+
+    private void rememberAssignmentKey(String key) {
+        seenAssignmentKeys.add(key);
+        LinkedHashSet<String> bounded = new LinkedHashSet<>(seenAssignmentKeys);
+        while (bounded.size() > MAX_PERSISTED_ASSIGNMENTS) {
+            String oldest = bounded.iterator().next();
+            bounded.remove(oldest);
+        }
+        seenAssignmentKeys.clear();
+        seenAssignmentKeys.addAll(bounded);
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+            .edit()
+            .putStringSet(KEY_SEEN_ASSIGNMENTS, new HashSet<>(bounded))
+            .apply();
     }
 
     private void sendLatestLocationSafely() {
@@ -259,6 +299,10 @@ public class DeliveraCourierService extends Service implements LocationListener 
         if (location == null) {
             return;
         }
+        long nowElapsed = SystemClock.elapsedRealtime();
+        if (lastLocationSentAtElapsedMs > 0 && nowElapsed - lastLocationSentAtElapsedMs < LOCATION_SEND_MIN_INTERVAL_MS) {
+            return;
+        }
         try {
             JSONObject payload = new JSONObject();
             payload.put("latitude", location.getLatitude());
@@ -267,7 +311,10 @@ public class DeliveraCourierService extends Service implements LocationListener 
             payload.put("locationOnly", true);
             HttpResult result = request("PATCH", "/api/courier/location", payload.toString(), accessToken());
             if (result.status == 401 && refreshAccessToken()) {
-                request("PATCH", "/api/courier/location", payload.toString(), accessToken());
+                result = request("PATCH", "/api/courier/location", payload.toString(), accessToken());
+            }
+            if (result.status >= 200 && result.status < 300) {
+                lastLocationSentAtElapsedMs = nowElapsed;
             }
         } catch (Exception ignored) {
             // The next scheduled workspace/location cycle retries without interrupting the service.

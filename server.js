@@ -15386,6 +15386,11 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const availabilityChanged = typeof body.available === "boolean" && Boolean(existing.available) !== Boolean(body.available);
+    const previousLocationAtMs = new Date(existing.last_location_at || "").getTime();
+    const previousLocationAgeMs = Date.now() - previousLocationAtMs;
+    const previousLocationWasFresh = Number.isFinite(previousLocationAtMs)
+      && previousLocationAgeMs >= -60_000
+      && previousLocationAgeMs <= COURIER_LOCATION_FRESHNESS_MS;
 
     if (typeof body.available === "boolean") {
       if (body.available) {
@@ -15413,16 +15418,18 @@ async function handleApi(req, res, pathname) {
     const lightweightLocationOnly = body.locationOnly === true && !availabilityChanged;
     const workspace = lightweightLocationOnly ? null : buildCourierWorkspace(session.courier_id);
     const courier = workspace?.courier || sanitizeCourier(db.prepare("SELECT * FROM couriers WHERE id = ?").get(session.courier_id));
-    writeAuditLog({
-      actorRole: "courier",
-      actorId: session.courier_id,
-      action: "courier_location_updated",
-      details: {
-        available: courier?.available ?? Boolean(body.available),
-        latitude: hasCoordinates ? latitude : existing.x,
-        longitude: hasCoordinates ? longitude : existing.y,
-      },
-    });
+    if (!lightweightLocationOnly || availabilityChanged) {
+      writeAuditLog({
+        actorRole: "courier",
+        actorId: session.courier_id,
+        action: "courier_location_updated",
+        details: {
+          available: courier?.available ?? Boolean(body.available),
+          latitude: hasCoordinates ? latitude : existing.x,
+          longitude: hasCoordinates ? longitude : existing.y,
+        },
+      });
+    }
     broadcastLiveEvent({
       type: availabilityChanged ? "courier-availability" : "courier-location",
       courierId: session.courier_id,
@@ -15434,6 +15441,15 @@ async function handleApi(req, res, pathname) {
         ? (body.available ? "Kurye tekrar atamaya acildi." : "Kurye pasife alindi.")
         : "",
     });
+    const courierIsNowAvailable = typeof body.available === "boolean"
+      ? Boolean(body.available)
+      : Boolean(existing.available);
+    if (courierIsNowAvailable && (availabilityChanged || !previousLocationWasFresh)) {
+      // A courier returning from the background can become eligible after packages
+      // have already entered the waiting pool. Re-run assignment once on that
+      // stale -> fresh transition; ordinary location heartbeats do not sweep.
+      scheduleRebalancePackages();
+    }
     sendJson(res, 200, workspace || { courier, packages: [] });
     return;
   }

@@ -55,6 +55,29 @@ test("new restaurant design filters closed orders and subscribes to named live e
     assert.match(desktopPrints[0].html, /SİPARİŞ İÇERİĞİ|SÄ°PARÄ°Å Ä°Ã‡ERÄ°ÄÄ°/);
     assert.doesNotMatch(desktopPrints[0].html, /window\.print/);
     assert.equal(desktopNotifications.length, 1);
+    const platformAttention = dom.window.document.querySelector(".zg-platform-attention-root");
+    assert.ok(platformAttention);
+    assert.match(platformAttention.textContent, /Trendyol/);
+    assert.match(platformAttention.textContent, /PKT-ACTIVE/);
+    assert.match(platformAttention.textContent, /yalnızca uyarıyı kapatır/);
+    platformAttention.querySelector("[data-platform-seen]").click();
+    assert.equal(dom.window.document.querySelector(".zg-platform-attention-root"), null);
+    assert.match(dom.window.localStorage.getItem("deliveraRestaurantPlatformAttentionAcknowledged"), /pkg_active/);
+    hooks.hydrate({
+      packages: [{ id: "pkg_phone", trackingNo: "PKT-PHONE", status: "pending", source: "phone", createdAt: today }],
+      couriers: [],
+      restaurants: [],
+    });
+    assert.equal(dom.window.document.querySelector(".zg-platform-attention-root"), null);
+    hooks.hydrate({
+      packages: [
+        { id: "pkg_active", trackingNo: "PKT-ACTIVE", status: "on_route", sourcePlatform: "Trendyol Yemek", updatedAt: yesterday, items: [{ name: "Tantuni", quantity: 2, price: 125, extraIngredients: [{ name: "Kaşar" }], note: "Acısız" }] },
+        { id: "pkg_delivered", trackingNo: "PKT-DELIVERED", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: today },
+        { id: "pkg_old", trackingNo: "PKT-OLD", status: "delivered", sourcePlatform: "Yemeksepeti", deliveredAt: yesterday },
+      ],
+      couriers: [],
+      restaurants: [],
+    });
     hooks.state.filter = "active";
     assert.deepEqual(Array.from(hooks.currentPackages(), (pkg) => pkg.id), ["pkg_active"]);
     hooks.state.filter = "all";
