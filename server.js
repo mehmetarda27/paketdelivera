@@ -12305,13 +12305,27 @@ async function handleApi(req, res, pathname) {
     const period = trimmed(requestUrl.searchParams.get("period")).toLowerCase() || "day";
     const statusFilter = trimmed(requestUrl.searchParams.get("status")).toLowerCase() || "all";
     const paymentFilter = trimmed(requestUrl.searchParams.get("payment")).toLowerCase() || "all";
+    const restaurantId = trimmed(requestUrl.searchParams.get("restaurantId"));
     const validStatuses = new Set(["all", "delivered", "cancelled", "active", "failed"]);
     const validPayments = new Set(["all", "cash", "card", "online", "restaurant", "other"]);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !["day", "week"].includes(period) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)) {
       sendJson(res, 400, { error: "Gecersiz rapor filtresi." });
       return;
     }
-    sendJson(res, 200, buildAccountOrderReport({ requestedDate, period, statusFilter, paymentFilter }));
+    const reportRestaurants = getRestaurants().map((restaurant) => ({
+      id: restaurant.id,
+      name: restaurant.name,
+      zone: restaurant.zone || "",
+    }));
+    if (restaurantId && !reportRestaurants.some((restaurant) => restaurant.id === restaurantId)) {
+      sendJson(res, 404, { error: "Raporlanacak isletme bulunamadi." });
+      return;
+    }
+    sendJson(res, 200, {
+      ...buildAccountOrderReport({ restaurantId, requestedDate, period, statusFilter, paymentFilter }),
+      selectedRestaurantId: restaurantId,
+      restaurants: reportRestaurants,
+    });
     return;
   }
 

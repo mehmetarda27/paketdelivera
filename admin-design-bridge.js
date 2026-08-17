@@ -570,12 +570,13 @@
   }
 
   function accountReportModal() {
-    const root = modal("Sipariş Raporları", '<div data-admin-account-report><div class="da-empty">Rapor hazırlanıyor...</div></div>', null, "da-report-modal");
+    const root = modal("Tüm İşletmeler Sipariş Raporu", '<div data-admin-account-report><div class="da-empty">Rapor hazırlanıyor...</div></div>', null, "da-report-modal");
     const container = root.querySelector("[data-admin-account-report]");
     let selectedDate = localDateKey();
     let periodFilter = "day";
     let statusFilter = "all";
     let paymentFilter = "all";
+    let restaurantFilter = "";
     const statusMeta = (status) => ({
       delivered: ["Teslim edildi", "background:#dcfce7;color:#166534"],
       cancelled: ["İptal", "background:#fee2e2;color:#991b1b"],
@@ -598,6 +599,7 @@
         periodFilter = String(form.get("period") || "day");
         statusFilter = String(form.get("status") || "all");
         paymentFilter = String(form.get("payment") || "all");
+        restaurantFilter = String(form.get("restaurantId") || "");
         load();
       });
       container.querySelectorAll("[data-report-day]").forEach((button) => button.addEventListener("click", () => { selectedDate = button.dataset.reportDay; load(); }));
@@ -609,15 +611,19 @@
       const summary = data.summary || {};
       const rows = data.packages || [];
       const history = data.history || [];
+      const reportRestaurants = data.restaurants || restaurants();
+      restaurantFilter = data.selectedRestaurantId || restaurantFilter;
+      const selectedRestaurant = reportRestaurants.find((restaurant) => restaurant.id === restaurantFilter);
       container.innerHTML = `
         <form data-report-filter class="da-report-controls">
+          <label>İşletme<select name="restaurantId"><option value="">Tüm işletmeler</option>${reportRestaurants.map((restaurant) => `<option value="${esc(restaurant.id)}">${esc(restaurant.name)}${restaurant.zone ? ` · ${esc(restaurant.zone)}` : ""}</option>`).join("")}</select></label>
           <label>Rapor dönemi<select name="period"><option value="day">Günlük</option><option value="week">Haftalık</option></select></label>
           <label>Rapor tarihi<input name="date" type="date" value="${esc(selectedDate)}" max="${esc(data.currentDate)}"></label>
           <label>Sipariş durumu<select name="status"><option value="all">Tüm siparişler</option><option value="delivered">Teslim edilenler</option><option value="cancelled">İptal / reddedilenler</option><option value="active">Devam edenler</option><option value="failed">Teslim edilemeyenler</option></select></label>
           <label>Ödeme türü<select name="payment"><option value="all">Tüm ödemeler</option><option value="cash">Nakit</option><option value="card">Kapıda kart</option><option value="online">Online</option><option value="restaurant">Restoran tahsilatı</option><option value="other">Diğer</option></select></label>
           <button class="da-primary" type="submit">Filtrele</button>
         </form>
-        <div class="da-report-note"><b>${periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${periodFilter === "week" ? `${esc(data.rangeStart)} – ${esc(data.rangeEnd)}` : "Türkiye saatiyle 00.00–23.59"}</div>
+        <div class="da-report-note"><b>Rapor kapsamı:</b> ${esc(selectedRestaurant?.name || "Tüm kayıtlı işletmeler")} · <b>${periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${periodFilter === "week" ? `${esc(data.rangeStart)} – ${esc(data.rangeEnd)}` : "Türkiye saatiyle 00.00–23.59"}</div>
         <div class="da-report-cards">
           <div class="da-report-card is-blue"><span>Toplam sipariş</span><strong>${Number(summary.totalOrders || 0)}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
           <div class="da-report-card is-green"><span>Teslim edildi</span><strong>${Number(summary.deliveredCount || 0)}</strong><small>${money(summary.deliveredRevenue || 0)} ciro</small></div>
@@ -635,12 +641,14 @@
       container.querySelector('[name="period"]').value = periodFilter;
       container.querySelector('[name="status"]').value = statusFilter;
       container.querySelector('[name="payment"]').value = paymentFilter;
+      container.querySelector('[name="restaurantId"]').value = restaurantFilter;
       bind();
     };
     const load = async () => {
       container.style.opacity = ".55";
       try {
         const query = new URLSearchParams({ date: selectedDate, period: periodFilter, status: statusFilter, payment: paymentFilter });
+        if (restaurantFilter) query.set("restaurantId", restaurantFilter);
         render(await api(`/api/admin/reports/account?${query}`));
       } catch (error) { container.innerHTML = `<div class="da-empty" style="color:#b91c1c">${esc(error.message)}</div>`; }
       finally { container.style.opacity = "1"; }

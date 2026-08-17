@@ -70,6 +70,8 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     db.exec("PRAGMA busy_timeout = 10000");
     db.prepare("INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("rst_daily_report", "Günlük Rapor Restoranı", "Akdeniz", 36.8, 34.6, "[]", "daily-report-key", "daily-report-secret", "2026-08-11T12:00:00.000Z");
+    db.prepare("INSERT INTO restaurants (id, name, zone, x, y, platforms_json, api_key, webhook_secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rst_other_report", "Diğer Rapor Restoranı", "Yenişehir", 36.81, 34.61, "[]", "other-report-key", "other-report-secret", "2026-08-11T12:00:00.000Z");
     const insertPackage = db.prepare(`
       INSERT INTO packages (
         id, tracking_no, restaurant_id, source, source_platform, external_order_no,
@@ -81,6 +83,15 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     insertPackage.run("pkg_before_midnight", "PKT-BEFORE", "BEFORE", "cash_on_delivery", 100, "cash_collected", "delivered", "delivered", "2026-08-11T20:59:00.000Z", null, "2026-08-11T20:59:00.000Z", "2026-08-11T20:59:00.000Z");
     insertPackage.run("pkg_after_midnight_cash", "PKT-AFTER-CASH", "AFTER-CASH", "cash_on_delivery", 250, "cash_collected", "delivered", "delivered", "2026-08-11T21:01:00.000Z", null, "2026-08-11T21:01:00.000Z", "2026-08-11T21:01:00.000Z");
     insertPackage.run("pkg_after_midnight_cancel", "PKT-AFTER-CANCEL", "AFTER-CANCEL", "paid_online", 125, "paid_online", "cancelled", "cancelled", null, "2026-08-11T21:02:00.000Z", "2026-08-11T21:02:00.000Z", "2026-08-11T21:02:00.000Z");
+    db.prepare(`
+      INSERT INTO packages (
+        id, tracking_no, restaurant_id, source, source_platform, external_order_no,
+        recipient, phone, address, zone, eta, payment_method, order_amount, payment_status,
+        x, y, note, status, assignment_status, delivered_at, assignment_reason, created_at, updated_at
+      ) VALUES ('pkg_other_restaurant', 'PKT-OTHER', 'rst_other_report', 'restaurant_panel', 'Telefon', 'OTHER',
+        'Diğer Müşteri', '05310000001', 'Diğer adres', 'Yenişehir', '20 dk', 'paid_online', 400, 'paid_online',
+        36.81, 34.61, '', 'delivered', 'delivered', '2026-08-11T21:03:00.000Z', 'test', '2026-08-11T21:03:00.000Z', '2026-08-11T21:03:00.000Z')
+    `).run();
     db.close();
 
     const loginResponse = await fetch(`${baseUrl}/api/restaurant/session`, {
@@ -103,6 +114,11 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     assert.equal(report.summary.cashAmount, 250);
     assert.equal(report.summary.cancelledAmount, 125);
     assert.deepEqual(report.packages.map((pkg) => pkg.id).sort(), ["pkg_after_midnight_cancel", "pkg_after_midnight_cash"]);
+
+    const spoofedRestaurantResponse = await fetch(`${baseUrl}/api/restaurant/reports/account?date=2026-08-12&restaurantId=rst_other_report`, { headers });
+    const spoofedRestaurantReport = await spoofedRestaurantResponse.json();
+    assert.equal(spoofedRestaurantResponse.status, 200, spoofedRestaurantReport.error);
+    assert.deepEqual(spoofedRestaurantReport.packages.map((pkg) => pkg.id).sort(), ["pkg_after_midnight_cancel", "pkg_after_midnight_cash"]);
 
     const cancelledResponse = await fetch(`${baseUrl}/api/restaurant/reports/account?date=2026-08-12&status=cancelled`, { headers });
     const cancelled = await cancelledResponse.json();
@@ -136,8 +152,18 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     });
     const adminReport = await adminReportResponse.json();
     assert.equal(adminReportResponse.status, 200, adminReport.error);
-    assert.equal(adminReport.summary.totalOrders, 3);
-    assert.deepEqual(new Set(adminReport.packages.map((pkg) => pkg.restaurantName)), new Set(["Günlük Rapor Restoranı"]));
+    assert.equal(adminReport.summary.totalOrders, 4);
+    assert.equal(adminReport.restaurants.length, 2);
+    assert.deepEqual(new Set(adminReport.packages.map((pkg) => pkg.restaurantName)), new Set(["Günlük Rapor Restoranı", "Diğer Rapor Restoranı"]));
+
+    const filteredAdminResponse = await fetch(`${baseUrl}/api/admin/reports/account?date=2026-08-12&period=week&restaurantId=rst_other_report`, {
+      headers: { Authorization: `Bearer ${adminLogin.token}` },
+    });
+    const filteredAdmin = await filteredAdminResponse.json();
+    assert.equal(filteredAdminResponse.status, 200, filteredAdmin.error);
+    assert.equal(filteredAdmin.selectedRestaurantId, "rst_other_report");
+    assert.equal(filteredAdmin.summary.totalOrders, 1);
+    assert.deepEqual(filteredAdmin.packages.map((pkg) => pkg.id), ["pkg_other_restaurant"]);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
