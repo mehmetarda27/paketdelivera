@@ -14,6 +14,32 @@ test("new restaurant design filters closed orders and subscribes to named live e
   const eventTypes = new Set();
   const desktopPrints = [];
   const desktopNotifications = [];
+  const alarmOscillators = [];
+  const alarmGains = [];
+  class FakeAudioContext {
+    constructor() { this.state = "running"; this.currentTime = 0; this.destination = {}; }
+    resume() { this.state = "running"; return Promise.resolve(); }
+    createGain() {
+      const values = [];
+      alarmGains.push(values);
+      return {
+        gain: {
+          setValueAtTime(value) { values.push(value); },
+          exponentialRampToValueAtTime(value) { values.push(value); },
+        },
+        connect(target) { return target; },
+      };
+    }
+    createOscillator() {
+      const oscillator = {
+        frequency: { value: 0 }, type: "sine", stopCalls: 0,
+        connect(target) { return target; }, disconnect() {}, start() {},
+        stop() { this.stopCalls += 1; },
+      };
+      alarmOscillators.push(oscillator);
+      return oscillator;
+    }
+  }
   class FakeEventSource {
     addEventListener(type) { eventTypes.add(type); }
     close() {}
@@ -22,6 +48,7 @@ test("new restaurant design filters closed orders and subscribes to named live e
   const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/restaurant-panel", pretendToBeVisual: true });
   try {
     dom.window.__DELIVERA_TEST__ = true;
+    dom.window.AudioContext = FakeAudioContext;
     dom.window.EventSource = FakeEventSource;
     dom.window.deliveraDesktop = {
       autoPrintReceipt: async (payload) => { desktopPrints.push(payload); return { ok: true }; },
@@ -60,8 +87,11 @@ test("new restaurant design filters closed orders and subscribes to named live e
     assert.match(platformAttention.textContent, /Trendyol/);
     assert.match(platformAttention.textContent, /PKT-ACTIVE/);
     assert.match(platformAttention.textContent, /yalnızca uyarıyı kapatır/);
+    assert.ok(alarmOscillators.length >= 8, "uzun alarm dizisi kurulmalı");
+    assert.ok(alarmGains.some((values) => values.includes(0.38)), "alarm sesi yüksek kazanç kullanmalı");
     platformAttention.querySelector("[data-platform-seen]").click();
     assert.equal(dom.window.document.querySelector(".zg-platform-attention-root"), null);
+    assert.ok(alarmOscillators.every((oscillator) => oscillator.stopCalls >= 2), "Gördüm aktif alarm seslerini durdurmalı");
     assert.match(dom.window.localStorage.getItem("deliveraRestaurantPlatformAttentionAcknowledged"), /pkg_active/);
     hooks.hydrate({
       packages: [{ id: "pkg_phone", trackingNo: "PKT-PHONE", status: "pending", source: "phone", createdAt: today }],

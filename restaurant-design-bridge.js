@@ -15,6 +15,7 @@
   const terminalStatuses = new Set(["delivered", "failed", "rejected", "cancelled", "canceled"]);
   let pushInitialized = false;
   let orderAudioContext = null;
+  const activeOrderOscillators = new Set();
   let orderReminderTimer = null;
   let platformAttentionTimer = null;
   let platformTitleTimer = null;
@@ -322,21 +323,36 @@
     } catch {}
   }
 
+  function stopActiveOrderSignal() {
+    activeOrderOscillators.forEach((oscillator) => {
+      try { oscillator.stop(); } catch {}
+      try { oscillator.disconnect(); } catch {}
+    });
+    activeOrderOscillators.clear();
+  }
+
   function playOrderSignal() {
     if (state.panelData.generalSettings?.orderSound === false) return;
     try {
       unlockOrderAudio();
       if (orderAudioContext.state !== "running") return;
-      [740, 988, 1175].forEach((frequency, index) => {
+      stopActiveOrderSignal();
+      [880, 1175, 880, 1175, 1320, 1175, 880, 1175].forEach((frequency, index) => {
         const oscillator = orderAudioContext.createOscillator();
         const gain = orderAudioContext.createGain();
-        const start = orderAudioContext.currentTime + index * 0.18;
+        const start = orderAudioContext.currentTime + index * 0.32;
+        const stop = start + 0.28;
+        oscillator.type = "square";
         oscillator.frequency.value = frequency;
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.38, start + 0.02);
+        gain.gain.setValueAtTime(0.38, stop - 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.0001, stop);
         oscillator.connect(gain).connect(orderAudioContext.destination);
-        oscillator.start(start); oscillator.stop(start + 0.16);
+        oscillator.onended = () => activeOrderOscillators.delete(oscillator);
+        activeOrderOscillators.add(oscillator);
+        oscillator.start(start);
+        oscillator.stop(stop);
       });
     } catch {}
   }
@@ -555,11 +571,14 @@
   }
 
   function stopPlatformAttention() {
-    window.clearInterval(platformAttentionTimer);
+    window.clearTimeout(platformAttentionTimer);
     window.clearInterval(platformTitleTimer);
+    window.clearTimeout(orderReminderTimer);
     platformAttentionTimer = null;
     platformTitleTimer = null;
+    orderReminderTimer = null;
     platformAttentionPackageId = "";
+    stopActiveOrderSignal();
     document.title = normalDocumentTitle;
     document.querySelector(".zg-platform-attention-root")?.remove();
   }
@@ -592,14 +611,14 @@
     });
     document.body.appendChild(root);
     let titleVisible = false;
-    const signal = () => { playOrderSignal(); navigator.vibrate?.([250, 100, 500]); };
+    const signal = () => { playOrderSignal(); navigator.vibrate?.([500, 150, 500, 150, 900]); };
     const repeatSignal = () => {
       if (!platformAttentionPackageId) return;
       signal();
-      platformAttentionTimer = window.setTimeout(repeatSignal, 10 * 1000);
+      platformAttentionTimer = window.setTimeout(repeatSignal, 3500);
     };
-    if (!orderReminderTimer) signal();
-    platformAttentionTimer = window.setTimeout(repeatSignal, orderReminderTimer ? 20 * 1000 : 10 * 1000);
+    signal();
+    platformAttentionTimer = window.setTimeout(repeatSignal, 3500);
     platformTitleTimer = window.setInterval(() => {
       titleVisible = !titleVisible;
       document.title = titleVisible ? `🔔 YENİ ${platform.toLocaleUpperCase("tr-TR")} SİPARİŞİ` : normalDocumentTitle;
