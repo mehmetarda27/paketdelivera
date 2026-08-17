@@ -186,6 +186,16 @@ test("restaurant web push subscription is authenticated, isolated and idempotent
     const bridgeSource = await bridgeResponse.text();
     assert.match(bridgeSource, /restaurantEnablePushButton/);
     assert.match(bridgeSource, /\/api\/restaurant\/push\/subscriptions/);
+    assert.match(bridgeSource, /deliveraRestaurantKioskPrintedOrders/);
+    assert.match(bridgeSource, /allowKioskPrint: hadData/);
+
+    const setupResponse = await fetch(`${baseUrl}/downloads/delivera-restoran-kurulum.cmd`);
+    assert.equal(setupResponse.status, 200);
+    assert.match(setupResponse.headers.get("content-disposition") || "", /attachment.*delivera-restoran-kurulum\.cmd/i);
+    const setupSource = await setupResponse.text();
+    assert.match(setupSource, /--kiosk-printing/);
+    assert.match(setupSource, /restaurant\.html\?kiosk=1/);
+    assert.match(setupSource, /NotificationsAllowedForUrls/);
 
     const removed = await jsonRequest(baseUrl, "/api/restaurant/push/subscriptions", {
       method: "DELETE",

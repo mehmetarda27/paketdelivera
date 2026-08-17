@@ -341,6 +341,7 @@ const STATIC_FILES = {
   "/courier-design-bridge.js": "courier-design-bridge.js",
   "/restaurant-design-bridge.js": "restaurant-design-bridge.js",
   "/admin-design-bridge.js": "admin-design-bridge.js",
+  "/downloads/delivera-restoran-kurulum.cmd": "delivera-restoran-kurulum.cmd",
   "/vendor/leaflet.js": "node_modules/leaflet/dist/leaflet.js",
   "/vendor/leaflet.css": "node_modules/leaflet/dist/leaflet.css",
   "/landing.js": "landing.js",
@@ -2667,7 +2668,7 @@ function writeSecurityHeaders(res) {
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader("Content-Security-Policy", isCourierDesignPage || isRestaurantDesignPage
-    ? "default-src 'self'; style-src 'self' https://fonts.googleapis.com https://unpkg.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com https://unpkg.com; script-src 'self' https://cdn.tailwindcss.com https://unpkg.com 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://lh3.googleusercontent.com https://tile.openstreetmap.org; connect-src 'self' https://router.project-osrm.org; frame-src https://www.google.com https://www.openstreetmap.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ? "default-src 'self'; style-src 'self' https://fonts.googleapis.com https://unpkg.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com https://unpkg.com; script-src 'self' https://cdn.tailwindcss.com https://unpkg.com 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://lh3.googleusercontent.com https://tile.openstreetmap.org; connect-src 'self' https://router.project-osrm.org; frame-src 'self' https://www.google.com https://www.openstreetmap.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     : "default-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; script-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self' https://router.project-osrm.org; frame-src https://www.google.com https://www.openstreetmap.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   if (FORCE_HTTPS || NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -4286,7 +4287,11 @@ function sendFile(res, fileName) {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
-  res.writeHead(200, { "Content-Type": typeMap[ext] || "text/plain; charset=utf-8" });
+  if (ext === ".cmd") {
+    res.setHeader("Content-Disposition", 'attachment; filename="delivera-restoran-kurulum.cmd"');
+    res.setHeader("X-Content-Type-Options", "nosniff");
+  }
+  res.writeHead(200, { "Content-Type": ext === ".cmd" ? "application/octet-stream" : (typeMap[ext] || "text/plain; charset=utf-8") });
   fs.createReadStream(filePath).pipe(res);
 }
 

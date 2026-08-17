@@ -129,6 +129,10 @@
       unmatchedLink.className = integrationLink.className;
       unmatchedLink.innerHTML = '<span class="material-symbols-outlined mr-3 text-[20px]">rule</span><span class="text-body-sm font-body-sm">Eşleşmeyen Paketler</span><span class="da-sidebar-count">0</span>';
       credentialsLink.after(unmatchedLink);
+      const deviceSetupLink = document.createElement("a");
+      deviceSetupLink.className = integrationLink.className;
+      deviceSetupLink.innerHTML = '<span class="material-symbols-outlined mr-3 text-[20px]">print_connect</span><span class="text-body-sm font-body-sm">Restoran Cihaz Kurulumu</span>';
+      unmatchedLink.after(deviceSetupLink);
       unmatchedMenuBadge = unmatchedLink.querySelector(".da-sidebar-count");
     }
     const sidebarLinks = [...document.querySelectorAll("aside nav a")];
@@ -780,6 +784,15 @@
     if (route === "işletmeler") return restaurantManagement();
     if (route === "kuryeler") return courierManagement();
     if (route.includes("eşleşmeyen paket")) return showUnmatchedWorkspace().catch((error) => toast(error.message, "error"));
+    if (route.includes("restoran cihaz kurulumu")) {
+      const download = document.createElement("a");
+      download.href = "/downloads/delivera-restoran-kurulum.cmd";
+      download.download = "delivera-restoran-kurulum.cmd";
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      return toast("Restoran kurulum dosyası indirildi. Restoran bilgisayarında bir kez çalıştırın.", "success");
+    }
     if (route.includes("oto atama")) return modal("Oto Atama Yönetimi", `<div class="da-list"><div class="da-list-row"><b>Aktif kurye</b><span>${state.data.stats?.activeCouriers || 0}</span></div><div class="da-list-row"><b>Atama bekleyen</b><span>${state.data.stats?.waitingPackages || 0}</span></div><div class="da-list-row"><b>Atama yöntemi</b><span>En yakın uygun kurye · canlı GPS ve kapasite kontrolü</span></div></div><div class="da-actions mt-4"><button class="da-primary" data-rebalance>Bekleyen Paketleri Şimdi Yeniden Ata</button></div>`, (root) => root.querySelector("[data-rebalance]").addEventListener("click", async () => { try { absorb(await api("/api/admin/rebalance", { method: "POST", body: "{}" })); toast("Otomatik atama yeniden çalıştırıldı.", "success"); root.remove(); } catch (error) { toast(error.message, "error"); } }));
     genericRoute(route);
   }

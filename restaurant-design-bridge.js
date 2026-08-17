@@ -8,6 +8,8 @@
   const ID_KEY = "deliveraRestaurantId";
   const API_KEY = "deliveraRestaurantApiKey";
   const SEEN_ORDER_ALERTS_KEY = "deliveraRestaurantSeenOrderAlerts";
+  const KIOSK_MODE_KEY = "deliveraRestaurantKioskMode";
+  const KIOSK_PRINTED_ORDERS_KEY = "deliveraRestaurantKioskPrintedOrders";
   const INITIAL_ORDER_ALERT_WINDOW_MS = 30 * 60 * 1000;
   const terminalStatuses = new Set(["delivered", "failed", "rejected", "cancelled", "canceled"]);
   let pushInitialized = false;
@@ -92,6 +94,41 @@
     trendyol: "Trendyol",
     manual: "Telefon",
   };
+
+  function kioskModeEnabled() {
+    const requested = new URLSearchParams(location.search).get("kiosk") === "1";
+    if (requested) localStorage.setItem(KIOSK_MODE_KEY, "1");
+    return requested || localStorage.getItem(KIOSK_MODE_KEY) === "1";
+  }
+
+  function kioskPrintedOrders() {
+    try {
+      const values = JSON.parse(localStorage.getItem(KIOSK_PRINTED_ORDERS_KEY) || "[]");
+      return new Set(Array.isArray(values) ? values.map(String) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function rememberKioskPrintedOrder(packageId) {
+    const values = [...kioskPrintedOrders(), String(packageId)].slice(-1000);
+    localStorage.setItem(KIOSK_PRINTED_ORDERS_KEY, JSON.stringify(values));
+  }
+
+  function kioskPrintPackage(pkg) {
+    if (!kioskModeEnabled() || window.deliveraDesktop?.autoPrintReceipt) return;
+    const packageId = String(pkg.id || pkg.trackingNo || pkg.externalOrderNo || "").trim();
+    if (!packageId || kioskPrintedOrders().has(packageId)) return;
+    const settings = state.panelData.printerSettings || {};
+    const frame = document.createElement("iframe");
+    frame.setAttribute("aria-hidden", "true");
+    frame.tabIndex = -1;
+    frame.style.cssText = "position:fixed;width:1px;height:1px;right:0;bottom:0;border:0;opacity:0;pointer-events:none";
+    frame.srcdoc = receiptDocument(pkg, false, settings.paperSize || "80mm", settings.copies || 1, true);
+    document.body.appendChild(frame);
+    rememberKioskPrintedOrder(packageId);
+    window.setTimeout(() => frame.remove(), 15000);
+  }
 
   async function api(path, options = {}, retry = true) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -435,7 +472,7 @@
     });
   }
 
-  function announceNewPackages(incoming) {
+  function announceNewPackages(incoming, options = {}) {
     const groups = new Map();
     incoming.filter((pkg) => !terminalStatuses.has(pkg.status)).forEach((pkg) => {
       const key = platformKey(sourceName(pkg));
@@ -474,6 +511,9 @@
           }).catch(() => {});
         });
       }
+      if (options.allowKioskPrint !== false) {
+        incoming.filter((pkg) => !terminalStatuses.has(pkg.status)).forEach(kioskPrintPackage);
+      }
       if (!window.deliveraDesktop && !pushInitialized && notificationPermission() === "granted") {
         navigator.serviceWorker?.getRegistration("/").then((registration) => registration?.showNotification("Delivera Express - Yeni Sipariş", {
           body: `${incoming.length} yeni sipariş geldi.`, tag: "delivera-restaurant-orders", renotify: true, requireInteraction: true,
@@ -504,7 +544,7 @@
       return hadData ? !previousIds.has(pkg.id) : isRecentOrder(pkg);
     });
     state.data = data;
-    if (incoming.length) announceNewPackages(incoming);
+    if (incoming.length) announceNewPackages(incoming, { allowKioskPrint: hadData });
     rememberOrderAlerts(data.packages || []);
     updateBusiness(); updateCounters(); renderOrders();
     const badge = refs.notificationButton?.querySelector(".zg-notification-badge");
