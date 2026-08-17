@@ -19,3 +19,12 @@ test("courier map does not render the old mock map layer before Leaflet starts",
     dom.window.close();
   }
 });
+
+test("courier bridge keeps the open shift alive and retries location after returning from background", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "courier-design-bridge.js"), "utf8");
+  assert.match(source, /setInterval\(pushLiveLocationHeartbeat, 20_000\)/);
+  assert.match(source, /visibilitychange/);
+  assert.match(source, /addEventListener\("focus", pushLiveLocationHeartbeat\)/);
+  assert.match(source, /addEventListener\("online", pushLiveLocationHeartbeat\)/);
+  assert.match(source, /locationOnly:\s*true/);
+});

@@ -429,7 +429,12 @@
           const marker = add(restaurant.latitude, restaurant.longitude, color, `<b>${esc(restaurant.name)}</b><br>Bölge: ${esc(restaurant.zone || "-")}<br>Aktif paket: <b>${restaurant.activeCount}</b><br>Bekleyen: ${restaurant.waitingCount} · Atanmış: ${restaurant.assignedCount} · Yolda: ${restaurant.routeCount}`, restaurant.activeCount ? 11 : 9);
           if (marker) restaurantMarkers.set(restaurant.id, marker);
         });
-        data.activeCouriers.forEach((courier) => add(courier.latitude, courier.longitude, "#2563eb", `<b>Kurye: ${esc(courier.name)}</b><br>Durum: ${esc(courier.status || "aktif")}<br>Aktif yük: ${Number(courier.activeLoad || 0)}<br>Son konum: ${esc(dateTime(courier.lastLocationAt))}`));
+        data.activeCouriers.forEach((courier) => {
+          const locationLabel = courier.locationFresh === false
+            ? "Son bilinen konum (tarayıcı arka planda)"
+            : "Canlı konum";
+          add(courier.latitude, courier.longitude, "#2563eb", `<b>Kurye: ${esc(courier.name)}</b><br>Durum: ${esc(courier.status || "aktif")}<br>Aktif yük: ${Number(courier.activeLoad || 0)}<br>${locationLabel}: ${esc(dateTime(courier.lastLocationAt))}`);
+        });
         if (focusPackage) {
           const deliveryLat = focusPackage.customerLat ?? focusPackage.customerLatitude ?? focusPackage.deliveryLatitude;
           const deliveryLng = focusPackage.customerLng ?? focusPackage.customerLongitude ?? focusPackage.deliveryLongitude;

@@ -13,6 +13,9 @@
   let workspace = null;
   let pollId = null;
   let mapWatchId = null;
+  let mapHeartbeatId = null;
+  let lastKnownCourierCoords = null;
+  let locationHeartbeatBusy = false;
   let leafletLoader = null;
   let leafletMap = null;
   let courierMapMarker = null;
@@ -768,20 +771,55 @@
   function stopLiveLocation() {
     if (mapWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(mapWatchId);
     mapWatchId = null;
+    if (mapHeartbeatId !== null) window.clearInterval(mapHeartbeatId);
+    mapHeartbeatId = null;
+  }
+
+  async function pushLiveLocationHeartbeat() {
+    if (!token() || !workspace?.courier?.available || connectionBusy || locationHeartbeatBusy) return;
+    const latitude = Number(lastKnownCourierCoords?.latitude ?? workspace.courier?.latitude);
+    const longitude = Number(lastKnownCourierCoords?.longitude ?? workspace.courier?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    locationHeartbeatBusy = true;
+    try {
+      const next = await api("/api/courier/location", {
+        method: "PATCH",
+        body: JSON.stringify({ latitude, longitude, available: true, locationOnly: true }),
+      });
+      lastLocationPushAt = Date.now();
+      if (next?.courier && workspace) workspace.courier = { ...workspace.courier, ...next.courier };
+    } catch {
+      // Arka plan zamanlayicilari tarayici tarafindan geciktirilebilir. Sonraki
+      // heartbeat veya sayfa geri donusu ayni oturumla tekrar dener.
+    } finally {
+      locationHeartbeatBusy = false;
+    }
   }
 
   function startLiveLocation() {
-    if (mapWatchId !== null || !navigator.geolocation || !workspace?.courier?.available) return;
+    if (!navigator.geolocation || !workspace?.courier?.available) return;
+    const initialLatitude = Number(workspace.courier?.latitude);
+    const initialLongitude = Number(workspace.courier?.longitude);
+    if (Number.isFinite(initialLatitude) && Number.isFinite(initialLongitude)) {
+      lastKnownCourierCoords = { latitude: initialLatitude, longitude: initialLongitude };
+    }
+    if (mapHeartbeatId === null) {
+      mapHeartbeatId = window.setInterval(pushLiveLocationHeartbeat, 20_000);
+    }
+    if (mapWatchId !== null) return;
     mapWatchId = navigator.geolocation.watchPosition(async (position) => {
       const latitude = Number(position.coords.latitude.toFixed(6));
       const longitude = Number(position.coords.longitude.toFixed(6));
+      lastKnownCourierCoords = { latitude, longitude };
       updateRealLiveMap(latitude, longitude);
-      if (Date.now() - lastLocationPushAt < 10000 || connectionBusy) return;
+      if (Date.now() - lastLocationPushAt < 10000 || connectionBusy || locationHeartbeatBusy) return;
       lastLocationPushAt = Date.now();
+      locationHeartbeatBusy = true;
       try {
         const next = await api("/api/courier/location", { method: "PATCH", body: JSON.stringify({ latitude, longitude, available: true, locationOnly: true }) });
         if (next?.courier && workspace) workspace.courier = next.courier;
       } catch (error) { toast(error.message || "Canlı konum güncellenemedi.", "error"); }
+      finally { locationHeartbeatBusy = false; }
     }, (error) => {
       stopLiveLocation();
       toast(error.code === 1 ? "Canlı harita için konum izni gerekli." : "GPS konumu alınamadı.", "error");
@@ -880,6 +918,7 @@
       }
       workspace = await api("/api/courier/location", { method: "PATCH", body: JSON.stringify({ ...coords, available }) });
       if (available) {
+        lastKnownCourierCoords = { latitude: Number(coords.latitude), longitude: Number(coords.longitude) };
         updateRealLiveMap(coords.latitude, coords.longitude);
         startLiveLocation();
       } else {
@@ -1328,5 +1367,10 @@
   if (token()) revealCourierApp();
   loadWorkspace();
   if (!globalThis.__DELIVERA_TEST__) pollId = window.setInterval(loadWorkspace, 12000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") pushLiveLocationHeartbeat();
+  });
+  window.addEventListener("focus", pushLiveLocationHeartbeat);
+  window.addEventListener("online", pushLiveLocationHeartbeat);
   window.addEventListener("beforeunload", () => { window.clearInterval(pollId); window.clearInterval(courierMapPoll); window.clearTimeout(courierMapRefreshTimer); stopLiveLocation(); eventStream?.close(); });
 })();

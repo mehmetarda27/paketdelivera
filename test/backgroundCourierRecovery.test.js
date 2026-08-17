@@ -30,7 +30,7 @@ async function waitForCourierAssignment(dbFile, packageId) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 8000) {
     const db = new DatabaseSync(dbFile, { readOnly: true });
-    const row = db.prepare("SELECT assigned_courier_id, status FROM packages WHERE id = ?").get(packageId);
+    const row = db.prepare("SELECT assigned_courier_id, status, assignment_reason FROM packages WHERE id = ?").get(packageId);
     db.close();
     if (row?.assigned_courier_id) return row;
     await delay(100);
@@ -38,7 +38,7 @@ async function waitForCourierAssignment(dbFile, packageId) {
   throw new Error("Waiting package was not assigned after background location recovered.");
 }
 
-test("a stale online courier heartbeat re-runs waiting package assignment exactly on recovery", { timeout: 25000 }, async () => {
+test("an open-shift courier stays assignable and visible with last known location while the browser is suspended", { timeout: 25000 }, async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "delivera-background-recovery-"));
   const dbFile = path.join(tempDir, "delivera.sqlite");
   const port = 46800 + Math.floor(Math.random() * 700);
@@ -126,16 +126,34 @@ test("a stale online courier heartbeat re-runs waiting package assignment exactl
     const courierAuth = await courierLoginResponse.json();
     assert.equal(courierLoginResponse.status, 200, courierAuth.error);
 
+    const availabilityResponse = await fetch(`${baseUrl}/api/admin/couriers/${courierId}/availability`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminAuth.token}` },
+      body: JSON.stringify({ available: true }),
+    });
+    assert.equal(availabilityResponse.status, 200, await availabilityResponse.text());
+
+    const assigned = await waitForCourierAssignment(dbFile, "pkg_background_recovery");
+    assert.equal(assigned.assigned_courier_id, courierId);
+    assert.equal(assigned.status, "assigned");
+    assert.match(assigned.assignment_reason, /kayitli konum/i);
+
+    const operationMapResponse = await fetch(`${baseUrl}/api/admin/operation-map`, {
+      headers: { Authorization: `Bearer ${adminAuth.token}` },
+    });
+    const operationMap = await operationMapResponse.json();
+    assert.equal(operationMapResponse.status, 200, operationMap.error);
+    const mappedCourier = operationMap.activeCouriers.find((courier) => courier.id === courierId);
+    assert.ok(mappedCourier, "Open-shift courier disappeared from the admin map in browser background.");
+    assert.equal(mappedCourier.locationFresh, false);
+    assert.equal(mappedCourier.locationSource, "last_known");
+
     const heartbeatResponse = await fetch(`${baseUrl}/api/courier/location`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${courierAuth.token}` },
       body: JSON.stringify({ latitude: 36.78915, longitude: 34.59786, available: true, locationOnly: true }),
     });
     assert.equal(heartbeatResponse.status, 200, await heartbeatResponse.text());
-
-    const assigned = await waitForCourierAssignment(dbFile, "pkg_background_recovery");
-    assert.equal(assigned.assigned_courier_id, courierId);
-    assert.equal(assigned.status, "assigned");
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });

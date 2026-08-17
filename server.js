@@ -209,6 +209,8 @@ const COURIER_OFFER_TIMEOUT_MS = Number(process.env.DELIVERA_COURIER_OFFER_TIMEO
 const COURIER_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_COURIER_REJECTION_COOLDOWN_MS || 30_000);
 const PACKAGE_REJECTION_COOLDOWN_MS = Number(process.env.DELIVERA_PACKAGE_REJECTION_COOLDOWN_MS || 5_000);
 const COURIER_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LOCATION_FRESHNESS_MS || 30 * 60_000);
+const COURIER_BACKGROUND_LOCATION_MAX_AGE_MS = Number(process.env.DELIVERA_COURIER_BACKGROUND_LOCATION_MAX_AGE_MS || 12 * 60 * 60_000);
+const COURIER_LIVE_LOCATION_FRESHNESS_MS = Number(process.env.DELIVERA_COURIER_LIVE_LOCATION_FRESHNESS_MS || 2 * 60_000);
 const PENDING_APPROVAL_STATUS = "pending_approval";
 const PENDING_STATUS = "pending";
 const PREPARING_STATUS = "preparing";
@@ -6632,17 +6634,41 @@ function courierLocationIsFresh(courier, referenceTime = Date.now()) {
   return ageMs >= -60_000 && ageMs <= COURIER_LOCATION_FRESHNESS_MS;
 }
 
-function liveMapCouriers(referenceTime = Date.now()) {
-  const liveMapFreshnessMs = 2 * 60 * 1000;
+function courierBackgroundLocationIsUsable(courier, referenceTime = Date.now()) {
+  const locationTime = new Date(courier?.lastLocationAt || "").getTime();
+  const ageMs = referenceTime - locationTime;
+  return Boolean(courier?.id)
+    && Boolean(courier?.available)
+    && coordinatesAreValid(Number(courier?.latitude), Number(courier?.longitude))
+    && Number.isFinite(locationTime)
+    && ageMs >= -60_000
+    && ageMs <= COURIER_BACKGROUND_LOCATION_MAX_AGE_MS
+    && Boolean(getOpenCourierShift(courier.id));
+}
+
+function courierLocationIsAssignmentUsable(courier, referenceTime = Date.now()) {
+  return courierLocationIsFresh(courier, referenceTime)
+    || courierBackgroundLocationIsUsable(courier, referenceTime);
+}
+
+function liveMapCouriers(referenceTime = Date.now(), options = {}) {
+  const includeBackground = options.includeBackground === true;
   return getCouriers().filter((courier) => {
     const status = normalizeCourierStatus(courier.status, courier.available);
-    const locationTime = new Date(courier.lastLocationAt || "").getTime();
-    const locationAgeMs = referenceTime - locationTime;
+    const locationAgeMs = referenceTime - new Date(courier.lastLocationAt || "").getTime();
+    const locationFresh = locationAgeMs >= -60_000 && locationAgeMs <= COURIER_LIVE_LOCATION_FRESHNESS_MS;
     return Boolean(courier.available)
       && [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(status)
-      && Number.isFinite(locationTime)
-      && locationAgeMs >= -60_000
-      && locationAgeMs <= liveMapFreshnessMs;
+      && (locationFresh || (includeBackground && courierBackgroundLocationIsUsable(courier, referenceTime)));
+  }).map((courier) => {
+    const locationAgeMs = referenceTime - new Date(courier.lastLocationAt || "").getTime();
+    const locationFresh = locationAgeMs >= -60_000 && locationAgeMs <= COURIER_LIVE_LOCATION_FRESHNESS_MS;
+    return {
+      ...courier,
+      locationFresh,
+      locationSource: locationFresh ? "live" : "last_known",
+      locationAgeSeconds: Math.max(0, Math.round(locationAgeMs / 1000)),
+    };
   });
 }
 
@@ -6931,15 +6957,15 @@ function evaluateAssignmentFailure(state, pkg) {
     };
   }
 
-  const freshLocationCouriers = onlineCouriers.filter((courier) => courierLocationIsFresh(courier));
-  if (freshLocationCouriers.length === 0) {
+  const usableLocationCouriers = onlineCouriers.filter((courier) => courierLocationIsAssignmentUsable(courier));
+  if (usableLocationCouriers.length === 0) {
     return {
       reason: "guncel konum yok",
-      note: "Uygun kurye bulunamadi: online kuryelerin GPS konumu son 30 dakika icinde guncellenmemis.",
+      note: "Uygun kurye bulunamadi: online kuryelerin acik vardiyada kullanilabilir son konumu yok.",
     };
   }
 
-  const freeOnlineCouriers = freshLocationCouriers.filter((courier) => {
+  const freeOnlineCouriers = usableLocationCouriers.filter((courier) => {
     const activeLoad = activeAssignmentsForCourier(state.packages, courier.id, pkg.id);
     return activeLoad < 1 || (
       activeLoad < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
@@ -6986,7 +7012,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
     .filter(({ courier, courierStatus, distance: courierDistance, load, sameRestaurantContinuation }) =>
       Boolean(courier.available) &&
       [COURIER_ONLINE_STATUS, COURIER_BUSY_STATUS].includes(courierStatus) &&
-      courierLocationIsFresh(courier) &&
+      courierLocationIsAssignmentUsable(courier) &&
       (load < 1 || (
         load < AUTO_SAME_RESTAURANT_MAX_ACTIVE_PACKAGES &&
         sameRestaurantContinuation
@@ -6997,7 +7023,13 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       courierDistance <= MAX_ASSIGNMENT_DISTANCE_KM
     );
 
-  const locationCandidates = availableCandidates;
+  const freshLocationCandidates = availableCandidates.filter(({ freshLocation }) => freshLocation);
+  // Canli GPS verisi olan bir kurye varsa onu her zaman tercih et. Tarayici
+  // arka planda askida kaldiginda ise acik vardiyadaki kuryeyi son guvenilir
+  // konumuyla havuzdan dusurme; push bildirimi paketi kendisine ulastirir.
+  const locationCandidates = freshLocationCandidates.length > 0
+    ? freshLocationCandidates
+    : availableCandidates;
   const selectedRadius = ASSIGNMENT_SEARCH_RADII_KM.find((radiusKm) =>
     locationCandidates.some(({ distance: courierDistance }) => courierDistance <= radiusKm)
   );
@@ -7007,7 +7039,7 @@ function rankEligibleCouriers(state, pkg, occupiedCourierLoads = new Map(), opti
       .filter(({ distance: courierDistance }) => courierDistance <= selectedRadius)
       .map((candidate) => ({
         ...candidate,
-        selectionMode: "distance_radius_fresh",
+        selectionMode: candidate.freshLocation ? "distance_radius_fresh" : "distance_radius_last_known",
         searchRadiusKm: selectedRadius,
       }));
 
@@ -12342,7 +12374,7 @@ async function handleApi(req, res, pathname) {
       };
     });
     const operationActiveLoadMap = buildActiveLoadMap(getPackages());
-    const activeCouriers = liveMapCouriers()
+    const activeCouriers = liveMapCouriers(Date.now(), { includeBackground: true })
       .map((courier) => ({ ...sanitizeCourier(courier), activeLoad: operationActiveLoadMap.get(courier.id) || 0 }));
 
     sendJson(res, 200, { ok: true, restaurants: operationRestaurants, activeCouriers, generatedAt: nowIso() });
