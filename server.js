@@ -17344,6 +17344,130 @@ function operationsDailySummary(reportDate) {
   };
 }
 
+function operationsIstanbulDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Istanbul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function operationsMinutesBetween(from, to) {
+  const fromMs = new Date(from || "").getTime();
+  const toMs = new Date(to || "").getTime();
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return null;
+  return (toMs - fromMs) / 60_000;
+}
+
+function operationsAnalyticsSnapshot(requestedDays = 7) {
+  const days = Math.max(1, Math.min(31, Number(requestedDays) || 7));
+  const nowDate = new Date();
+  const since = new Date(nowDate.getTime() - (days + 1) * 24 * 60 * 60 * 1000).toISOString();
+  // Bu sorgu yalnız analiz içindir; paket, atama veya platform durumunu değiştirmez.
+  const rows = db.prepare(`
+    SELECT id, restaurant_id, assigned_courier_id, assigned_courier_name, status,
+           created_at, assigned_at, delivered_at
+    FROM packages
+    WHERE created_at >= ?
+    ORDER BY datetime(created_at) DESC
+  `).all(since);
+  const restaurantNames = new Map(getRestaurants().map((restaurant) => [restaurant.id, restaurant.name]));
+  const courierNames = new Map(getCouriers().map((courier) => [courier.id, courier.name]));
+  const today = operationsIstanbulDateKey(nowDate);
+  const acceptedDates = new Set();
+  for (let index = 0; index < days; index += 1) {
+    acceptedDates.add(operationsIstanbulDateKey(new Date(nowDate.getTime() - index * 24 * 60 * 60 * 1000)));
+  }
+  const selected = rows.filter((row) => acceptedDates.has(operationsIstanbulDateKey(row.created_at)));
+  const dailyMap = new Map([...acceptedDates].map((date) => [date, { date, total: 0, delivered: 0, cancelled: 0 }]));
+  const restaurantMap = new Map();
+  const courierMap = new Map();
+  const assignmentMinutes = [];
+  const deliveryMinutes = [];
+  let delivered = 0;
+  let cancelled = 0;
+
+  for (const row of selected) {
+    const status = normalizeStatus(row.status);
+    const dateKey = operationsIstanbulDateKey(row.created_at);
+    const daily = dailyMap.get(dateKey);
+    daily.total += 1;
+    if (status === DELIVERED_STATUS) daily.delivered += 1;
+    if ([CANCELED_STATUS, REJECTED_STATUS].includes(status)) daily.cancelled += 1;
+    if (status === DELIVERED_STATUS) delivered += 1;
+    if ([CANCELED_STATUS, REJECTED_STATUS].includes(status)) cancelled += 1;
+
+    const assignmentDuration = operationsMinutesBetween(row.created_at, row.assigned_at);
+    const deliveryDuration = operationsMinutesBetween(row.created_at, row.delivered_at);
+    if (assignmentDuration !== null) assignmentMinutes.push(assignmentDuration);
+    if (deliveryDuration !== null) deliveryMinutes.push(deliveryDuration);
+
+    const restaurantId = row.restaurant_id || "unknown";
+    const restaurant = restaurantMap.get(restaurantId) || {
+      id: restaurantId,
+      name: restaurantNames.get(restaurantId) || "Bilinmeyen Restoran",
+      total: 0,
+      delivered: 0,
+      cancelled: 0,
+    };
+    restaurant.total += 1;
+    if (status === DELIVERED_STATUS) restaurant.delivered += 1;
+    if ([CANCELED_STATUS, REJECTED_STATUS].includes(status)) restaurant.cancelled += 1;
+    restaurantMap.set(restaurantId, restaurant);
+
+    if (row.assigned_courier_id) {
+      const courier = courierMap.get(row.assigned_courier_id) || {
+        id: row.assigned_courier_id,
+        name: row.assigned_courier_name || courierNames.get(row.assigned_courier_id) || row.assigned_courier_id,
+        total: 0,
+        delivered: 0,
+      };
+      courier.total += 1;
+      if (status === DELIVERED_STATUS) courier.delivered += 1;
+      courierMap.set(courier.id, courier);
+    }
+  }
+
+  const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  const daily = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const priorDays = daily.filter((item) => item.date !== today);
+  const priorAverage = average(priorDays.map((item) => item.total));
+  const todaySoFar = dailyMap.get(today)?.total || 0;
+  const localHour = Number(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Istanbul",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(nowDate).split(":")[0] || 0);
+  const elapsedRatio = Math.max(1 / 24, (localHour + 1) / 24);
+  const expectedSoFar = priorAverage * elapsedRatio;
+
+  return {
+    periodDays: days,
+    totals: {
+      total: selected.length,
+      delivered,
+      cancelled,
+      deliveryRate: selected.length ? delivered * 100 / selected.length : 0,
+      avgAssignmentMinutes: average(assignmentMinutes),
+      avgDeliveryMinutes: average(deliveryMinutes),
+    },
+    daily,
+    restaurants: [...restaurantMap.values()].sort((a, b) => b.total - a.total),
+    couriers: [...courierMap.values()].sort((a, b) => b.delivered - a.delivered || b.total - a.total),
+    forecast: {
+      expectedToday: Math.max(todaySoFar, priorAverage),
+      todaySoFar,
+      changePercent: expectedSoFar > 0 ? (todaySoFar - expectedSoFar) * 100 / expectedSoFar : 0,
+    },
+  };
+}
+
 function operationsFindPackage(reference) {
   const needle = trimmed(reference);
   if (!needle) return null;
@@ -17389,9 +17513,18 @@ const operationsSupervisor = createOperationsSupervisor({
   getSnapshot: () => operationsSupervisorSnapshot(),
   getDailySummary: (reportDate) => operationsDailySummary(reportDate),
   getHealthSnapshot: () => systemStatusPayload(),
+  getAnalyticsSnapshot: (days) => operationsAnalyticsSnapshot(days),
   findPackage: (reference) => operationsFindPackage(reference),
   retryPackage: (reference) => operationsRetryPackage(reference),
   rebalance: () => rebalancePackages(),
+  recordAction: (entry) => writeAuditLog({
+    actorRole: "operations_bot",
+    actorId: "telegram_supervisor",
+    action: entry.action,
+    packageId: entry.details?.packageId || null,
+    restaurantId: entry.details?.restaurantId || null,
+    details: entry.details || {},
+  }),
   telegram: telegramService,
   logger,
 });
