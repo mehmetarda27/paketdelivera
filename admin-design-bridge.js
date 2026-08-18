@@ -630,6 +630,7 @@
       const reportRestaurants = data.restaurants || restaurants();
       restaurantFilter = data.selectedRestaurantId || restaurantFilter;
       const selectedRestaurant = reportRestaurants.find((restaurant) => restaurant.id === restaurantFilter);
+      const displayedTotalOrders = Number(summary.totalOrders || 0) + (rangeMode ? Number(summary.cancelledCount || 0) : 0);
       container.innerHTML = `
         <form data-report-filter class="da-report-controls ${rangeMode ? "is-range" : ""}">
           <label>İşletme<select name="restaurantId"><option value="">Tüm işletmeler</option>${reportRestaurants.map((restaurant) => `<option value="${esc(restaurant.id)}">${esc(restaurant.name)}${restaurant.zone ? ` · ${esc(restaurant.zone)}` : ""}</option>`).join("")}</select></label>
@@ -642,7 +643,7 @@
         </form>
         <div class="da-report-note"><b>Rapor kapsamı:</b> ${esc(selectedRestaurant?.name || "Tüm kayıtlı işletmeler")} · <b>${rangeMode ? "Tarih aralığı" : periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${rangeMode || periodFilter === "week" ? `${esc(data.rangeStart)} – ${esc(data.rangeEnd)} · Türkiye saatiyle her gün 00.00–23.59` : "Türkiye saatiyle 00.00–23.59"}</div>
         <div class="da-report-cards">
-          <div class="da-report-card is-blue"><span>Toplam sipariş</span><strong>${Number(summary.totalOrders || 0)}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
+          <div class="da-report-card is-blue"><span>${rangeMode ? "İptaller dahil toplam" : "Toplam sipariş"}</span><strong>${displayedTotalOrders}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
           <div class="da-report-card is-green"><span>Teslim edildi</span><strong>${Number(summary.deliveredCount || 0)}</strong><small>${money(summary.deliveredRevenue || 0)} ciro</small></div>
           <div class="da-report-card is-red"><span>İptal / ret</span><strong>${Number(summary.cancelledCount || 0)}</strong><small>${money(summary.cancelledAmount || 0)} iptal tutarı</small></div>
           <div class="da-report-card is-amber"><span>Teslim edilemedi</span><strong>${Number(summary.failedCount || 0)}</strong><small>İnceleme gereken kayıt</small></div>
