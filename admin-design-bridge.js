@@ -136,6 +136,13 @@
       unmatchedLink.after(deviceSetupLink);
       unmatchedMenuBadge = unmatchedLink.querySelector(".da-sidebar-count");
     }
+    const dailyReportLink = [...document.querySelectorAll("aside nav a")].find((link) => normalize(link.textContent).includes("günlük sipariş raporu"));
+    if (dailyReportLink) {
+      const rangeReportLink = document.createElement("a");
+      rangeReportLink.className = dailyReportLink.className;
+      rangeReportLink.innerHTML = '<span class="material-symbols-outlined mr-3 text-[20px]">date_range</span><span class="text-body-sm font-body-sm">İşletme Tarih Aralığı</span>';
+      dailyReportLink.after(rangeReportLink);
+    }
     const sidebarLinks = [...document.querySelectorAll("aside nav a")];
     sidebarLinks.forEach((link) => {
       const label = link.querySelector("span:not(.material-symbols-outlined)")?.textContent || link.textContent;
@@ -569,11 +576,15 @@
     modal("Yeni İşletme", `<form class="da-grid"><label class="da-field"><span>İşletme adı</span><input name="name" required></label><label class="da-field"><span>Bölge</span><input name="zone" value="Merkez" required></label><label class="da-field"><span>Kullanıcı adı</span><input name="username" required></label><label class="da-field"><span>Parola</span><input name="password" type="password" required></label><label class="da-field"><span>Telefon</span><input name="phone"></label><label class="da-field"><span>Adres</span><input name="address"></label><label class="da-field"><span>Enlem</span><input name="latitude" type="number" step="any" value="36.8121"></label><label class="da-field"><span>Boylam</span><input name="longitude" type="number" step="any" value="34.6415"></label><div class="da-actions"><button class="da-primary">İşletmeyi Kaydet</button></div></form>`, (root) => root.querySelector("form").addEventListener("submit", async (event) => { event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget)); try { hydrate(await api("/api/admin/restaurants", { method: "POST", body: JSON.stringify(data) })); root.remove(); toast("İşletme eklendi.", "success"); } catch (error) { toast(error.message, "error"); } }));
   }
 
-  function accountReportModal() {
-    const root = modal("Tüm İşletmeler Sipariş Raporu", '<div data-admin-account-report><div class="da-empty">Rapor hazırlanıyor...</div></div>', null, "da-report-modal");
+  function accountReportModal(rangeMode = false) {
+    const root = modal(rangeMode ? "İşletme Tarih Aralığı Raporu" : "Tüm İşletmeler Sipariş Raporu", '<div data-admin-account-report><div class="da-empty">Rapor hazırlanıyor...</div></div>', null, "da-report-modal");
     const container = root.querySelector("[data-admin-account-report]");
     let selectedDate = localDateKey();
-    let periodFilter = "day";
+    let periodFilter = rangeMode ? "range" : "day";
+    const defaultRangeStart = new Date(`${selectedDate}T12:00:00.000Z`);
+    defaultRangeStart.setUTCDate(defaultRangeStart.getUTCDate() - 6);
+    let startDate = defaultRangeStart.toISOString().slice(0, 10);
+    let endDate = selectedDate;
     let statusFilter = "all";
     let paymentFilter = "all";
     let restaurantFilter = "";
@@ -596,7 +607,10 @@
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         selectedDate = String(form.get("date") || localDateKey());
-        periodFilter = String(form.get("period") || "day");
+        periodFilter = rangeMode ? "range" : String(form.get("period") || "day");
+        startDate = String(form.get("startDate") || startDate);
+        endDate = String(form.get("endDate") || endDate);
+        if (rangeMode && startDate > endDate) return toast("Başlangıç tarihi bitiş tarihinden sonra olamaz.", "error");
         statusFilter = String(form.get("status") || "all");
         paymentFilter = String(form.get("payment") || "all");
         restaurantFilter = String(form.get("restaurantId") || "");
@@ -608,6 +622,8 @@
     const render = (data) => {
       selectedDate = data.selectedDate;
       periodFilter = data.period || periodFilter;
+      startDate = data.rangeStart || startDate;
+      endDate = data.rangeEnd || endDate;
       const summary = data.summary || {};
       const rows = data.packages || [];
       const history = data.history || [];
@@ -615,15 +631,16 @@
       restaurantFilter = data.selectedRestaurantId || restaurantFilter;
       const selectedRestaurant = reportRestaurants.find((restaurant) => restaurant.id === restaurantFilter);
       container.innerHTML = `
-        <form data-report-filter class="da-report-controls">
+        <form data-report-filter class="da-report-controls ${rangeMode ? "is-range" : ""}">
           <label>İşletme<select name="restaurantId"><option value="">Tüm işletmeler</option>${reportRestaurants.map((restaurant) => `<option value="${esc(restaurant.id)}">${esc(restaurant.name)}${restaurant.zone ? ` · ${esc(restaurant.zone)}` : ""}</option>`).join("")}</select></label>
-          <label>Rapor dönemi<select name="period"><option value="day">Günlük</option><option value="week">Haftalık</option></select></label>
-          <label>Rapor tarihi<input name="date" type="date" value="${esc(selectedDate)}" max="${esc(data.currentDate)}"></label>
+          ${rangeMode
+            ? `<label>Başlangıç tarihi<input name="startDate" type="date" value="${esc(startDate)}" max="${esc(data.currentDate)}" required></label><label>Bitiş tarihi<input name="endDate" type="date" value="${esc(endDate)}" max="${esc(data.currentDate)}" required></label>`
+            : `<label>Rapor dönemi<select name="period"><option value="day">Günlük</option><option value="week">Haftalık</option></select></label><label>Rapor tarihi<input name="date" type="date" value="${esc(selectedDate)}" max="${esc(data.currentDate)}"></label>`}
           <label>Sipariş durumu<select name="status"><option value="all">Tüm siparişler</option><option value="delivered">Teslim edilenler</option><option value="cancelled">İptal / reddedilenler</option><option value="active">Devam edenler</option><option value="failed">Teslim edilemeyenler</option></select></label>
           <label>Ödeme türü<select name="payment"><option value="all">Tüm ödemeler</option><option value="cash">Nakit</option><option value="card">Kapıda kart</option><option value="online">Online</option><option value="restaurant">Restoran tahsilatı</option><option value="other">Diğer</option></select></label>
           <button class="da-primary" type="submit">Filtrele</button>
         </form>
-        <div class="da-report-note"><b>Rapor kapsamı:</b> ${esc(selectedRestaurant?.name || "Tüm kayıtlı işletmeler")} · <b>${periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${periodFilter === "week" ? `${esc(data.rangeStart)} – ${esc(data.rangeEnd)}` : "Türkiye saatiyle 00.00–23.59"}</div>
+        <div class="da-report-note"><b>Rapor kapsamı:</b> ${esc(selectedRestaurant?.name || "Tüm kayıtlı işletmeler")} · <b>${rangeMode ? "Tarih aralığı" : periodFilter === "week" ? "Hafta aralığı" : "Gün sınırı"}:</b> ${rangeMode || periodFilter === "week" ? `${esc(data.rangeStart)} – ${esc(data.rangeEnd)} · Türkiye saatiyle her gün 00.00–23.59` : "Türkiye saatiyle 00.00–23.59"}</div>
         <div class="da-report-cards">
           <div class="da-report-card is-blue"><span>Toplam sipariş</span><strong>${Number(summary.totalOrders || 0)}</strong><small>${Number(summary.activeCount || 0)} devam ediyor</small></div>
           <div class="da-report-card is-green"><span>Teslim edildi</span><strong>${Number(summary.deliveredCount || 0)}</strong><small>${money(summary.deliveredRevenue || 0)} ciro</small></div>
@@ -634,11 +651,11 @@
           <div class="da-report-card"><span>Online ödeme</span><strong>${Number(summary.onlineCount || 0)}</strong><small>${money(summary.onlineAmount || 0)}</small></div>
           <div class="da-report-card"><span>Restoran / diğer</span><strong>${Number(summary.restaurantCount || 0) + Number(summary.otherCount || 0)}</strong><small>${money(Number(summary.restaurantAmount || 0) + Number(summary.otherAmount || 0))}</small></div>
         </div>
-        <div class="da-report-section-title"><b>Geçmiş ${periodFilter === "week" ? "haftalar" : "günler"}</b><span>Son ${history.length} dönem</span></div>
-        <div class="da-report-history">${history.map((item) => `<button type="button" data-report-day="${esc(item.date)}" class="da-report-day ${item.date === (periodFilter === "week" ? data.rangeStart : selectedDate) ? "is-selected" : ""}"><strong>${esc(item.date)}${item.endDate ? ` – ${esc(item.endDate)}` : ""}</strong><span>${item.totalOrders} sipariş · ${item.cancelledCount} iptal</span><span>${money(item.deliveredRevenue)} teslim cirosu</span></button>`).join("") || '<span>Geçmiş kayıt bulunamadı.</span>'}</div>
+        <div class="da-report-section-title"><b>${rangeMode ? "Günlük dağılım" : `Geçmiş ${periodFilter === "week" ? "haftalar" : "günler"}`}</b><span>${rangeMode ? `${history.length} kayıtlı gün` : `Son ${history.length} dönem`}</span></div>
+        <div class="da-report-history">${history.map((item) => `<button type="button" ${rangeMode ? "disabled" : `data-report-day="${esc(item.date)}"`} class="da-report-day ${!rangeMode && item.date === (periodFilter === "week" ? data.rangeStart : selectedDate) ? "is-selected" : ""}"><strong>${esc(item.date)}${item.endDate ? ` – ${esc(item.endDate)}` : ""}</strong><span>${item.totalOrders} sipariş · ${item.deliveredCount} teslim · ${item.cancelledCount} iptal · ${item.activeCount} aktif</span><span>${money(item.deliveredRevenue)} teslim cirosu</span></button>`).join("") || '<span>Bu aralıkta kayıt bulunamadı.</span>'}</div>
         <div class="mt-3 border rounded-lg overflow-auto" style="max-height:340px"><table class="da-report-table"><thead><tr><th>Paket</th><th>İşletme</th><th>Müşteri</th><th>Durum</th><th>Ödeme</th><th>Kurye</th><th>Saat</th><th>Tutar</th></tr></thead><tbody>${rows.map((pkg) => { const status = statusMeta(pkg.status); return `<tr><td><b>${esc(pkg.trackingNo || pkg.id)}</b><div>${esc(pkg.sourcePlatform || "Telefon")}</div></td><td>${esc(pkg.restaurantName)}</td><td>${esc(pkg.customerName)}</td><td><span class="da-report-pill" style="${status[1]}">${esc(status[0])}</span></td><td>${esc(paymentLabel(pkg.paymentBucket))}<div>${esc(pkg.paymentMethod)}</div></td><td>${esc(pkg.courierName)}</td><td>${dateTime(pkg.createdAt)}</td><td><b>${money(pkg.orderAmount)}</b></td></tr>`; }).join("") || '<tr><td colspan="8" class="da-empty">Bu filtrelerde sipariş bulunamadı.</td></tr>'}</tbody></table></div>
         <div class="da-report-footer"><span>Listede ${rows.length} kayıt gösteriliyor.</span><button data-report-print class="da-primary" type="button">Yazdır</button></div>`;
-      container.querySelector('[name="period"]').value = periodFilter;
+      if (!rangeMode) container.querySelector('[name="period"]').value = periodFilter;
       container.querySelector('[name="status"]').value = statusFilter;
       container.querySelector('[name="payment"]').value = paymentFilter;
       container.querySelector('[name="restaurantId"]').value = restaurantFilter;
@@ -648,6 +665,10 @@
       container.style.opacity = ".55";
       try {
         const query = new URLSearchParams({ date: selectedDate, period: periodFilter, status: statusFilter, payment: paymentFilter });
+        if (rangeMode) {
+          query.set("startDate", startDate);
+          query.set("endDate", endDate);
+        }
         if (restaurantFilter) query.set("restaurantId", restaurantFilter);
         render(await api(`/api/admin/reports/account?${query}`));
       } catch (error) { container.innerHTML = `<div class="da-empty" style="color:#b91c1c">${esc(error.message)}</div>`; }
@@ -854,6 +875,7 @@
     if (route.includes("bölge")) return zoneManagement();
     if (route.includes("işletme ücret iadesi")) return recordManagement({ type: "restaurant_refund", subject: "restaurant", title: "İşletme Ücret İadeleri", placeholder: "İade nedeni", amount: true, dates: true });
     if (route.includes("sistem dışı")) return reportModal("Sistem Dışı İşlemler", packages().filter((pkg) => ["external_manual", "manual", "admin_manual"].includes(pkg.source)));
+    if (route.includes("işletme tarih aralığı")) return accountReportModal(true);
     if (route.includes("günlük sipariş raporu")) return accountReportModal();
     if (route.includes("rapor") || route.includes("geçmiş")) return reportModal(route.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()));
     return recordManagement({ type: `menu_${route.replace(/[^a-z0-9çğıöşü]+/g, "_")}`, title: route.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()), placeholder: "İşlem açıklaması", amount: true, dates: true });

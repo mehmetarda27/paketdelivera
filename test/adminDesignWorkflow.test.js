@@ -33,7 +33,31 @@ test("new admin design renders backend packages and listens to named live operat
   window.__DELIVERA_TEST__ = true;
   window.EventSource = FakeEventSource;
   window.confirm = () => true;
-  window.fetch = async () => ({ ok: true, status: 200, json: async () => workspace });
+  const fetchCalls = [];
+  window.fetch = async (request) => {
+    const url = String(request);
+    fetchCalls.push(url);
+    if (url.startsWith("/api/admin/reports/account")) return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        timezone: "Europe/Istanbul",
+        currentDate: "2026-08-18",
+        selectedDate: "2026-08-12",
+        period: "range",
+        rangeStart: "2026-08-12",
+        rangeEnd: "2026-08-18",
+        selectedRestaurantId: "",
+        restaurants: workspace.restaurants,
+        filters: { status: "all", payment: "all" },
+        summary: { totalOrders: 3, deliveredCount: 1, cancelledCount: 1, activeCount: 1 },
+        history: [{ date: "2026-08-18", totalOrders: 3, deliveredCount: 1, cancelledCount: 1, activeCount: 1, deliveredRevenue: 100 }],
+        packages: [],
+      }),
+    };
+    return { ok: true, status: 200, json: async () => workspace };
+  };
   window.localStorage.setItem("deliveraAdminToken", "admin-ui-token");
   window.eval(bridge);
   await delay(60);
@@ -46,6 +70,15 @@ test("new admin design renders backend packages and listens to named live operat
   assert.ok(window.__adminDesignTest.visiblePackages().some((pkg) => pkg.id === "pkg_admin_ui"));
   assert.equal(window.document.querySelector('[data-action="map"]'), null);
   assert.equal(window.document.querySelector('[data-action="detail"]').getAttribute("aria-label"), "Paket detayını görüntüle");
+  const rangeReportMenu = [...window.document.querySelectorAll("aside nav a")].find((link) => link.textContent.includes("İşletme Tarih Aralığı"));
+  assert.ok(rangeReportMenu);
+  await window.__adminDesignTest.handleRoute("işletme tarih aralığı");
+  await delay(20);
+  assert.match(window.document.querySelector(".da-modal-head").textContent, /İşletme Tarih Aralığı Raporu/);
+  assert.ok(window.document.querySelector('[data-report-filter] input[name="startDate"]'));
+  assert.ok(window.document.querySelector('[data-report-filter] input[name="endDate"]'));
+  assert.ok(fetchCalls.some((url) => url.includes("period=range") && url.includes("startDate=") && url.includes("endDate=")));
+  window.document.querySelector(".da-modal-root")?.remove();
   const unmatchedMenu = [...window.document.querySelectorAll("aside nav a")].find((link) => link.textContent.includes("Eşleşmeyen Paketler"));
   assert.ok(unmatchedMenu);
   assert.equal(unmatchedMenu.querySelector(".da-sidebar-count").textContent, "1");

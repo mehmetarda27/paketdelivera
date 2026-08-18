@@ -5984,10 +5984,12 @@ function mergeAccountReportSummary(target, source) {
   return target;
 }
 
-function buildAccountOrderReport({ restaurantId = "", requestedDate, period = "day", statusFilter = "all", paymentFilter = "all" }) {
-  const selectedRange = period === "week"
-    ? accountReportWeekRange(requestedDate)
-    : { startDate: requestedDate, endDate: requestedDate };
+function buildAccountOrderReport({ restaurantId = "", requestedDate, period = "day", startDate = "", endDate = "", statusFilter = "all", paymentFilter = "all" }) {
+  const selectedRange = period === "range"
+    ? { startDate, endDate }
+    : period === "week"
+      ? accountReportWeekRange(requestedDate)
+      : { startDate: requestedDate, endDate: requestedDate };
   const reportDateExpr = restaurantReportDateExpression("created_at");
   const scopeSql = restaurantId ? "WHERE restaurant_id = ?" : "";
   const scopeParams = restaurantId ? [restaurantId] : [];
@@ -6093,13 +6095,17 @@ function buildAccountOrderReport({ restaurantId = "", requestedDate, period = "d
       byWeek.set(range.startDate, weekly);
     }
     history = [...byWeek.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 52);
-  } else history = [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 180);
+  } else {
+    history = [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+    if (period === "range") history = history.filter((item) => item.date >= selectedRange.startDate && item.date <= selectedRange.endDate);
+    else history = history.slice(0, 180);
+  }
 
   return {
     ok: true,
     timezone: RESTAURANT_REPORT_TIME_ZONE,
     currentDate: restaurantReportDayKey(),
-    selectedDate: requestedDate,
+    selectedDate: period === "range" ? selectedRange.startDate : requestedDate,
     period,
     rangeStart: selectedRange.startDate,
     rangeEnd: selectedRange.endDate,
@@ -12303,12 +12309,19 @@ async function handleApi(req, res, pathname) {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const requestedDate = trimmed(requestUrl.searchParams.get("date")) || restaurantReportDayKey();
     const period = trimmed(requestUrl.searchParams.get("period")).toLowerCase() || "day";
+    const startDate = trimmed(requestUrl.searchParams.get("startDate"));
+    const endDate = trimmed(requestUrl.searchParams.get("endDate"));
     const statusFilter = trimmed(requestUrl.searchParams.get("status")).toLowerCase() || "all";
     const paymentFilter = trimmed(requestUrl.searchParams.get("payment")).toLowerCase() || "all";
     const restaurantId = trimmed(requestUrl.searchParams.get("restaurantId"));
     const validStatuses = new Set(["all", "delivered", "cancelled", "active", "failed"]);
     const validPayments = new Set(["all", "cash", "card", "online", "restaurant", "other"]);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || !["day", "week"].includes(period) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)) {
+    const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const rangeDays = period === "range" && validDate(startDate) && validDate(endDate)
+      ? Math.floor((Date.parse(`${endDate}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000) + 1
+      : 0;
+    if (!validDate(requestedDate) || !["day", "week", "range"].includes(period) || !validStatuses.has(statusFilter) || !validPayments.has(paymentFilter)
+      || (period === "range" && (!validDate(startDate) || !validDate(endDate) || rangeDays < 1 || rangeDays > 366))) {
       sendJson(res, 400, { error: "Gecersiz rapor filtresi." });
       return;
     }
@@ -12322,7 +12335,7 @@ async function handleApi(req, res, pathname) {
       return;
     }
     sendJson(res, 200, {
-      ...buildAccountOrderReport({ restaurantId, requestedDate, period, statusFilter, paymentFilter }),
+      ...buildAccountOrderReport({ restaurantId, requestedDate, period, startDate, endDate, statusFilter, paymentFilter }),
       selectedRestaurantId: restaurantId,
       restaurants: reportRestaurants,
     });

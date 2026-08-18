@@ -164,6 +164,25 @@ test("restaurant account report uses Istanbul midnight and exposes cancellation/
     assert.equal(filteredAdmin.selectedRestaurantId, "rst_other_report");
     assert.equal(filteredAdmin.summary.totalOrders, 1);
     assert.deepEqual(filteredAdmin.packages.map((pkg) => pkg.id), ["pkg_other_restaurant"]);
+
+    const rangeAdminResponse = await fetch(`${baseUrl}/api/admin/reports/account?period=range&startDate=2026-08-11&endDate=2026-08-12&restaurantId=rst_daily_report`, {
+      headers: { Authorization: `Bearer ${adminLogin.token}` },
+    });
+    const rangeAdmin = await rangeAdminResponse.json();
+    assert.equal(rangeAdminResponse.status, 200, rangeAdmin.error);
+    assert.equal(rangeAdmin.period, "range");
+    assert.equal(rangeAdmin.rangeStart, "2026-08-11");
+    assert.equal(rangeAdmin.rangeEnd, "2026-08-12");
+    assert.equal(rangeAdmin.summary.totalOrders, 3);
+    assert.equal(rangeAdmin.summary.deliveredCount, 2);
+    assert.equal(rangeAdmin.summary.cancelledCount, 1);
+    assert.equal(rangeAdmin.summary.activeCount, 0);
+    assert.deepEqual(rangeAdmin.history.map((item) => item.date), ["2026-08-12", "2026-08-11"]);
+
+    const invalidRangeResponse = await fetch(`${baseUrl}/api/admin/reports/account?period=range&startDate=2026-08-13&endDate=2026-08-12`, {
+      headers: { Authorization: `Bearer ${adminLogin.token}` },
+    });
+    assert.equal(invalidRangeResponse.status, 400);
   } finally {
     await stopServer(server);
     fs.rmSync(tempDir, { recursive: true, force: true });
