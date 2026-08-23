@@ -1,0 +1,38 @@
+{
+  "name": "delivera-restaurant-windows",
+  "version": "1.1.0",
+  "description": "Delivera Express restoran Windows uygulaması",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable",
+    "test": "node --test printer-service.test.js"
+  },
+  "devDependencies": {
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "tr.com.deliveraexpres.restaurant",
+    "productName": "Delivera Restoran",
+    "artifactName": "Delivera-Restoran-${version}.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "printer-service.js",
+      "offline.html",
+      "assets/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/delivera.ico"
+    },
+    "portable": {
+      "artifactName": "Delivera-Restoran.exe"
+    }
+  }
+}
