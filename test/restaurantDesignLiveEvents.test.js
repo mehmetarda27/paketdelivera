@@ -122,14 +122,15 @@ test("new restaurant design filters closed orders and subscribes to named live e
     assert.match(detailModalText, /Ekstra: Kaşar/);
     assert.match(detailModalText, /Not: Acısız/);
     dom.window.document.querySelector(".zg-modal-root [data-close]")?.click();
-    let printedHtml = "";
-    dom.window.open = () => ({ document: { write(value) { printedHtml += value; }, close() {} } });
     dom.window.document.querySelector('#restaurantOrders [data-action="print"]').click();
     const printModal = dom.window.document.querySelector(".zg-modal-root");
     assert.ok(printModal);
     assert.equal(printModal.querySelectorAll("[data-print-size]").length, 3);
     printModal.querySelector("[data-save-print-default]").checked = false;
     printModal.querySelector('[data-print-size="58mm"]').click();
+    const printFrame = dom.window.document.querySelector(".zg-browser-print-frame");
+    assert.ok(printFrame, "manuel baskı popup yerine sayfa içi baskı çerçevesi oluşturmalı");
+    const printedHtml = printFrame.srcdoc;
     assert.match(printedHtml, /@page\{size:58mm auto/);
     assert.match(printedHtml, /DELIVERA <span>EXPRESS<\/span>/);
     assert.match(printedHtml, /Delivera Express altyapısıyla yönetilmektedir/);
@@ -139,6 +140,7 @@ test("new restaurant design filters closed orders and subscribes to named live e
     assert.match(printedHtml, /250,00 ₺/);
     assert.match(printedHtml, /Ekstra: Kaşar/);
     assert.match(printedHtml, /Not: Acısız/);
+    assert.doesNotMatch(printedHtml, /window\.print/);
     hooks.connectStream();
     ["order:new", "package-created", "package-assigned", "package-status", "courier-location", "courier-availability", "workspace-update"].forEach((type) => assert.ok(eventTypes.has(type), type));
 

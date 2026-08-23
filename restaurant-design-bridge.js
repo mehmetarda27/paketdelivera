@@ -801,10 +801,37 @@
     const settings = state.panelData.printerSettings || {};
     const paperSize = normalizedPaperSize(options.paperSize || settings.paperSize);
     const copies = Math.max(1, Math.min(5, Number(options.copies ?? settings.copies) || 1));
-    const win = window.open("", "_blank", paperSize === "A4" ? "width=900,height=900" : "width=520,height=800");
-    if (!win) return toast("Yazdırma penceresine tarayıcı izin vermedi.", "error");
-    win.document.write(receiptDocument(pkg, invoice, paperSize, copies));
-    win.document.close();
+    const frame = document.createElement("iframe");
+    frame.className = "zg-browser-print-frame";
+    frame.title = "Sipariş fişi yazdırma";
+    frame.setAttribute("aria-hidden", "true");
+    Object.assign(frame.style, {
+      position: "fixed",
+      right: "0",
+      bottom: "0",
+      width: "1px",
+      height: "1px",
+      border: "0",
+      opacity: "0",
+      pointerEvents: "none",
+    });
+    const cleanup = () => frame.remove();
+    frame.addEventListener("load", () => {
+      if (window.__DELIVERA_TEST__) return;
+      try {
+        const printWindow = frame.contentWindow;
+        if (!printWindow) throw new Error("Yazdırma çerçevesi açılamadı");
+        printWindow.addEventListener("afterprint", cleanup, { once: true });
+        printWindow.focus();
+        window.setTimeout(() => printWindow.print(), 120);
+        window.setTimeout(cleanup, 60000);
+      } catch (error) {
+        cleanup();
+        toast(`Yazdırma ekranı açılamadı: ${error.message}`, "error");
+      }
+    }, { once: true });
+    frame.srcdoc = receiptDocument(pkg, invoice, paperSize, copies, false);
+    document.body.appendChild(frame);
   }
 
   function printOptionsModal(pkg, invoice = false) {
